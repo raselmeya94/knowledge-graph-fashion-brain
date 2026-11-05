@@ -52,7 +52,7 @@ _TOKEN_STOP = frozenset(
     """
     analysis analyze analysing analyzing analyse profile review overview study data
     product products catalog catalogue how many are is a an the of in our with and or
-    for from that this be any all number count total by per each past previous prior
+    for from at that this be any all number count total by per each past previous prior
     historic historical history earlier old existing type types kind kinds top bottom
     show give want please which what who when where list has have had made using use
     buyer buyers brand brands ecom ecomm ecommerce commerce plm plmex plm-ex system
@@ -346,13 +346,28 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
             return None
         return sorted(choices, key=lambda hit: (priority.get(hit.attribute, 9), hit.graph_id))[0]
 
+    def party_hit_for(value: str) -> ValueHit | None:
+        """Match whole value, then each token (covers 'at zara' / 'zara brand')."""
+
+        raw = normalize_name(str(value))
+        hit = best_hit(raw)
+        if hit and hit.attribute in {"brand", "buyer"}:
+            return hit
+        for token in raw.split():
+            if token in _TOKEN_STOP or len(token) < 2:
+                continue
+            hit = best_hit(token)
+            if hit and hit.attribute in {"brand", "buyer"}:
+                return hit
+        return None
+
     # Remap garment/category that are actually party values in the KG.
     for key in ("garment", "garment_type", "category"):
         value = cleaned.get(key)
         if not value:
             continue
-        hit = best_hit(normalize_name(str(value)))
-        if hit and hit.attribute in {"brand", "buyer"}:
+        hit = party_hit_for(str(value))
+        if hit:
             cleaned.pop(key, None)
             cleaned[hit.attribute] = hit.matched_value
 
@@ -361,9 +376,12 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
         value = cleaned.get(attr)
         if not value:
             continue
-        hit = best_hit(normalize_name(str(value)))
+        hit = party_hit_for(str(value))
         if hit and hit.attribute == attr:
             cleaned[attr] = hit.matched_value
+        elif hit and hit.attribute in {"brand", "buyer"}:
+            cleaned.pop(attr, None)
+            cleaned[hit.attribute] = hit.matched_value
 
     brand_hit = next((hit for hit in catalog.hits if hit.attribute == "brand"), None)
     buyer_hit = next((hit for hit in catalog.hits if hit.attribute == "buyer"), None)
@@ -405,6 +423,8 @@ def planner_system_prompt(catalog: FieldCatalog) -> str:
         "Convert the product question into one JSON object and nothing else.",
         "Use only filter keys that exist on the knowledge graphs below.",
         "Never put a brand or buyer name under garment, category, or garment_type.",
+        "Party cues: 'at X', 'from X', 'for X', 'by X', and 'X brand' / 'X buyer' mean "
+        "filters.brand or filters.buyer for X — never filters.garment.",
         "When a token matches Brand values, use filter key brand and prefer that graph.",
         "When a token matches Buyer values, use filter key buyer and prefer that graph.",
         "Words like ecom, ecomm, e-comm, ecommerce, plm, plmex name a knowledge graph — "

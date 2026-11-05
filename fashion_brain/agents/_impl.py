@@ -624,6 +624,8 @@ THINKING_SYSTEM = (
     "(empty filters if it names none). When true, you may carry filters from earlier user questions. "
     "Use only values the user actually said. Cotton is not 100% cotton unless the user says 100%. "
     'For garment or product-type words such as sweater, jumper, dress, or cardigan, put the value under "garment", not garment_type. '
+    "Party vs garment: phrases like 'at Zara', 'from Primark', 'for Matalan', 'by H&M', or 'Zara brand' "
+    'mean the party name goes under "brand" (or "buyer" when that is the catalog role) — never under "garment". '
     "Return one JSON object and nothing else, in this shape: "
     '{"actual_intent":"<one short sentence>","filters_and_conditions":{"<field>":"<value>"},"group_by":"<field>"|null,'
     '"references_prior_chat":true|false,"clarification_required":true|false}. '

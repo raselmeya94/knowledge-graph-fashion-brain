@@ -52,7 +52,7 @@ _MATERIAL_WORDS = _words("cotton linen elastane polyester nylon wool viscose acr
 _COUNT_STOPWORDS = _words(
     """
     how many product products are is a an the of in our catalog catalogue plm data synthetic demo there do we have
-    with and or for from that this be any all every each number count total visible clearance by gender wise per
+    with and or for from at that this be any all every each number count total visible clearance by gender wise per
     breakdown analysis analyze grouped distribution split brands brand buyer buyers season seasons category
     categories material materials department departments designer designers year now can you your make me
     please could would them those these their same also just show give want let us again still instead about
@@ -837,8 +837,9 @@ def _catalog_plan(question: str) -> dict:
             index += 1
             continue
 
-        # "for <brand|buyer>" — e-comm uses brand; PLM used buyer. Set both; KG maps buyer→brand.
-        if token == "for":
+        # "for|at|from|by <brand|buyer>" — never treat the party name as garment.
+        # Covers: "products at zara", "from primark", "for matalan".
+        if token in {"for", "at", "from", "by"}:
             name = _take_party_name(tokens, index + 1)
             if name:
                 filters.setdefault("brand", []).extend(name)
@@ -849,6 +850,20 @@ def _catalog_plan(question: str) -> dict:
         if not _is_filter_term(token):
             index += 1
             continue
+
+        # "<party> brand|buyer" — e.g. "zara brand", "primark buyer".
+        if index + 1 < len(tokens) and tokens[index + 1] in {"brand", "brands", "buyer", "buyers"}:
+            if _is_party_token(token):
+                role = tokens[index + 1]
+                if role.startswith("brand"):
+                    filters.setdefault("brand", []).append(token)
+                    filters.pop("buyer", None)
+                else:
+                    filters.setdefault("buyer", []).append(token)
+                    filters.pop("brand", None)
+                index += 2
+                continue
+
         if index + 1 < len(tokens) and tokens[index + 1] in _COLOR_MARKERS:
             filters.setdefault("color", []).append(token)
             index += 2
@@ -864,8 +879,8 @@ def _catalog_plan(question: str) -> dict:
             filters.setdefault("season", []).append(token)
         else:
             # Unknown content words default to garment/category search.
-            # Brand/buyer come from "for X", make-verb patterns, analysis party,
-            # or live metadata value grounding — not from guessing every token is a party.
+            # Brand/buyer come from "for/at/from X", "X brand", make-verb patterns,
+            # analysis party, or live metadata value grounding.
             filters.setdefault("garment", []).append(token)
         index += 1
 
@@ -934,6 +949,15 @@ def _catalog_plan(question: str) -> dict:
     }
 
 
+def _party_filter_core(value: str) -> str:
+    """Strip prepositions / 'brand'|'buyer' wrappers so 'at zara' → 'zara'."""
+
+    text = normalize_name(str(value))
+    text = re.sub(r"^(at|from|for|by|of)\s+", "", text)
+    text = re.sub(r"\b(brands?|buyers?)\b", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def sanitize_party_filters(filters: dict) -> dict:
     """Brand/buyer names must not also appear as garment/category filters."""
 
@@ -945,9 +969,15 @@ def sanitize_party_filters(filters: dict) -> dict:
             parties.append(normalize_name(str(value)))
     if not parties:
         return cleaned
+    party_set = set(parties)
     for key in ("garment", "garment_type", "category"):
         value = cleaned.get(key)
-        if value and normalize_name(str(value)) in parties:
+        if not value:
+            continue
+        raw = normalize_name(str(value))
+        core = _party_filter_core(raw)
+        tokens = set(raw.split())
+        if raw in party_set or core in party_set or (tokens & party_set):
             cleaned.pop(key, None)
     return cleaned
 
@@ -1060,6 +1090,14 @@ def plan_catalog_question(
     keyword = resolve_catalog_plan(question, history, carry=carry)
     if not model_plan["filters"] and keyword.get("filters"):
         model_plan["filters"] = dict(keyword["filters"])
+    # Keyword party cues ("at zara", "zara brand") beat a model that stuffed the
+    # same name under garment/category.
+    kw_filters = dict(keyword.get("filters") or {})
+    if kw_filters.get("brand") or kw_filters.get("buyer"):
+        for key in ("brand", "buyer"):
+            if kw_filters.get(key):
+                model_plan["filters"][key] = kw_filters[key]
+        model_plan["filters"] = sanitize_party_filters(model_plan["filters"])
     if _is_analysis(question):
         model_plan["suggest"] = False
         field_wise = bool(keyword.get("group_by")) or bool(model_plan.get("group_by"))
