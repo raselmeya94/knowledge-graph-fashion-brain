@@ -1,0 +1,543 @@
+{
+  "id": "product",
+  "name": "product-knowledge-ontology",
+  "description": "Canonical ontology for Fashion Brain PLM product data and document-derived knowledge. Aliases are curated equivalences. Similar names are not merged unless explicitly listed or approved in config/entity_reviews.json. Relationship properties are optional unless specified by the application schema.",
+  "version": "2.0.0",
+  "entity_types": [
+    "Product",
+    "Material",
+    "Fabric",
+    "GarmentCategory",
+    "Season",
+    "Company",
+    "Supplier",
+    "Document",
+    "Person",
+    "Organization",
+    "Topic",
+    "Location",
+    "Event",
+    "Department",
+    "DesignFeature",
+    "StyleFeature",
+    "Color",
+    "MachineType",
+    "Gauge",
+    "SampleType",
+    "StyleReference",
+    "CustomerStyleReference",
+    "Shipment",
+    "InventoryRecord",
+    "DesignPurpose",
+    "EventTag",
+    "ConstructionTag",
+    "AiMaterialTag",
+    "FinishTag",
+    "SpecialTag"
+  ],
+  "relationship_allowlist": {
+    "USES_MATERIAL": [
+      [
+        "Product",
+        "Material"
+      ]
+    ],
+    "USES_FABRIC": [
+      [
+        "Product",
+        "Fabric"
+      ]
+    ],
+    "BELONGS_TO_CATEGORY": [
+      [
+        "Product",
+        "GarmentCategory"
+      ]
+    ],
+    "HAS_SUB_CATEGORY": [
+      [
+        "Product",
+        "GarmentCategory"
+      ]
+    ],
+    "HAS_GARMENT_TYPE": [
+      [
+        "Product",
+        "GarmentCategory"
+      ]
+    ],
+    "PARENT_CATEGORY": [
+      [
+        "GarmentCategory",
+        "GarmentCategory"
+      ]
+    ],
+    "IN_SEASON": [
+      [
+        "Product",
+        "Season"
+      ]
+    ],
+    "SUPPLIED_BY": [
+      [
+        "Product",
+        "Supplier"
+      ]
+    ],
+    "MANUFACTURED_BY": [
+      [
+        "Product",
+        "Company"
+      ]
+    ],
+    "ORDERED_BY": [
+      [
+        "Product",
+        "Company"
+      ]
+    ],
+    "BRANDED_AS": [
+      [
+        "Product",
+        "Company"
+      ]
+    ],
+    "HAS_COLOR": [
+      [
+        "Product",
+        "Color"
+      ]
+    ],
+    "HAS_DESIGN_FEATURE": [
+      [
+        "Product",
+        "DesignFeature"
+      ]
+    ],
+    "HAS_STYLE_FEATURE": [
+      [
+        "Product",
+        "StyleFeature"
+      ]
+    ],
+    "DESIGNED_FOR": [
+      [
+        "Product",
+        "DesignPurpose"
+      ],
+      [
+        "Product",
+        "GarmentCategory"
+      ]
+    ],
+    "USES_KNIT_MACHINE": [
+      [
+        "Product",
+        "MachineType"
+      ]
+    ],
+    "HAS_GAUGE": [
+      [
+        "Product",
+        "Gauge"
+      ]
+    ],
+    "HAS_SAMPLE_TYPE": [
+      [
+        "Product",
+        "SampleType"
+      ]
+    ],
+    "BELONGS_TO_DEPARTMENT": [
+      [
+        "Product",
+        "Department"
+      ]
+    ],
+    "CREATED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "DESIGNED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "MANAGED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "HAS_STYLE_REFERENCE": [
+      [
+        "Product",
+        "StyleReference"
+      ]
+    ],
+    "HAS_CUSTOMER_STYLE_REFERENCE": [
+      [
+        "Product",
+        "CustomerStyleReference"
+      ]
+    ],
+    "STORED_AT": [
+      [
+        "Product",
+        "Location"
+      ],
+      [
+        "InventoryRecord",
+        "Location"
+      ]
+    ],
+    "HAS_INVENTORY_RECORD": [
+      [
+        "Product",
+        "InventoryRecord"
+      ]
+    ],
+    "HAS_SHIPMENT": [
+      [
+        "Product",
+        "Shipment"
+      ]
+    ],
+    "RELATED_TO": [
+      [
+        "Material",
+        "Material"
+      ],
+      [
+        "Person",
+        "Person"
+      ],
+      [
+        "Person",
+        "Organization"
+      ],
+      [
+        "Organization",
+        "Organization"
+      ],
+      [
+        "Topic",
+        "Topic"
+      ],
+      [
+        "Document",
+        "Document"
+      ]
+    ],
+    "MENTIONS": [
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Organization"
+      ],
+      [
+        "Document",
+        "Topic"
+      ],
+      [
+        "Document",
+        "Location"
+      ],
+      [
+        "Document",
+        "Event"
+      ],
+      [
+        "Document",
+        "Product"
+      ],
+      [
+        "Document",
+        "Material"
+      ],
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Fabric"
+      ],
+      [
+        "Document",
+        "GarmentCategory"
+      ],
+      [
+        "Document",
+        "Season"
+      ],
+      [
+        "Document",
+        "Supplier"
+      ]
+    ],
+    "AUTHORED_BY": [
+      [
+        "Document",
+        "Person"
+      ]
+    ],
+    "PUBLISHED_BY": [
+      [
+        "Document",
+        "Organization"
+      ]
+    ],
+    "ABOUT": [
+      [
+        "Document",
+        "Topic"
+      ]
+    ],
+    "SENT_BY": [
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Organization"
+      ]
+    ],
+    "SENT_TO": [
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Organization"
+      ]
+    ],
+    "OCCURS_AT": [
+      [
+        "Event",
+        "Location"
+      ]
+    ],
+    "HAS_EVENT_TAG": [
+      [
+        "Product",
+        "EventTag"
+      ]
+    ],
+    "HAS_CONSTRUCTION_TAG": [
+      [
+        "Product",
+        "ConstructionTag"
+      ]
+    ],
+    "HAS_AI_MATERIAL_TAG": [
+      [
+        "Product",
+        "AiMaterialTag"
+      ]
+    ],
+    "HAS_FINISH_TAG": [
+      [
+        "Product",
+        "FinishTag"
+      ]
+    ],
+    "HAS_SPECIAL_TAG": [
+      [
+        "Product",
+        "SpecialTag"
+      ]
+    ]
+  },
+  "canonical_entities": [
+    {
+      "id": "fashion:material:cotton",
+      "type": "Material",
+      "name": "Cotton",
+      "aliases": [
+        "cotton",
+        "organic cotton"
+      ],
+      "external_ids": [
+        "MAT-COTTON"
+      ]
+    },
+    {
+      "id": "fashion:material:viscose",
+      "type": "Material",
+      "name": "Viscose",
+      "aliases": [
+        "viscose"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester",
+      "type": "Material",
+      "name": "Polyester",
+      "aliases": [
+        "polyester"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:nylon",
+      "type": "Material",
+      "name": "Nylon",
+      "aliases": [
+        "nylon"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:recycled-polyester",
+      "type": "Material",
+      "name": "Recycled Polyester",
+      "aliases": [
+        "recycled polyester"
+      ],
+      "external_ids": [
+        "MAT-RPET"
+      ]
+    },
+    {
+      "id": "fashion:material:linen",
+      "type": "Material",
+      "name": "Linen",
+      "aliases": [
+        "linen"
+      ],
+      "external_ids": [
+        "MAT-LINEN"
+      ]
+    },
+    {
+      "id": "fashion:material:elastane",
+      "type": "Material",
+      "name": "Elastane",
+      "aliases": [
+        "elastane",
+        "spandex"
+      ],
+      "external_ids": [
+        "MAT-ELASTANE"
+      ]
+    },
+    {
+      "id": "fashion:fabric:jersey",
+      "type": "Fabric",
+      "name": "Jersey",
+      "aliases": [
+        "jersey"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:fabric:denim",
+      "type": "Fabric",
+      "name": "Denim",
+      "aliases": [
+        "denim"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:tops",
+      "type": "GarmentCategory",
+      "name": "Tops",
+      "aliases": [
+        "tops"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:sweater",
+      "type": "GarmentCategory",
+      "name": "Sweater",
+      "aliases": [
+        "sweaters",
+        "jumper",
+        "jumpers"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:knitwear",
+      "type": "GarmentCategory",
+      "name": "Knitwear",
+      "aliases": [
+        "knitwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:polo-shirt",
+      "type": "GarmentCategory",
+      "name": "Polo Shirt",
+      "aliases": [
+        "polo shirts",
+        "polo"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:outerwear",
+      "type": "GarmentCategory",
+      "name": "Outerwear",
+      "aliases": [
+        "outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:category:bottoms",
+      "type": "GarmentCategory",
+      "name": "Bottoms",
+      "aliases": [
+        "bottoms"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:season:ss25",
+      "type": "Season",
+      "name": "SS25",
+      "aliases": [
+        "ss25",
+        "spring summer 2025",
+        "spring/summer 2025"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:season:aw25",
+      "type": "Season",
+      "name": "AW25",
+      "aliases": [
+        "aw25",
+        "autumn winter 2025",
+        "autumn/winter 2025"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:supplier:northwind-mills",
+      "type": "Supplier",
+      "name": "Northwind Mills",
+      "aliases": [
+        "northwind mills"
+      ],
+      "external_ids": [
+        "SUP-DEMO-NORTHWIND"
+      ]
+    }
+  ]
+}

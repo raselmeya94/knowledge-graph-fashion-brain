@@ -1,0 +1,5 @@
+$kind: http-request
+name: List reviews
+method: GET
+url: '{{base_url}}/kg/reviews'
+order: 13000

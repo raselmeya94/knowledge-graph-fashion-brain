@@ -1,0 +1,8 @@
+{
+  "id": "ecom_products",
+  "name": "E-Commerce Knowledge Graph",
+  "ontology_id": "ecom",
+  "kind": "product",
+  "description": "Contains products and brand information from multiple e-commerce sources (Primark, Zara, Matalan, C&A, Walmart).",
+  "source_ids": ["ecom_products"]
+}

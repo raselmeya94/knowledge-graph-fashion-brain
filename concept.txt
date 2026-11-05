@@ -1,0 +1,37 @@
+i think you study full Knowledge-graph project not now fashoin brain.
+
+first unnderstand my conccept:
+
+for our Knowledge graph has many sources :
+1. plm: own product data( which already json formatted) . now checck and make every type of relation user will be asked queries response must be valid generation.
+2. customer (buyer data/ public products data) via scrapping
+
+scrapping data format:
+1. pdf/word or text
+2. email
+3. html
+4. image
+5. json
+
+
+avaiable:
+based on plm own data we already build relations , maybe we need more underrstanding and make more relations
+
+requirement steps 
+raw text extraction : make endpoint with format wise
+raw text to understand relations : make realtion via ollama or openrouter provvider who take input raw text + all realtionship name which already innside kg. --> return fit which realtions or make new relations
+modify any realtions for this current text or document( id wise)
+if everythings is ok for new  data  then update kg endpoint call.
+
+
+now anothers all types of endpoinnts how communication with kg graph to fashoin brain
+
+
+
+
+for Knowledge graph:
+
+every services and endpoints can be performs 
+
+individual knowledge graph making, based new data old or selected KG update or sync / new kg ggenerate, ontology making, new realtionship approve or remove, every type of performs can be done user 
+i want oour knowledge graph backend must be more flexible and all types of services doing  via api based 

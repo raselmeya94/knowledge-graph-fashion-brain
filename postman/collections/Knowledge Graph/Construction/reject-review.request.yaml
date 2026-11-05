@@ -1,0 +1,14 @@
+$kind: http-request
+name: Reject review
+method: POST
+url: '{{base_url}}/kg/reviews/{{review_id}}'
+order: 17000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "decision": "rejected"
+    }

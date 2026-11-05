@@ -1,0 +1,14 @@
+$kind: http-request
+name: Approve review
+method: POST
+url: '{{base_url}}/kg/reviews/{{review_id}}'
+order: 16000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "decision": "approved"
+    }

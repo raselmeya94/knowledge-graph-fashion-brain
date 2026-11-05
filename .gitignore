@@ -1,0 +1,23 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+generated/
+# Runtime only — keep folder via .gitkeep; ignore contents
+data/generated/**
+!data/generated/.gitkeep
+knowledge_graph/generated/
+*.log
+.neo4j/
+.idea/
+.vscode/
+no-need/
+*.xlsx
+node_modules/
+frontend/dist/
+.DS_Store
+Thumbs.db

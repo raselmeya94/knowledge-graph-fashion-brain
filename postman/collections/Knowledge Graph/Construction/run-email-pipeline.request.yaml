@@ -1,0 +1,19 @@
+$kind: http-request
+name: Run email pipeline
+method: POST
+url: '{{base_url}}/kg/pipeline'
+order: 9000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "kind": "email",
+      "filename": "linen.eml",
+      "use_model": false,
+      "auto_commit": false,
+      "text": "From: Ada Lovelace <ada@example.com>\nTo: Grace Hopper <grace@example.com>\nSubject: Linen shipment\n\nPublished by Northwind Mills."
+    }
+examples: './.resources/run-email-pipeline.resources/examples'

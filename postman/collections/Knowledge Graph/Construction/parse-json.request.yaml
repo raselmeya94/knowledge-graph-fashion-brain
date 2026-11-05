@@ -1,0 +1,19 @@
+$kind: http-request
+name: Parse JSON
+method: POST
+url: '{{base_url}}/kg/tools/parse_json'
+order: 6000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "json_data": {
+        "title": "Lookbook",
+        "author": "Ada Lovelace",
+        "publisher": "Northwind Mills",
+        "topic": "Linen"
+      }
+    }

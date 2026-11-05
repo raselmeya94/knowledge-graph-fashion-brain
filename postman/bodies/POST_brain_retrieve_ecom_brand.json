@@ -1,0 +1,16 @@
+{
+  "question": "How many Primark products are in the e-commerce catalog?",
+  "intent": "product_count",
+  "filters": { "brand": "primark" },
+  "group_by": null,
+  "unsupported": false,
+  "limit": null,
+  "suggest": false,
+  "analysis": false,
+  "season_name": null,
+  "upcoming": false,
+  "corrections": [],
+  "graph_id": "ecom_products",
+  "graph_ids": ["ecom_products"],
+  "use_global_kg": false
+}

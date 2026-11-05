@@ -1,0 +1,5 @@
+$kind: http-request
+name: Ollama status
+method: GET
+url: '{{base_url}}/kg/ollama'
+order: 2000

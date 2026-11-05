@@ -1,0 +1,8 @@
+{
+  "id": "own_products",
+  "name": "PLMEX Knowledge Graph",
+  "ontology_id": "product",
+  "kind": "product",
+  "description": "Internal PLMEX product and business data (plan SRC_001 / plmex_kg).",
+  "source_ids": ["own_products"]
+}

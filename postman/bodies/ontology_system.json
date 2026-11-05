@@ -1,0 +1,95 @@
+{
+  "name": "system-meta-ontology",
+  "version": "1.0.0",
+  "description": "Registry and system metadata for Fashion Brain: registered knowledge graphs, sources, attributes, and the shared interconnect. Used when the user asks about the platform itself rather than product rows.",
+  "entity_types": [
+    "KnowledgeGraph",
+    "Source",
+    "Attribute",
+    "SharedInterconnect",
+    "Capability"
+  ],
+  "relationship_allowlist": {
+    "HAS_ATTRIBUTE": [["KnowledgeGraph", "Attribute"]],
+    "HAS_CAPABILITY": [["KnowledgeGraph", "Capability"]],
+    "SOURCED_AS": [["KnowledgeGraph", "Source"]],
+    "LINKS_VIA": [["KnowledgeGraph", "SharedInterconnect"]]
+  },
+  "review_stopwords": [],
+  "review_min_token_length": 3,
+  "canonical_entities": [
+    {
+      "id": "SYS_KNOWLEDGE_GRAPH",
+      "type": "KnowledgeGraph",
+      "name": "Knowledge Graph",
+      "aliases": [
+        "knowledge graph",
+        "knowledge graphs",
+        "graph",
+        "graphs",
+        "kg",
+        "kgs",
+        "registry",
+        "kg registry"
+      ]
+    },
+    {
+      "id": "SYS_SOURCE",
+      "type": "Source",
+      "name": "Source",
+      "aliases": [
+        "source",
+        "sources",
+        "data source",
+        "data sources",
+        "registered source",
+        "registered sources"
+      ]
+    },
+    {
+      "id": "SYS_ATTRIBUTE",
+      "type": "Attribute",
+      "name": "Attribute",
+      "aliases": [
+        "attribute",
+        "attributes",
+        "column",
+        "columns",
+        "field",
+        "fields",
+        "unique value",
+        "unique values",
+        "metadata"
+      ]
+    },
+    {
+      "id": "SYS_SHARED",
+      "type": "SharedInterconnect",
+      "name": "Shared Interconnect",
+      "aliases": [
+        "shared",
+        "shared part",
+        "shared layer",
+        "shared graph",
+        "global kg",
+        "global knowledge graph",
+        "interconnect",
+        "master"
+      ]
+    },
+    {
+      "id": "SYS_CAPABILITY",
+      "type": "Capability",
+      "name": "Capability",
+      "aliases": [
+        "capability",
+        "capabilities",
+        "system info",
+        "system information",
+        "system overview",
+        "basic info",
+        "basic information"
+      ]
+    }
+  ]
+}

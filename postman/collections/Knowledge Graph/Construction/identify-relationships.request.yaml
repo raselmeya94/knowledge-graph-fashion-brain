@@ -1,0 +1,22 @@
+$kind: http-request
+name: Identify relationships
+method: POST
+url: '{{base_url}}/kg/tools/identify_relationships'
+order: 7000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "title": "Lookbook",
+      "kind": "json",
+      "use_model": false,
+      "text": "author: Ada Lovelace\ntopic: Linen",
+      "structured": {
+        "title": "Lookbook",
+        "author": "Ada Lovelace",
+        "topic": "Linen"
+      }
+    }

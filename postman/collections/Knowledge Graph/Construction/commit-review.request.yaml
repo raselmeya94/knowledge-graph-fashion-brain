@@ -1,0 +1,5 @@
+$kind: http-request
+name: Commit review
+method: POST
+url: '{{base_url}}/kg/reviews/{{review_id}}/commit'
+order: 18000

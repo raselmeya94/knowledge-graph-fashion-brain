@@ -1,0 +1,24 @@
+$kind: collection
+name: Construction
+description: Extract a source, review proposed relationships, then commit the approved ones.
+order: 1000
+scripts:
+  - type: http:afterResponse
+    language: text/javascript
+    code: |-
+      if (pm.response.code !== 200) {
+        return;
+      }
+      let body;
+      try {
+        body = pm.response.json();
+      } catch (error) {
+        return;
+      }
+      if (body.review && body.review.id) {
+        pm.collectionVariables.set('review_id', body.review.id);
+      }
+      const relationships = body.relationships || [];
+      if (relationships.length > 0 && relationships[0].id) {
+        pm.collectionVariables.set('relationship_id', relationships[0].id);
+      }

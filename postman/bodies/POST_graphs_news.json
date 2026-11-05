@@ -1,0 +1,8 @@
+{
+  "id": "news",
+  "name": "News and documents",
+  "ontology_id": "news",
+  "kind": "documents",
+  "description": "Document-derived fashion news and trade facts.",
+  "source_ids": ["news"]
+}

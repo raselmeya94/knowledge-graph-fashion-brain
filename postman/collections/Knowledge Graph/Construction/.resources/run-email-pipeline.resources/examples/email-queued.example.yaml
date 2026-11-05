@@ -1,0 +1,40 @@
+$kind: http-example
+name: Email queued for review
+order: 1000
+request:
+  method: POST
+  url: '{{base_url}}/kg/pipeline'
+response:
+  statusCode: 200
+  statusText: OK
+  headers:
+    - key: Content-Type
+      value: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "kind": "email",
+        "metadata": {
+          "title": "Linen shipment",
+          "source_kind": "email"
+        },
+        "relationships": [
+          {
+            "id": "rel_example",
+            "type": "SENT_BY",
+            "start_name": "Linen shipment",
+            "start_type": "Document",
+            "end_name": "Ada Lovelace",
+            "end_type": "Person",
+            "status": "new",
+            "review_state": "pending"
+          }
+        ],
+        "review": {
+          "id": "review-example",
+          "status": "pending",
+          "title": "Linen shipment"
+        },
+        "committed": null
+      }

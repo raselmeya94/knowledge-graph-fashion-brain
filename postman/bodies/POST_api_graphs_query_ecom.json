@@ -1,0 +1,7 @@
+{
+  "graph_id": "ecom_products",
+  "template": "list_products",
+  "params": {},
+  "limit": 10,
+  "offset": 0
+}

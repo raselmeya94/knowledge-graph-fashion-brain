@@ -1,0 +1,30 @@
+$kind: http-request
+name: Run JSON pipeline
+method: POST
+url: '{{base_url}}/kg/pipeline'
+order: 11000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "kind": "json",
+      "filename": "lookbook.json",
+      "use_model": false,
+      "json_data": {
+        "title": "Lookbook",
+        "author": "Ada Lovelace",
+        "publisher": "Northwind Mills",
+        "topic": "Linen",
+        "relationships": [
+          {
+            "type": "ABOUT",
+            "source": "document",
+            "target": "Linen",
+            "target_type": "Topic"
+          }
+        ]
+      }
+    }

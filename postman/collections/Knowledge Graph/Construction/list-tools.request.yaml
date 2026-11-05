@@ -1,0 +1,6 @@
+$kind: http-request
+name: List tools
+method: GET
+url: '{{base_url}}/kg/tools'
+order: 1000
+examples: './.resources/list-tools.resources/examples'

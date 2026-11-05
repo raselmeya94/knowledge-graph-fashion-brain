@@ -1,0 +1,12 @@
+{
+  "source_id": "own_products",
+  "source_type": "own_products",
+  "connector": "file",
+  "supported_formats": ["json", "csv"],
+  "ingestion_mode": "batch",
+  "update_strategy": "content_hash",
+  "permissions_model": "classification",
+  "enabled": true,
+  "description": "PLMEX / internal PLM product files (plan SRC_001 / plmex_kg). File ingest into the own_products graph.",
+  "future_connectors": ["authorized_sql", "authorized_api"]
+}

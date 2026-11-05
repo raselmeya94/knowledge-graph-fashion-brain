@@ -1,0 +1,196 @@
+{
+  "id": "news",
+  "name": "news-document-ontology",
+  "description": "Document and news construction ontology for Fashion Brain. Used for email, HTML, PDF, and scraped article graphs.",
+  "version": "1.0.0",
+  "entity_types": [
+    "Document",
+    "Person",
+    "Company",
+    "Organization",
+    "Publisher",
+    "Brand",
+    "Product",
+    "Material",
+    "Topic",
+    "Trend",
+    "Country",
+    "Region",
+    "Market",
+    "Location",
+    "Event"
+  ],
+  "relationship_allowlist": {
+    "MENTIONS": [
+      [
+        "Document",
+        "Topic"
+      ],
+      [
+        "Document",
+        "Trend"
+      ],
+      [
+        "Document",
+        "Brand"
+      ],
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Organization"
+      ],
+      [
+        "Document",
+        "Product"
+      ],
+      [
+        "Document",
+        "Material"
+      ],
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Country"
+      ],
+      [
+        "Document",
+        "Location"
+      ],
+      [
+        "Document",
+        "Event"
+      ]
+    ],
+    "PUBLISHED_BY": [
+      [
+        "Document",
+        "Publisher"
+      ],
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Organization"
+      ]
+    ],
+    "STATED_IN": [
+      [
+        "Person",
+        "Document"
+      ]
+    ],
+    "SPOKE_AT": [
+      [
+        "Person",
+        "Event"
+      ]
+    ],
+    "CITES_DATA_FROM": [
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Organization"
+      ],
+      [
+        "Document",
+        "Publisher"
+      ]
+    ],
+    "LOCATED_IN": [
+      [
+        "Company",
+        "Country"
+      ],
+      [
+        "Organization",
+        "Country"
+      ],
+      [
+        "Event",
+        "Country"
+      ],
+      [
+        "Event",
+        "Location"
+      ]
+    ],
+    "EXPORTS_TO": [
+      [
+        "Country",
+        "Country"
+      ],
+      [
+        "Country",
+        "Region"
+      ],
+      [
+        "Country",
+        "Location"
+      ],
+      [
+        "Country",
+        "Market"
+      ]
+    ],
+    "RANKED_IN": [
+      [
+        "Country",
+        "Market"
+      ],
+      [
+        "Country",
+        "Region"
+      ]
+    ],
+    "HAS_MARKET_SHARE": [
+      [
+        "Country",
+        "Market"
+      ],
+      [
+        "Country",
+        "Region"
+      ]
+    ],
+    "SENT_BY": [
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Organization"
+      ]
+    ],
+    "SENT_TO": [
+      [
+        "Document",
+        "Person"
+      ],
+      [
+        "Document",
+        "Company"
+      ],
+      [
+        "Document",
+        "Organization"
+      ]
+    ]
+  },
+  "canonical_entities": []
+}

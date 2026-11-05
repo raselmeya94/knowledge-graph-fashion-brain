@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fashion Brain — Chat</title>
+  <link rel="stylesheet" href="/shared/user.css" />
+</head>
+<body>
+  <div class="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">FB</div>
+        <div>
+          <h1>Fashion Brain</h1>
+          <p>Ask PLM data &amp; the web</p>
+        </div>
+      </div>
+
+      <button id="new-chat" type="button">
+        <span class="btn-ico" aria-hidden="true">+</span>
+        New chat
+      </button>
+
+      <div class="nav-label">Chat history</div>
+      <div class="history" id="history"></div>
+
+      <div class="side-tools">
+        <button class="ghost" type="button" id="open-memory">Memory notes</button>
+      </div>
+
+      <div class="profile-card" id="profile-card">
+        <button type="button" class="profile-toggle" id="profile-toggle" aria-expanded="false">
+          <span class="avatar" id="user-avatar">U</span>
+          <span class="profile-meta">
+            <strong id="user-email">—</strong>
+            <span id="user-role">user</span>
+          </span>
+          <span class="chev" aria-hidden="true">▾</span>
+        </button>
+        <div class="profile-panel" id="profile-panel" hidden>
+          <label class="field-label" for="clearance">Clearance</label>
+          <select id="clearance">
+            <option value="public">public</option>
+            <option value="internal" selected>internal</option>
+            <option value="confidential">confidential</option>
+          </select>
+          <button type="button" id="logout" class="ghost danger">Sign out</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="scrim" id="scrim"></div>
+
+    <div class="drawer" id="memory-drawer">
+      <h3>Memory</h3>
+      <p class="drawer-lede">Notes are added to later questions in this account.</p>
+      <form id="memory-form">
+        <textarea id="memory-input" rows="3" placeholder="Add a note…"></textarea>
+        <button class="ghost" type="submit">Save note</button>
+      </form>
+      <div id="memory-list"></div>
+      <button class="ghost" type="button" id="close-memory">Close</button>
+    </div>
+
+    <main>
+      <header>
+        <button id="menu" type="button" aria-label="Open chats">☰</button>
+        <h2 id="chat-title">New chat</h2>
+        <div class="header-tools">
+          <label class="graph-scope" for="graph-scope">
+            <span class="sr-only">Knowledge graph</span>
+            <select id="graph-scope" title="Scope answers to one KG, or all sources">
+              <option value="">All graphs</option>
+            </select>
+          </label>
+          <span id="status" class="status-pill">Connecting…</span>
+        </div>
+      </header>
+
+      <section id="thread">
+        <div class="column empty" id="empty">
+          <div class="eyebrow">Fashion Brain</div>
+          <h2>Ask the PLM data</h2>
+          <p>Products, materials, tags, and industry facts — grounded in your knowledge graph.</p>
+          <div class="suggestions">
+            <button type="button" data-prompt="How many products are in the PLM data?">
+              <span class="kicker">PLM data</span>
+              <span class="prompt-title">How many products are in the PLM data?</span>
+            </button>
+            <button type="button" data-prompt="Which products share a material?">
+              <span class="kicker">Materials</span>
+              <span class="prompt-title">Which products share a material?</span>
+            </button>
+            <button type="button" data-prompt="What are current denim export trends in Bangladesh?">
+              <span class="kicker">Web search</span>
+              <span class="prompt-title">Current denim export trends in Bangladesh</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <form id="composer">
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="Message Fashion Brain…" aria-label="Message"></textarea>
+          <button id="send" type="submit" aria-label="Send">Send</button>
+        </div>
+        <p class="composer-hint">Enter to send · Shift+Enter for a new line</p>
+      </form>
+    </main>
+  </div>
+  <script src="/shared/config.js"></script>
+  <script src="/shared/api.js"></script>
+  <script src="/shared/markdown.js"></script>
+  <script src="/user/app.js"></script>
+</body>
+</html>

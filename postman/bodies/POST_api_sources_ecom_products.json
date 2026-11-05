@@ -1,0 +1,12 @@
+{
+  "source_id": "ecom_products",
+  "source_type": "ecom_products",
+  "connector": "authorized_sql",
+  "supported_formats": ["sql"],
+  "ingestion_mode": "incremental",
+  "update_strategy": "content_hash",
+  "permissions_model": "classification",
+  "enabled": true,
+  "description": "Centralized e-commerce master_products (plan SRC_002). Brands such as Primark, Zara, Matalan, C&A, and Walmart live inside this one KG.",
+  "future_connectors": ["authorized_api"]
+}

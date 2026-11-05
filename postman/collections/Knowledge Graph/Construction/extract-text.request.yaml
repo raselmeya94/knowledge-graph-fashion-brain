@@ -1,0 +1,17 @@
+$kind: http-request
+name: Extract text
+method: POST
+url: '{{base_url}}/kg/tools/extract_text'
+order: 4000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "kind": "email",
+      "filename": "linen.eml",
+      "clean": false,
+      "text": "From: Ada Lovelace <ada@example.com>\nTo: Grace Hopper <grace@example.com>\nSubject: Linen shipment\n\nPublished by Northwind Mills."
+    }

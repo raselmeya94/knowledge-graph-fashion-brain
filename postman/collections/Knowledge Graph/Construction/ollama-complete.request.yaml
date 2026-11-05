@@ -1,0 +1,16 @@
+$kind: http-request
+name: Ollama complete
+method: POST
+url: '{{base_url}}/kg/tools/ollama'
+order: 8000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "action": "complete",
+      "prompt": "List the people and the organization in this note: Published by Northwind Mills. Written by Ada Lovelace.",
+      "json_mode": false
+    }

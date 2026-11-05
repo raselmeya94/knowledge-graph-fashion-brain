@@ -1,0 +1,12 @@
+{
+  "source_id": "news",
+  "source_type": "documents",
+  "connector": "file",
+  "supported_formats": ["pdf", "docx", "txt", "html", "email", "json"],
+  "ingestion_mode": "batch",
+  "update_strategy": "content_hash",
+  "permissions_model": "classification",
+  "enabled": true,
+  "description": "Document / news construction source for the news graph.",
+  "future_connectors": []
+}

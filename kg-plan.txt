@@ -1,0 +1,103 @@
+# Fashion Brain
+## Dynamic Multi-Source Knowledge Graph & Multi-Agent Intelligence Architecture
+
+Project Type: Agentic AI + Knowledge Graph + RAG
+Primary Objective: Build an intelligent fashion data platform that dynamically integrates multiple heterogeneous data sources into interconnected Knowledge Graphs and provides natural-language access through a multi-agent AI architecture.
+
+See ARCHITECTURE.md for how this repository maps to the plan.
+
+---
+
+# PART 1: KNOWLEDGE GRAPH MANAGEMENT SYSTEM
+
+## 1.1 Objective
+Dynamic KG platform: integrate sources, discover schemas, build source-specific KGs, maintain a Global KG connecting related entities across sources. New sources without major architecture changes.
+
+## 1.2 Dynamic Data Source Management
+| Source ID | Data Source | Description |
+| SRC_001 | PLMEX | Internal PLM (own_products graph) |
+| SRC_002 | E-Commerce | Centralized multi-brand e-com (ecom_products) |
+| SRC_003+ | New Sources | Dynamically registered |
+
+E-Commerce brands (PRIMARK, ZARA, MATALAN, C&A, Walmart, …) are entities/filters inside one E-Commerce KG — not separate graphs.
+
+Source registration flow: register → connect → schema discovery → entities/relationships → KG schema → transform → nodes/rels → KG Registry → Global KG mappings → API. Human approval when auto-detection is uncertain.
+
+## 1.3 Source-Specific Knowledge Graphs
+- PLMEX KG: Product, Buyer, Brand, Supplier, Material, Fabric, Category, Shipment, Season, Customer, Organization
+- E-Commerce KG: Product, Brand, Category, Material, Color, Size, Collection, Season, Price, Image
+
+## 1.4 Global Knowledge Graph
+Canonical identifiers, cross-source mappings, common material/category links, provenance, mapping confidence. Implemented as shared/master interconnect (RESOLVES_TO). Do not duplicate every source entity.
+
+## 1.5 Knowledge Graph Registry
+graph_id, source_id, entities, relationships, capabilities, status — primary input for Graph Router Agent.
+
+## 1.6 Dynamic Metadata
+Graph descriptions, entity/relationship types, attributes, filters, value discovery APIs. Never dump all distinct DB values into LLM prompts.
+
+## 1.7 KG Management APIs
+POST/GET /api/sources, sync, schema; GET /api/graphs, registry, schema; POST query/cross-query; global; rebuild; metadata/values.
+
+---
+
+# PART 2: FASHION BRAIN GPT — MULTI-AGENT AI SYSTEM
+
+Auth, sessions, conversation history. Prototype: SQLite + JWT. Production: Redis sessions + PostgreSQL history. No plaintext passwords.
+
+Main chat: POST /api/v1/chat (alias of conversation messages).
+
+---
+
+# PART 3: MULTI-AGENT ARCHITECTURE
+
+Agent 1 Graph Router — select one/many KGs from registry; brands are filters; insufficient-coverage.
+Agent 2 Query Understanding — structured query plan from NL + dynamic schema.
+Agent 3 Conversation Context — REUSE | REFINE | RETRIEVE.
+Agent 4 Product Spec Generation — conditional only.
+Agent 5 Response Generation — grounded natural-language answer.
+
+Plus deterministic Query Execution Engine (not an LLM).
+
+---
+
+# PART 4: QUERY EXECUTION ENGINE
+
+Validate graphs/permissions, generate template/Cypher queries, execute (parallel when independent), normalize, Result Merger with provenance. Never merge products merely because names/categories match.
+
+---
+
+# PART 5: AGENT ORCHESTRATOR
+
+Auth → context agent → (reuse/refine/retrieve) → router → intent → execution → merger → optional spec → response → save state.
+
+---
+
+# PART 6–7: MODULE SPLIT
+
+MODULE 1 KG SYSTEM (:8001) | MODULE 2 AI SYSTEM (:8000)
+Communicate via HTTP APIs.
+
+---
+
+# PART 8: STACK (recommended)
+
+FastAPI, Neo4j, PostgreSQL (source data), configurable LLM, custom orchestrator, JWT, Uvicorn.
+
+---
+
+# PART 9: PHASES
+
+1 KG Foundation → 2 KG APIs → 3 Fashion Brain infra → 4 Core agents → 5 Query execution → 6 Production hardening.
+
+---
+
+# PART 10: DESIGN PRINCIPLES
+
+1 Dynamic sources  2 Source independence  3 Centralized E-Commerce KG
+4 Global connectivity  5 Dynamic metadata  6 Intelligent routing
+7 Context awareness  8 Controlled execution  9 Conditional agents
+10 Traceability  11 Scalability  12 Security
+
+Core concept:
+Dynamic Data Sources → Source-Specific KGs → Global KG → Registry & APIs → Multi-Agent Orchestration → Fashion Responses.

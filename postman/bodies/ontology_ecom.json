@@ -1,0 +1,93 @@
+{
+  "name": "ecom-products-ontology",
+  "version": "1.0.0",
+  "description": "E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category, material, color, and availability.",
+  "entity_types": [
+    "Product",
+    "Brand",
+    "Material",
+    "GarmentCategory",
+    "Color",
+    "Availability",
+    "Section",
+    "Currency",
+    "Catalog",
+    "Domain",
+    "Construction"
+  ],
+  "relationship_allowlist": {
+    "HAS_BRAND": [
+      ["Product", "Brand"]
+    ],
+    "BELONGS_TO_CATEGORY": [
+      ["Product", "GarmentCategory"]
+    ],
+    "HAS_SUB_CATEGORY": [
+      ["Product", "GarmentCategory"]
+    ],
+    "HAS_FAMILY": [
+      ["Product", "GarmentCategory"]
+    ],
+    "PARENT_CATEGORY": [
+      ["GarmentCategory", "GarmentCategory"]
+    ],
+    "USES_MATERIAL": [
+      ["Product", "Material"]
+    ],
+    "HAS_COLOR": [
+      ["Product", "Color"]
+    ],
+    "HAS_AVAILABILITY": [
+      ["Product", "Availability"]
+    ],
+    "HAS_SECTION": [
+      ["Product", "Section"]
+    ],
+    "PRICED_IN": [
+      ["Product", "Currency"]
+    ],
+    "IN_CATALOG": [
+      ["Product", "Catalog"]
+    ],
+    "SCRAPED_FROM": [
+      ["Product", "Domain"]
+    ],
+    "HAS_CONSTRUCTION": [
+      ["Product", "Construction"]
+    ]
+  },
+  "review_stopwords": ["the", "and", "for", "with", "from"],
+  "review_min_token_length": 3,
+  "canonical_entities": [
+    {
+      "id": "brand:zara",
+      "type": "Brand",
+      "name": "zara",
+      "aliases": ["Zara", "ZARA"]
+    },
+    {
+      "id": "brand:primark",
+      "type": "Brand",
+      "name": "primark",
+      "aliases": ["Primark", "PRIMARK"]
+    },
+    {
+      "id": "brand:matalan",
+      "type": "Brand",
+      "name": "matalan",
+      "aliases": ["Matalan", "MATALAN"]
+    },
+    {
+      "id": "brand:c-and-a",
+      "type": "Brand",
+      "name": "c-and-a",
+      "aliases": ["C&A", "c&a", "C and A", "c-and-a"]
+    },
+    {
+      "id": "brand:walmart",
+      "type": "Brand",
+      "name": "walmart",
+      "aliases": ["Walmart", "WALMART"]
+    }
+  ]
+}

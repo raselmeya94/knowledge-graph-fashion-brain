@@ -1,0 +1,7 @@
+{
+  "intent": "product_count",
+  "question": "Compare cotton products across registered product sources",
+  "filters": { "material": "cotton" },
+  "graph_ids": ["ecom_products", "own_products"],
+  "use_global_kg": true
+}

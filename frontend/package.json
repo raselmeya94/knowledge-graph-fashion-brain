@@ -1,0 +1,10 @@
+{
+  "name": "fashion-brain-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Separate Fashion Brain UI (user chat + admin KG). Calls the Fashion Brain API on :8000.",
+  "scripts": {
+    "start": "npx --yes serve -l 5173 .",
+    "dev": "npx --yes serve -l 5173 ."
+  }
+}

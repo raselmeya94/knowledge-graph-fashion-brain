@@ -1,0 +1,10 @@
+{
+  "text": "Bangladesh exports denim to the EU. H&M sources cotton from Bangladesh. Published by Northwind Mills.",
+  "kind": "text",
+  "filename": "trade_note.txt",
+  "use_model": false,
+  "clean": false,
+  "auto_commit": false,
+  "graph_id": "news",
+  "ontology_id": "news"
+}

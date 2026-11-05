@@ -1,0 +1,21 @@
+$kind: http-request
+name: Upload a file
+method: POST
+url: '{{base_url}}/kg/pipeline/upload'
+order: 12000
+body:
+  type: formdata
+  content:
+    - key: file
+      type: file
+      src: 'note.docx'
+      description: Replace with a PDF, Word, HTML, JSON, email, or image file.
+    - key: kind
+      type: text
+      value: docx
+    - key: use_model
+      type: text
+      value: "false"
+    - key: auto_commit
+      type: text
+      value: "false"

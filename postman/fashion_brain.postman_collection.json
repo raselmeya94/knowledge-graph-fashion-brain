@@ -1,0 +1,439 @@
+{
+  "info": {
+    "_postman_id": "fb-fashion-brain-8000",
+    "name": "fashion_brain",
+    "description": "Fashion Brain BFF on port 8000.\n\n**Run order:** see `postman/POSTMAN_RUN.md` Path B.\n1. Health (kg must be ok)\n2. Auth → register (once) → login (saves accessToken)\n3. Chat via POST /api/v1/chat OR conversations + messages\n4. Optional Admin proxies to KG :8001\n\nStart KG first, then FB:\n```\npython -m knowledge_graph.cli serve\npython -m fashion_brain.cli serve\n```\n\nLogin test script sets `accessToken` / `refreshToken`. Create conversation / chat scripts set `conversationId`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "baseUrl", "value": "http://127.0.0.1:8000"},
+    {"key": "clearance", "value": "internal"},
+    {"key": "accessToken", "value": ""},
+    {"key": "refreshToken", "value": ""},
+    {"key": "conversationId", "value": ""},
+    {"key": "graphId", "value": "ecom_products"},
+    {"key": "reviewId", "value": ""},
+    {"key": "apiToken", "value": ""}
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{"key": "token", "value": "{{accessToken}}", "type": "string"}]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({ key: 'X-Clearance', value: pm.collectionVariables.get('clearance') });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET health",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"status\": \"ok\",\n  \"service\": \"fashion_brain\",\n  \"kg\": \"ok\",\n  \"chat_db\": \"ok\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 Auth",
+      "item": [
+        {
+          "name": "POST register admin",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\",\n  \"role\": \"admin\",\n  \"clearance\": \"internal\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/auth/register",
+            "description": "First user may register as admin in development. Later admins need FASHIONGPT_ADMIN_BOOTSTRAP_SECRET."
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"user\": {\n    \"id\": \"uuid\",\n    \"email\": \"admin@example.com\",\n    \"role\": \"admin\",\n    \"clearance\": \"internal\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST register user",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"role\": \"user\",\n  \"clearance\": \"internal\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/auth/register"
+          }
+        },
+        {
+          "name": "POST login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.access_token) pm.collectionVariables.set('accessToken', body.access_token);",
+                  "if (body.refresh_token) pm.collectionVariables.set('refreshToken', body.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/auth/login"
+          },
+          "response": [
+            {
+              "name": "Tokens",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"access_token\": \"...\",\n  \"refresh_token\": \"...\",\n  \"token_type\": \"bearer\",\n  \"expires_in\": 3600,\n  \"user\": {\"email\": \"admin@example.com\", \"role\": \"admin\"}\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST refresh",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/auth/refresh"
+          }
+        },
+        {
+          "name": "POST logout",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/auth/logout"
+          }
+        },
+        {
+          "name": "GET me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/me"
+          }
+        },
+        {
+          "name": "PATCH me clearance",
+          "request": {
+            "method": "PATCH",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clearance\": \"internal\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/me"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 Chat (plan alias)",
+      "description": "Preferred chat path after login. First request creates a session when session_id is omitted.",
+      "item": [
+        {
+          "name": "POST /api/v1/chat (new session)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.session_id) pm.collectionVariables.set('conversationId', body.session_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Which materials are used by products in the catalog?\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/chat",
+            "description": "No session_id → creates conversation. Saves session_id into conversationId."
+          },
+          "response": [
+            {
+              "name": "Completed",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"session_id\": \"uuid\",\n  \"message_id\": \"uuid\",\n  \"intent\": \"product_count\",\n  \"selected_graphs\": [],\n  \"status\": \"completed\",\n  \"response\": \"...\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/chat (follow-up)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{conversationId}}\",\n  \"message\": \"Now show only men's styles\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/chat",
+            "description": "Reuse session_id from the previous chat call."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 Conversations and memory",
+      "description": "Classic conversation CRUD (same backend as /api/v1/chat).",
+      "item": [
+        {
+          "name": "POST create conversation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.id) pm.collectionVariables.set('conversationId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"title\": \"Materials\"\n}"},
+            "url": "{{baseUrl}}/v1/conversations"
+          }
+        },
+        {
+          "name": "GET conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/conversations"
+          }
+        },
+        {
+          "name": "GET conversation",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/conversations/{{conversationId}}"
+          }
+        },
+        {
+          "name": "POST conversation message",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Which materials are used by products in the catalog?\"\n}"
+            },
+            "url": "{{baseUrl}}/v1/conversations/{{conversationId}}/messages"
+          }
+        },
+        {
+          "name": "POST ask with conversation_id",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"How many cotton products are there?\",\n  \"conversation_id\": \"{{conversationId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        },
+        {
+          "name": "POST memory",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"content\": \"Prefer cotton and linen answers.\"\n}"},
+            "url": "{{baseUrl}}/v1/memory"
+          }
+        },
+        {
+          "name": "GET memory",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/memory"
+          }
+        },
+        {
+          "name": "GET settings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/settings"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 Admin KG making",
+      "item": [
+        {
+          "name": "GET admin kg health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/kg/health",
+            "description": "Requires admin role. Proxies to KG /health."
+          }
+        },
+        {
+          "name": "GET admin sources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/sources"
+          }
+        },
+        {
+          "name": "GET admin graphs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/graphs"
+          }
+        },
+        {
+          "name": "GET admin ingestion status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/ingestion/status"
+          }
+        },
+        {
+          "name": "POST admin ingestion run",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"sources\": [\"own_products\"]\n}"},
+            "url": "{{baseUrl}}/v1/admin/ingestion/run"
+          }
+        },
+        {
+          "name": "POST admin pipeline text",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const id = body.id || body.review_id || (body.review && body.review.id);",
+                  "if (id) pm.collectionVariables.set('reviewId', id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"text\",\n  \"text\": \"Bangladesh garment exports rose on cotton demand.\",\n  \"use_model\": false,\n  \"auto_commit\": false\n}"
+            },
+            "url": "{{baseUrl}}/v1/admin/pipeline",
+            "description": "Extract / propose relationships (scrape-extract path)."
+          }
+        },
+        {
+          "name": "GET admin reviews",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/reviews"
+          }
+        },
+        {
+          "name": "POST admin approve review",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/reviews/{{reviewId}}/approve"
+          }
+        },
+        {
+          "name": "POST admin commit review",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/reviews/{{reviewId}}/commit",
+            "description": "Build / write approved facts into the news or documents graph."
+          }
+        },
+        {
+          "name": "POST admin graph query",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 5,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/v1/admin/graphs/{{graphId}}/query",
+            "description": "Set collection variable graphId from GET /v1/admin/graphs (e.g. ecom_products or own_products)."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+$kind: http-example
+name: Tool list
+order: 1000
+request:
+  method: GET
+  url: '{{base_url}}/kg/tools'
+response:
+  statusCode: 200
+  statusText: OK
+  headers:
+    - key: Content-Type
+      value: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "tools": [
+          {
+            "name": "extract_text",
+            "description": "Extract plain text from PDF, Word, email, or a text file."
+          },
+          {
+            "name": "identify_relationships",
+            "description": "Compare extracted content with existing graph relationships and propose new allowlisted relationships."
+          },
+          {
+            "name": "ingest_graph",
+            "description": "Save approved relationships from one review into the knowledge graph."
+          }
+        ]
+      }

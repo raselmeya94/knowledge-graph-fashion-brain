@@ -1,0 +1,8 @@
+{
+  "id": "kg_system",
+  "name": "System Metadata Knowledge Graph",
+  "ontology_id": "system",
+  "kind": "system",
+  "description": "Live registry overview for Fashion Brain: registered knowledge graphs, sources, attributes, capabilities, and the shared interconnect.",
+  "source_ids": ["kg_system"]
+}

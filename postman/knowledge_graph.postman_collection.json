@@ -1,0 +1,1991 @@
+{
+  "info": {
+    "_postman_id": "kg-knowledge-graph-8001",
+    "name": "knowledge_graph",
+    "description": "Knowledge graph API on port 8001.\n\n**E-com empty\u2192live order (folder 0):**\n1. GET health / empty checks\n2. POST /ontologies (ecom \u2014 full schema + Zara/Primark/Matalan/C&A/Walmart)\n3. POST /graphs (ecom_products, kind=product)\n4. POST /api/sources (ecom_products, authorized_sql)\n5. POST sync \u2192 poll job \u2192 metadata/values \u2192 query/retrieve\n\nBodies also in `postman/bodies/`. Guide: `knowledge_graph/POSTMAN.md`.\n\nAuth: Bearer `{{apiToken}}` only if set. Always `X-Clearance: {{clearance}}` (internal).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8001"
+    },
+    {
+      "key": "clearance",
+      "value": "internal"
+    },
+    {
+      "key": "apiToken",
+      "value": ""
+    },
+    {
+      "key": "reviewId",
+      "value": ""
+    },
+    {
+      "key": "relationshipId",
+      "value": ""
+    },
+    {
+      "key": "productId",
+      "value": ""
+    },
+    {
+      "key": "nodeId",
+      "value": "ecom:product:example"
+    },
+    {
+      "key": "ontologyId",
+      "value": "ecom"
+    },
+    {
+      "key": "graphId",
+      "value": "ecom_products"
+    },
+    {
+      "key": "sourceId",
+      "value": "ecom_products"
+    },
+    {
+      "key": "jobId",
+      "value": ""
+    },
+    {
+      "key": "edgeId",
+      "value": ""
+    },
+    {
+      "key": "fileId",
+      "value": ""
+    },
+    {
+      "key": "scrapingReviewId",
+      "value": ""
+    },
+    {
+      "key": "brand",
+      "value": "primark"
+    },
+    {
+      "key": "material",
+      "value": "cotton"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({ key: 'X-Clearance', value: pm.collectionVariables.get('clearance') });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 Ecom pipeline (empty \u2192 live)",
+      "description": "Run top\u2192bottom after a wipe. Uses the real ecom ontology (Product/Brand/Material/\u2026 + HAS_BRAND/USES_MATERIAL/\u2026). Copy postman/bodies/ecom_master_products_mapping.json \u2192 data/schemas/ before sync. Postgres DSN must be set in .env.",
+      "item": [
+        {
+          "name": "01 GET health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "Expect status ok."
+          }
+        },
+        {
+          "name": "02 GET /ontologies (should be empty or only prior POSTs)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ontologies",
+            "description": ""
+          }
+        },
+        {
+          "name": "03 GET /api/sources (should be empty)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources",
+            "description": ""
+          }
+        },
+        {
+          "name": "04 POST /ontologies \u2014 ecom (full body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/ontologies",
+            "description": "Creates ontology id=ecom with entity_types + relationship_allowlist + brand canonicals.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"ecom\",\n  \"name\": \"ecom-products-ontology\",\n  \"description\": \"E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category, material, color, and availability.\",\n  \"version\": \"1.0.0\",\n  \"entity_types\": [\n    \"Product\",\n    \"Brand\",\n    \"Material\",\n    \"GarmentCategory\",\n    \"Color\",\n    \"Availability\",\n    \"Section\",\n    \"Currency\",\n    \"Catalog\",\n    \"Domain\",\n    \"Construction\"\n  ],\n  \"relationship_allowlist\": {\n    \"HAS_BRAND\": [\n      [\n        \"Product\",\n        \"Brand\"\n      ]\n    ],\n    \"BELONGS_TO_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_SUB_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_FAMILY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"PARENT_CATEGORY\": [\n      [\n        \"GarmentCategory\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"USES_MATERIAL\": [\n      [\n        \"Product\",\n        \"Material\"\n      ]\n    ],\n    \"HAS_COLOR\": [\n      [\n        \"Product\",\n        \"Color\"\n      ]\n    ],\n    \"HAS_AVAILABILITY\": [\n      [\n        \"Product\",\n        \"Availability\"\n      ]\n    ],\n    \"HAS_SECTION\": [\n      [\n        \"Product\",\n        \"Section\"\n      ]\n    ],\n    \"PRICED_IN\": [\n      [\n        \"Product\",\n        \"Currency\"\n      ]\n    ],\n    \"IN_CATALOG\": [\n      [\n        \"Product\",\n        \"Catalog\"\n      ]\n    ],\n    \"SCRAPED_FROM\": [\n      [\n        \"Product\",\n        \"Domain\"\n      ]\n    ],\n    \"HAS_CONSTRUCTION\": [\n      [\n        \"Product\",\n        \"Construction\"\n      ]\n    ]\n  },\n  \"canonical_entities\": [\n    {\n      \"id\": \"brand:zara\",\n      \"type\": \"Brand\",\n      \"name\": \"zara\",\n      \"aliases\": [\n        \"Zara\",\n        \"ZARA\"\n      ]\n    },\n    {\n      \"id\": \"brand:primark\",\n      \"type\": \"Brand\",\n      \"name\": \"primark\",\n      \"aliases\": [\n        \"Primark\",\n        \"PRIMARK\"\n      ]\n    },\n    {\n      \"id\": \"brand:matalan\",\n      \"type\": \"Brand\",\n      \"name\": \"matalan\",\n      \"aliases\": [\n        \"Matalan\",\n        \"MATALAN\"\n      ]\n    },\n    {\n      \"id\": \"brand:c-and-a\",\n      \"type\": \"Brand\",\n      \"name\": \"c-and-a\",\n      \"aliases\": [\n        \"C&A\",\n        \"c&a\",\n        \"C and A\",\n        \"c-and-a\"\n      ]\n    },\n    {\n      \"id\": \"brand:walmart\",\n      \"type\": \"Brand\",\n      \"name\": \"walmart\",\n      \"aliases\": [\n        \"Walmart\",\n        \"WALMART\"\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('ontologyId', 'ecom');",
+                  "pm.test('ontology created or already exists', function () {",
+                  "  pm.expect([200, 400]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 GET /ontologies/ecom",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ontologies/ecom",
+            "description": "Must return definition with Brand + HAS_BRAND, not 500."
+          }
+        },
+        {
+          "name": "06 POST /graphs \u2014 ecom_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs",
+            "description": "kind=product only allowed for ecom_products / own_products.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"ecom_products\",\n  \"name\": \"E-Commerce Knowledge Graph\",\n  \"ontology_id\": \"ecom\",\n  \"kind\": \"product\",\n  \"description\": \"Contains products and brand information from multiple e-commerce sources (Primark, Zara, Matalan, C&A, Walmart).\",\n  \"source_ids\": [\n    \"ecom_products\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('graphId', 'ecom_products');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 GET /api/graphs/registry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/registry",
+            "description": ""
+          }
+        },
+        {
+          "name": "08 POST /api/sources \u2014 ecom_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sources",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"source_type\": \"ecom_products\",\n  \"connector\": \"authorized_sql\",\n  \"supported_formats\": [\n    \"sql\"\n  ],\n  \"ingestion_mode\": \"incremental\",\n  \"update_strategy\": \"content_hash\",\n  \"permissions_model\": \"classification\",\n  \"enabled\": true,\n  \"description\": \"Centralized e-commerce master_products (plan SRC_002). Brands such as Primark, Zara, Matalan, C&A, and Walmart live inside this one KG.\",\n  \"future_connectors\": [\n    \"authorized_api\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('sourceId', 'ecom_products');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "09 GET /api/sources/ecom_products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources/ecom_products",
+            "description": ""
+          }
+        },
+        {
+          "name": "10 POST /api/sources/ecom_products/sync",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sources/ecom_products/sync",
+            "description": "Needs FASHIONGPT_ECOM_DSN / POSTGRES_* and mapping file under data/schemas/.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const id = j.job && j.job.id;",
+                  "  if (id) pm.collectionVariables.set('jobId', id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11 GET /jobs/{jobId}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/jobs/{{jobId}}",
+            "description": "Poll until finished."
+          }
+        },
+        {
+          "name": "12 GET /api/graphs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs",
+            "description": "ecom_products node_count > 0 after sync."
+          }
+        },
+        {
+          "name": "13 GET /api/metadata/values?attribute=brand",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/metadata/values?attribute=brand&graph_id=ecom_products&limit=25",
+            "description": "Expect primark, zara, matalan, c-and-a, walmart samples when data synced."
+          }
+        },
+        {
+          "name": "14 GET /api/metadata/values?attribute=material",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/metadata/values?attribute=material&graph_id=ecom_products&limit=25",
+            "description": ""
+          }
+        },
+        {
+          "name": "15 POST /api/graphs/query \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"ecom_products\",\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 10,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "16 POST /brain/retrieve \u2014 brand primark",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/brain/retrieve",
+            "description": "Uses ontology Brand canonicals (primark/zara/matalan/c-and-a/walmart).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"How many Primark products are in the e-commerce catalog?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"brand\": \"{{brand}}\"\n  },\n  \"group_by\": null,\n  \"unsupported\": false,\n  \"limit\": null,\n  \"suggest\": false,\n  \"analysis\": false,\n  \"season_name\": null,\n  \"upcoming\": false,\n  \"corrections\": [],\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"use_global_kg\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "17 POST /brain/retrieve \u2014 material cotton",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/brain/retrieve",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Which e-com products use cotton?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"material\": \"{{material}}\"\n  },\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"analysis\": false,\n  \"suggest\": false,\n  \"corrections\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "18 POST ontology pair \u2014 HAS_BRAND (idempotent check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/ontologies/ecom/pairs",
+            "description": "Relationship already in allowlist; useful to verify pairs API.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"HAS_BRAND\",\n  \"start_type\": \"Product\",\n  \"end_type\": \"Brand\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "Graph process + Ollama status."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\",\n  \"service\": \"knowledge_graph\",\n  \"graph_backend\": \"memory\",\n  \"graph\": \"ok\",\n  \"ollama\": \"ok\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Plan API aliases",
+      "description": "Step 2\u20134 of POSTMAN_RUN.md Path A. Prefer these over legacy paths when integrating new admin UI.",
+      "item": [
+        {
+          "name": "1 GET /api/sources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources",
+            "description": "List registered sources from source_registry (API-driven; no hard-coded list in clients)."
+          }
+        },
+        {
+          "name": "2 GET /api/sources/{sourceId}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources/{{sourceId}}"
+          }
+        },
+        {
+          "name": "3 GET /api/sources/{sourceId}/schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources/{{sourceId}}/schema",
+            "description": "Ontology + mapping for one source."
+          }
+        },
+        {
+          "name": "4 GET /api/graphs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs"
+          }
+        },
+        {
+          "name": "5 GET /api/graphs/registry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/registry",
+            "description": "Unified registry (capabilities, entities) for Fashion Brain Graph Router."
+          }
+        },
+        {
+          "name": "6 GET /api/graphs/global",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/global"
+          }
+        },
+        {
+          "name": "7 GET /api/graphs/{graphId}/schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/{{graphId}}/schema"
+          }
+        },
+        {
+          "name": "8 GET /api/metadata",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/metadata?graph_id={{graphId}}"
+          }
+        },
+        {
+          "name": "9 GET /api/metadata/values",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/metadata/values?attribute=brand&graph_id={{graphId}}&limit=20",
+            "description": "Paginated value discovery \u2014 never dump full catalogs into LLM prompts."
+          }
+        },
+        {
+          "name": "10 POST /api/sources/{sourceId}/sync",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const body = pm.response.json();",
+                  "  const id = body.job && body.job.id;",
+                  "  if (id) pm.collectionVariables.set('jobId', id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/sources/{{sourceId}}/sync",
+            "description": "Unified sync job (file rebuild or e-com SQL). Poll GET /jobs/{{jobId}}."
+          }
+        },
+        {
+          "name": "11 POST /api/graphs/rebuild",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const body = pm.response.json();",
+                  "  const id = body.job && body.job.id;",
+                  "  if (id) pm.collectionVariables.set('jobId', id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"{{graphId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/graphs/rebuild"
+          }
+        },
+        {
+          "name": "12 GET /jobs/{jobId}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/jobs/{{jobId}}",
+            "description": "Poll until job finished after sync/rebuild."
+          }
+        },
+        {
+          "name": "13 POST /api/graphs/query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"{{graphId}}\",\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 10,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "Single-KG approved template query (no free Cypher)."
+          }
+        },
+        {
+          "name": "14 POST /api/graphs/cross-query",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"intent\": \"product_count\",\n  \"question\": \"Cotton products in e-commerce\",\n  \"filters\": {\n    \"material\": \"cotton\"\n  },\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"use_global_kg\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/graphs/cross-query",
+            "description": "Multi-graph retrieve. Leave graph_ids empty to let the service use request scope; or pass ids from GET /api/graphs/registry."
+          }
+        },
+        {
+          "name": "15 POST /api/sources \u2014 ecom_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"source_type\": \"ecom_products\",\n  \"connector\": \"authorized_sql\",\n  \"supported_formats\": [\n    \"sql\"\n  ],\n  \"ingestion_mode\": \"incremental\",\n  \"update_strategy\": \"content_hash\",\n  \"permissions_model\": \"classification\",\n  \"enabled\": true,\n  \"description\": \"Centralized e-commerce master_products (plan SRC_002). Brands such as Primark, Zara, Matalan, C&A, and Walmart live inside this one KG.\",\n  \"future_connectors\": [\n    \"authorized_api\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/sources",
+            "description": "Register a new source via API (disabled until adapter/data ready). Do not use duplicate source_id."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "item": [
+        {
+          "name": "GET sources",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/sources",
+            "description": "Registered ingestion sources."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"sources\": [\n    {\n      \"source_id\": \"own_products\",\n      \"source_type\": \"own_products\",\n      \"enabled\": true\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET ingestion status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ingestion/status",
+            "description": "Last ingest reports and shared-link counts."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"records\": [],\n  \"reports\": [],\n  \"shared\": {},\n  \"degraded\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST ingestion run",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sources\": [\"own_products\"]\n}"
+            },
+            "url": "{{baseUrl}}/ingestion/run",
+            "description": "Development-only rebuild. Refuses outside `FASHIONGPT_ENV=development`."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 reports",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"reports\": [\n    {\n      \"source_id\": \"own_products\",\n      \"ingested\": 0,\n      \"unchanged\": 124682,\n      \"errors\": []\n    }\n  ]\n}"
+            },
+            {
+              "name": "403 \u2014 not development",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"permission_denied\",\n  \"message\": \"Ingestion trigger is available only in development.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET products",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has items + total', () => {",
+                  "  pm.expect(body.items).to.be.an('array');",
+                  "  pm.expect(body.total).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products?material=cotton&limit=5&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "material",
+                  "value": "cotton"
+                },
+                {
+                  "key": "season",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Structured product search against the catalog index.\n\nQuery params: `q`, `material`, `season`, `category`, `limit` (1\u2013100), `offset`."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 cotton page",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"product_id\": \"01201900021\",\n      \"title\": \"LR1311\",\n      \"product\": {\n        \"product_id\": \"01201900021\",\n        \"product_name\": \"LR1311\",\n        \"material\": \"100%Cotton\",\n        \"composition\": \"100%Cotton\",\n        \"category\": \"Sweater\",\n        \"garment_type\": \"Jumper\",\n        \"gender\": \"Women\",\n        \"classification\": \"internal\"\n      },\n      \"content_hash\": \"0ae881a718ed61e292d985e58315016eb1f1bd7c30d30ac735ff4b3114922949\",\n      \"source_path\": \"products_data.csv\",\n      \"synthetic\": false\n    }\n  ],\n  \"total\": 33924,\n  \"limit\": 5,\n  \"offset\": 0,\n  \"note\": \"Counts come from the synthetic file repository, not a live PLMEX database.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Registry",
+      "item": [
+        {
+          "name": "GET ontologies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ontologies",
+            "description": "List registered ontologies."
+          },
+          "response": []
+        },
+        {
+          "name": "POST ontologies \u2014 ecom (full body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/ontologies",
+            "description": "Same body as folder 0 step 04. Prefer folder 0 for ordered runs.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"ecom\",\n  \"name\": \"ecom-products-ontology\",\n  \"description\": \"E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category, material, color, and availability.\",\n  \"version\": \"1.0.0\",\n  \"entity_types\": [\n    \"Product\",\n    \"Brand\",\n    \"Material\",\n    \"GarmentCategory\",\n    \"Color\",\n    \"Availability\",\n    \"Section\",\n    \"Currency\",\n    \"Catalog\",\n    \"Domain\",\n    \"Construction\"\n  ],\n  \"relationship_allowlist\": {\n    \"HAS_BRAND\": [\n      [\n        \"Product\",\n        \"Brand\"\n      ]\n    ],\n    \"BELONGS_TO_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_SUB_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_FAMILY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"PARENT_CATEGORY\": [\n      [\n        \"GarmentCategory\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"USES_MATERIAL\": [\n      [\n        \"Product\",\n        \"Material\"\n      ]\n    ],\n    \"HAS_COLOR\": [\n      [\n        \"Product\",\n        \"Color\"\n      ]\n    ],\n    \"HAS_AVAILABILITY\": [\n      [\n        \"Product\",\n        \"Availability\"\n      ]\n    ],\n    \"HAS_SECTION\": [\n      [\n        \"Product\",\n        \"Section\"\n      ]\n    ],\n    \"PRICED_IN\": [\n      [\n        \"Product\",\n        \"Currency\"\n      ]\n    ],\n    \"IN_CATALOG\": [\n      [\n        \"Product\",\n        \"Catalog\"\n      ]\n    ],\n    \"SCRAPED_FROM\": [\n      [\n        \"Product\",\n        \"Domain\"\n      ]\n    ],\n    \"HAS_CONSTRUCTION\": [\n      [\n        \"Product\",\n        \"Construction\"\n      ]\n    ]\n  },\n  \"canonical_entities\": [\n    {\n      \"id\": \"brand:zara\",\n      \"type\": \"Brand\",\n      \"name\": \"zara\",\n      \"aliases\": [\n        \"Zara\",\n        \"ZARA\"\n      ]\n    },\n    {\n      \"id\": \"brand:primark\",\n      \"type\": \"Brand\",\n      \"name\": \"primark\",\n      \"aliases\": [\n        \"Primark\",\n        \"PRIMARK\"\n      ]\n    },\n    {\n      \"id\": \"brand:matalan\",\n      \"type\": \"Brand\",\n      \"name\": \"matalan\",\n      \"aliases\": [\n        \"Matalan\",\n        \"MATALAN\"\n      ]\n    },\n    {\n      \"id\": \"brand:c-and-a\",\n      \"type\": \"Brand\",\n      \"name\": \"c-and-a\",\n      \"aliases\": [\n        \"C&A\",\n        \"c&a\",\n        \"C and A\",\n        \"c-and-a\"\n      ]\n    },\n    {\n      \"id\": \"brand:walmart\",\n      \"type\": \"Brand\",\n      \"name\": \"walmart\",\n      \"aliases\": [\n        \"Walmart\",\n        \"WALMART\"\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET ontology",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ontologies/{{ontologyId}}",
+            "description": "Read one ontology definition."
+          },
+          "response": []
+        },
+        {
+          "name": "POST ontology pair",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/ontologies/{{ontologyId}}/pairs",
+            "description": "Ecom allowlist pair (not news SOURCES_FROM).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"HAS_BRAND\",\n  \"start_type\": \"Product\",\n  \"end_type\": \"Brand\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET graphs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/graphs",
+            "description": "List graphs with counts."
+          },
+          "response": []
+        },
+        {
+          "name": "POST graph \u2014 ecom_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs",
+            "description": "Create a graph bound to an ontology.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"ecom_products\",\n  \"name\": \"E-Commerce Knowledge Graph\",\n  \"ontology_id\": \"ecom\",\n  \"kind\": \"product\",\n  \"description\": \"Contains products and brand information from multiple e-commerce sources (Primark, Zara, Matalan, C&A, Walmart).\",\n  \"source_ids\": [\n    \"ecom_products\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET graph",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/graphs/{{graphId}}",
+            "description": "Graph metadata and ontology."
+          },
+          "response": []
+        },
+        {
+          "name": "POST extract",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/extract",
+            "description": "Format-wise raw text extraction.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Published by Northwind Mills.\",\n  \"kind\": \"text\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST relationships propose",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/relationships/propose",
+            "description": "Propose relationships for a graph.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Buyer note\",\n  \"text\": \"H&M sources denim from Bangladesh.\",\n  \"kind\": \"text\",\n  \"graph_id\": \"{{graphId}}\",\n  \"use_model\": false\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST pipeline with graph_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/kg/pipeline",
+            "description": "Run construction into a selected graph.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"H&M sources denim from Bangladesh.\",\n  \"kind\": \"text\",\n  \"graph_id\": \"{{graphId}}\",\n  \"use_model\": false\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE review relationship",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}/relationships/{{relationshipId}}",
+            "description": "Reject one proposal."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE graph edge",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/graphs/{{graphId}}/edges/{{edgeId}}",
+            "description": "Soft-delete a committed edge."
+          },
+          "response": []
+        },
+        {
+          "name": "POST graph sync",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/graphs/{{graphId}}/sync",
+            "description": "Sync / snapshot the selected graph."
+          },
+          "response": []
+        },
+        {
+          "name": "POST graph rebuild",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/graphs/{{graphId}}/rebuild",
+            "description": "Rebuild from sources or restore snapshot."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Scraping",
+      "item": [
+        {
+          "name": "POST scraping extract",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/scraping/extract",
+            "description": "Extract text; returns file_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"text\",\n  \"filename\": \"buyer.txt\",\n  \"text\": \"Published by Northwind Mills.\\n\\nBangladesh exports denim to the EU.\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST scraping chunk",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/scraping/chunk",
+            "description": "Paragraph chunks for file_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_id\": \"{{fileId}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST scraping propose",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/scraping/propose",
+            "description": "Per-paragraph relationships with novelty tags.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_id\": \"{{fileId}}\",\n  \"ontology_id\": \"news\",\n  \"graph_id\": \"news\",\n  \"use_model\": false\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST scraping queue",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/scraping/queue",
+            "description": "Queue review for approve/commit.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_id\": \"{{fileId}}\",\n  \"ontology_id\": \"news\",\n  \"graph_id\": \"news\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "POST scraping commit new ontology",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/scraping/commit",
+            "description": "Commit into new ontology+graph.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"review_id\": \"{{scrapingReviewId}}\",\n  \"ontology\": {\n    \"mode\": \"new\",\n    \"id\": \"buyer-scraping\",\n    \"name\": \"Buyer scraping\",\n    \"clone_from\": \"news\"\n  },\n  \"graph\": {\n    \"id\": \"buyer-hm\",\n    \"name\": \"Buyer H&M\"\n  }\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Brain retrieve (for Fashion Brain)",
+      "item": [
+        {
+          "name": "POST brain retrieve \u2014 product count",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has text', () => pm.expect(body.text).to.be.a('string'));",
+                  "pm.test('has evidence array', () => pm.expect(body.evidence).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Which e-com products use cotton?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"material\": \"cotton\"\n  },\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"group_by\": null,\n  \"unsupported\": false,\n  \"limit\": null,\n  \"suggest\": false,\n  \"analysis\": false,\n  \"season_name\": null,\n  \"upcoming\": false,\n  \"corrections\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/brain/retrieve",
+            "description": "Evidence pack used by Fashion Brain.\n\n**Input (BrainRetrieveRequest)**\n- `question` string\n- `intent` e.g. `product_count` | `specification` | `news` | `products` | `shared_products`\n- `filters` object of catalog fields\n- `group_by` string or null\n- `analysis` bool \u2014 type-wise top tables/charts\n- `suggest` bool \u2014 product specification sheet\n- `limit`, `season_name`, `upcoming`, `corrections`\n\n**Output (BrainRetrieveResponse)**\n- `text`, `evidence[]`, `caveats[]`, `unavailable[]`, `synthetic_data`, `routes_hint[]`"
+          },
+          "response": [
+            {
+              "name": "OK \u2014 cotton evidence",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"text\": \"There are 33924 products with material cotton.\",\n  \"evidence\": [\n    {\n      \"source_id\": \"own_products\",\n      \"record_id\": \"01201900021\",\n      \"title\": \"LR1311\",\n      \"excerpt\": \"color=\u7c73\u8272; category=Sweater; garment_type=Jumper; gender=Women\",\n      \"field_ref\": \"color\",\n      \"verification_status\": \"observed\",\n      \"synthetic\": false\n    }\n  ],\n  \"caveats\": [\n    \"This count is from imported product data, not a live PLMEX database.\"\n  ],\n  \"unavailable\": [],\n  \"synthetic_data\": false,\n  \"routes_hint\": [\"product_count\"]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST brain retrieve \u2014 brand primark",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"How many Primark products?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"brand\": \"primark\"\n  },\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"analysis\": false,\n  \"suggest\": false,\n  \"limit\": 10,\n  \"corrections\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/brain/retrieve",
+            "description": "Returns Markdown tables + optional ```chart``` JSON inside `text` for type-wise tops."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 analysis text",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"text\": \"Product analysis for PRIMARK: 17761 products.\\nTop 5 values by type (highest count first). Prefer Markdown tables and one chart in the reply.\\n### Garment type\\n| Name | Count | Share % |\\n| --- | ---: | ---: |\\n| Jumper | 4240 | 23.9 |\\n```chart\\n{\\\"type\\\":\\\"bar\\\",\\\"title\\\":\\\"PRIMARK \u2014 Garment type\\\",\\\"labels\\\":[\\\"Jumper\\\"],\\\"values\\\":[4240]}\\n```\",\n  \"evidence\": [],\n  \"caveats\": [\"This count is from imported product data, not a live PLMEX database.\"],\n  \"unavailable\": [],\n  \"synthetic_data\": false,\n  \"routes_hint\": [\"product_count\"]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST brain retrieve \u2014 news",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Who exports denim to the EU?\",\n  \"intent\": \"news\",\n  \"filters\": {},\n  \"analysis\": false,\n  \"suggest\": false\n}"
+            },
+            "url": "{{baseUrl}}/brain/retrieve",
+            "description": "News-graph facts for Fashion Brain."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 news facts",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"text\": \"Facts from the news graph: - Bangladesh EXPORTS_TO EU denim \u20ac869.13M ...\",\n  \"evidence\": [],\n  \"caveats\": [\"This answer is from the news graph, not our product records.\"],\n  \"unavailable\": [],\n  \"synthetic_data\": false,\n  \"routes_hint\": [\"news\"]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Graph queries",
+      "item": [
+        {
+          "name": "POST ecom_products \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs/ecom_products/query",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 20,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST own_products \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/graphs/own_products/query",
+            "description": "Approved templates only (no Cypher).\n\n`own_products`: `list_products`, `product_materials`, `trace`"
+          },
+          "response": [
+            {
+              "name": "OK \u2014 page",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"plmex:product:1000000001\",\n      \"labels\": [\"Entity\", \"Record\", \"Product\"],\n      \"graph\": \"own_products\",\n      \"properties\": {\n        \"name\": \"Demo Tee\",\n        \"prov_record_id\": \"1000000001\",\n        \"classification\": \"internal\"\n      }\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST own_products \u2014 product_materials",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"product_materials\",\n  \"params\": {\"record_id\": \"{{productId}}\"},\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/graphs/own_products/query"
+          },
+          "response": [
+            {
+              "name": "OK \u2014 materials",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"product_id\": \"1000000001\",\n      \"material\": \"Cotton\",\n      \"field_ref\": \"composition\",\n      \"canonical_id\": \"fashion:material:cotton\",\n      \"review\": false,\n      \"content_hash\": \"abc\"\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST own_products \u2014 trace",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"trace\",\n  \"params\": {\"node_id\": \"{{nodeId}}\"},\n  \"limit\": 50,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/graphs/own_products/query",
+            "description": "`trace` requires `params.node_id`."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 node + edges",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"node\": {\n    \"id\": \"plmex:product:1000000001\",\n    \"graph\": \"own_products\"\n  },\n  \"edges\": [\n    {\n      \"id\": \"USES_MATERIAL:...\",\n      \"type\": \"USES_MATERIAL\",\n      \"start_id\": \"plmex:product:1000000001\",\n      \"end_id\": \"plmex:material:cotton\",\n      \"verification_status\": \"observed\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST shared \u2014 products_sharing_material",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"products_sharing_material\",\n  \"params\": {},\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/graphs/shared/query",
+            "description": "`shared` templates: `products_sharing_material`, `canonical_materials`, `review_queue`, `trace`"
+          },
+          "response": [
+            {
+              "name": "OK \u2014 shared groups",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"material\": \"Cotton\",\n      \"canonical_id\": \"fashion:material:cotton\",\n      \"products\": [\"1000000001\", \"1000000002\"]\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST news \u2014 news_facts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"news_facts\",\n  \"params\": {\"q\": \"denim EU Bangladesh\"},\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            },
+            "url": "{{baseUrl}}/graphs/news/query",
+            "description": "`news` templates: `news_facts`, `trace`. Param `q` filters facts."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 news rows",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"items\": [\n    {\n      \"relationship\": \"EXPORTS_TO\",\n      \"start\": \"Bangladesh\",\n      \"end\": \"EU\",\n      \"line\": \"Bangladesh EXPORTS_TO EU product=denim value=\u20ac869.13M ...\",\n      \"evidence\": \"Bangladesh exported \u20ac869.13 million of denim to the EU\",\n      \"graph\": \"news\"\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 20,\n  \"offset\": 0\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST master \u2014 sources",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"sources\",\n  \"params\": {}\n}"
+            },
+            "url": "{{baseUrl}}/graphs/master/query",
+            "description": "Lists loaded source graph ids in the master query memory."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"query_graph\": \"master\",\n  \"sources\": [\"news\", \"own_products\"]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Construction tools",
+      "item": [
+        {
+          "name": "GET kg/tools",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/kg/tools"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"tools\": [\"extract_text\", \"extract_html\", \"parse_json\", \"identify_relationships\", \"ollama\"]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET kg/ollama",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/kg/ollama"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\",\n  \"model\": \"llama3.1:8b\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET kg/relationships",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/kg/relationships"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"relationships\": [\"PUBLISHED_BY\", \"EXPORTS_TO\", \"USES_MATERIAL\"]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST extract_text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"email\",\n  \"filename\": \"linen.eml\",\n  \"clean\": false,\n  \"text\": \"From: Ada Lovelace <ada@example.com>\\nTo: Grace Hopper <grace@example.com>\\nSubject: Linen shipment\\n\\nPublished by Northwind Mills.\"\n}"
+            },
+            "url": "{{baseUrl}}/kg/tools/extract_text"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"text\": \"Published by Northwind Mills.\",\n  \"warnings\": []\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST identify_relationships",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Lookbook\",\n  \"kind\": \"json\",\n  \"use_model\": false,\n  \"text\": \"author: Ada Lovelace\\ntopic: Linen\",\n  \"structured\": {\n    \"title\": \"Lookbook\",\n    \"author\": \"Ada Lovelace\",\n    \"topic\": \"Linen\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/kg/tools/identify_relationships"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"relationships\": [],\n  \"warnings\": []\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pipeline",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code !== 200) return;",
+              "let body;",
+              "try { body = pm.response.json(); } catch (e) { return; }",
+              "if (body.review && body.review.id) pm.collectionVariables.set('reviewId', body.review.id);",
+              "const relationships = body.relationships || (body.review && body.review.relationships) || [];",
+              "if (relationships.length && relationships[0].id) pm.collectionVariables.set('relationshipId', relationships[0].id);"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "POST pipeline \u2014 email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"email\",\n  \"filename\": \"linen.eml\",\n  \"use_model\": false,\n  \"auto_commit\": false,\n  \"text\": \"From: Ada Lovelace <ada@example.com>\\nTo: Grace Hopper <grace@example.com>\\nSubject: Linen shipment\\n\\nPublished by Northwind Mills.\"\n}"
+            },
+            "url": "{{baseUrl}}/kg/pipeline",
+            "description": "Creates a review. Saves `reviewId` / `relationshipId` collection variables on success."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 review queued",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"review\": {\n    \"id\": \"6cab3568188947ad9dfc26e3b96eebee\",\n    \"status\": \"pending\",\n    \"source_kind\": \"email\",\n    \"title\": \"Linen shipment\"\n  },\n  \"relationships\": [\n    {\n      \"id\": \"rel-1\",\n      \"type\": \"PUBLISHED_BY\",\n      \"start_name\": \"Linen shipment\",\n      \"end_name\": \"Northwind Mills\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST pipeline \u2014 HTML",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"html\",\n  \"filename\": \"news.html\",\n  \"use_model\": false,\n  \"text\": \"<!DOCTYPE html><html><head><title>Spring newsletter</title></head><body><p>Unsubscribe from this newsletter.</p><p>Published by Northwind Mills.</p></body></html>\"\n}"
+            },
+            "url": "{{baseUrl}}/kg/pipeline"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"review\": {\"id\": \"html-review-id\", \"status\": \"pending\"}\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST pipeline \u2014 JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"json\",\n  \"filename\": \"lookbook.json\",\n  \"use_model\": false,\n  \"json_data\": {\n    \"title\": \"Lookbook\",\n    \"author\": \"Ada Lovelace\",\n    \"publisher\": \"Northwind Mills\",\n    \"topic\": \"Linen\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/kg/pipeline"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"review\": {\"id\": \"json-review-id\", \"status\": \"pending\"}\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST pipeline/upload",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "PDF / Word / HTML / JSON / email / image (< 8 MB for PDF)"
+                },
+                {
+                  "key": "kind",
+                  "type": "text",
+                  "value": "pdf"
+                },
+                {
+                  "key": "use_model",
+                  "type": "text",
+                  "value": "true"
+                },
+                {
+                  "key": "auto_commit",
+                  "type": "text",
+                  "value": "false"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/kg/pipeline/upload",
+            "description": "Multipart upload. Select a local file in Postman before sending."
+          },
+          "response": [
+            {
+              "name": "OK \u2014 news PDF review",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"review\": {\n    \"id\": \"4512fdb5b0964efeb3116458005df43a\",\n    \"status\": \"pending\",\n    \"source_kind\": \"pdf\",\n    \"graph\": \"news\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Reviews",
+      "item": [
+        {
+          "name": "GET reviews",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/kg/reviews"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"reviews\": [\n    {\"id\": \"{{reviewId}}\", \"status\": \"pending\"}\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET review by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"6cab3568188947ad9dfc26e3b96eebee\",\n  \"status\": \"pending\",\n  \"relationships\": []\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST edit review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"edits\": [\n    {\n      \"id\": \"{{relationshipId}}\",\n      \"end_name\": \"Katherine Johnson\"\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"{{reviewId}}\",\n  \"status\": \"pending\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST approve review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            },
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"{{reviewId}}\",\n  \"status\": \"approved\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST reject review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\"\n}"
+            },
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"{{reviewId}}\",\n  \"status\": \"rejected\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST commit review",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/kg/reviews/{{reviewId}}/commit",
+            "description": "Writes approved relationships into the source graph snapshot."
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"{{reviewId}}\",\n  \"status\": \"committed\",\n  \"edges_written\": 6\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

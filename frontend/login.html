@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fashion Brain — Sign in</title>
+  <link rel="stylesheet" href="/shared/login.css" />
+</head>
+<body>
+  <div class="login-shell">
+    <section class="login-hero" aria-label="Brand">
+      <p class="hero-kicker">Product knowledge</p>
+      <h1 class="brand">Fashion Brain</h1>
+      <p class="tag">Ask PLM data and the industry graph — answers that stay grounded.</p>
+    </section>
+
+    <div class="login-panel">
+      <div class="login-card">
+        <h1 id="headline">Sign in</h1>
+        <p class="lede" id="lede">Users open chat. Admins open the knowledge-graph console.</p>
+        <div class="tabs" role="tablist">
+          <button type="button" class="active" id="tab-login" data-mode="login">Sign in</button>
+          <button type="button" id="tab-register" data-mode="register">Create account</button>
+        </div>
+        <form id="form">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="username" required />
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" />
+          </div>
+          <div id="register-fields" hidden>
+            <div class="row-2">
+              <div class="field">
+                <label for="role">Role</label>
+                <select id="role">
+                  <option value="user">User</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="clearance">Clearance</label>
+                <select id="clearance">
+                  <option value="public">public</option>
+                  <option value="internal" selected>internal</option>
+                  <option value="confidential">confidential</option>
+                </select>
+              </div>
+            </div>
+            <div class="field" id="bootstrap-field" hidden>
+              <label for="bootstrap">Admin bootstrap secret</label>
+              <input id="bootstrap" type="password" autocomplete="off" />
+            </div>
+          </div>
+          <button class="btn" id="submit" type="submit">Continue</button>
+          <p class="msg" id="msg" aria-live="polite"></p>
+          <p class="hint">After login you are routed by role: user → chat, admin → KG console.</p>
+        </form>
+      </div>
+    </div>
+  </div>
+  <script src="/shared/config.js"></script>
+  <script src="/shared/api.js"></script>
+  <script>
+    const user = FB.getUser();
+    if (user && FB.getAccess()) {
+      location.replace(FB.homeFor(user));
+    }
+
+    const form = document.getElementById("form");
+    const msg = document.getElementById("msg");
+    const submit = document.getElementById("submit");
+    const registerFields = document.getElementById("register-fields");
+    const bootstrapField = document.getElementById("bootstrap-field");
+    const role = document.getElementById("role");
+    const headline = document.getElementById("headline");
+    const lede = document.getElementById("lede");
+    let mode = "login";
+
+    function setMode(next) {
+      mode = next;
+      document.getElementById("tab-login").classList.toggle("active", next === "login");
+      document.getElementById("tab-register").classList.toggle("active", next === "register");
+      registerFields.hidden = next !== "register";
+      headline.textContent = next === "login" ? "Sign in" : "Create account";
+      lede.textContent = next === "login"
+        ? "Users open chat. Admins open the knowledge-graph console."
+        : "Pick a role. Admin accounts can build and review the knowledge graph.";
+      submit.textContent = next === "login" ? "Continue" : "Create account";
+      msg.textContent = "";
+      msg.className = "msg";
+    }
+
+    document.getElementById("tab-login").addEventListener("click", () => setMode("login"));
+    document.getElementById("tab-register").addEventListener("click", () => setMode("register"));
+    role.addEventListener("change", () => {
+      bootstrapField.hidden = role.value !== "admin";
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      msg.textContent = "";
+      msg.className = "msg";
+      submit.disabled = true;
+      try {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        if (mode === "register") {
+          await FB.register({
+            email,
+            password,
+            role: role.value,
+            clearance: document.getElementById("clearance").value,
+            bootstrap_secret: document.getElementById("bootstrap").value || null,
+          });
+          msg.className = "msg ok";
+          msg.textContent = "Account created. Signing in…";
+        }
+        const session = await FB.login(email, password);
+        location.href = FB.homeFor(session.user);
+      } catch (error) {
+        msg.textContent = error.message || "Could not sign in.";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+$kind: http-request
+name: Extract HTML
+method: POST
+url: '{{base_url}}/kg/tools/extract_html'
+order: 5000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "filename": "news.html",
+      "text": "<!DOCTYPE html><html><head><title>Spring newsletter</title></head><body><p>Unsubscribe from this newsletter.</p><p>Published by Northwind Mills.</p><a href=\"https://example.com/linen\">Linen story</a></body></html>"
+    }

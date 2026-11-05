@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fashion Brain — Admin KG</title>
+  <link rel="stylesheet" href="/shared/admin.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav>
+      <div class="brand">
+        <div class="mark">FB</div>
+        <div>
+          <h1>FB Admin</h1>
+          <p>Knowledge graph console</p>
+        </div>
+      </div>
+
+      <div class="nav-label">Do everything here</div>
+      <button class="nav-btn active" type="button" data-view="overview">
+        <span class="ico">◉</span> Overview
+      </button>
+      <button class="nav-btn" type="button" data-view="ingest">
+        <span class="ico">1</span> Ingest PLM data
+      </button>
+      <button class="nav-btn" type="button" data-view="pipeline">
+        <span class="ico">2</span> Scraping wizard
+      </button>
+      <button class="nav-btn" type="button" data-view="reviews">
+        <span class="ico">3</span> Reviews
+      </button>
+      <button class="nav-btn" type="button" data-view="query">
+        <span class="ico">4</span> Graph query
+      </button>
+
+      <div class="nav-label">Apps</div>
+      <a class="nav-btn" href="/user/">
+        <span class="ico">→</span> Open user chat
+      </a>
+
+      <div class="user-box">
+        <div class="avatar-row">
+          <span class="avatar" id="admin-avatar">A</span>
+          <div>
+            <strong id="admin-email">—</strong>
+            <span id="admin-role">admin</span>
+          </div>
+        </div>
+        <button type="button" id="logout">Sign out</button>
+      </div>
+    </nav>
+
+    <main class="content">
+      <section id="view-overview">
+        <div class="top">
+          <div>
+            <h2>Overview</h2>
+            <p>Run the full KG workflow from this panel — no CLI required for normal ops.</p>
+          </div>
+          <div class="pills">
+            <span class="pill" id="pill-fb">FB …</span>
+            <span class="pill" id="pill-kg">KG …</span>
+          </div>
+        </div>
+        <div class="card workflow-card">
+          <div class="panel-head">
+            <h3>Admin workflow</h3>
+            <button class="btn secondary" type="button" id="btn-reload-graphs">Reload Neo4j from snapshots</button>
+          </div>
+          <ol class="workflow-steps">
+            <li><button type="button" class="linkish" data-view="ingest"><strong>1 · Ingest PLM data</strong></button> — build <code>own_products</code> from CSV into Neo4j</li>
+            <li><button type="button" class="linkish" data-view="pipeline"><strong>2 · Scraping wizard</strong></button> — extract → chunk → propose → queue → commit</li>
+            <li><button type="button" class="linkish" data-view="reviews"><strong>3 · Reviews</strong></button> — approve relationships / ontology pairs</li>
+            <li><button type="button" class="linkish" data-view="query"><strong>4 · Graph query</strong></button> — inspect templates on a graph</li>
+          </ol>
+          <p class="hint-line">Rebuild / Sync on each graph below also run as jobs (poll status in this message).</p>
+          <p class="msg" id="reload-msg"></p>
+        </div>
+        <div class="grid stats">
+          <div class="stat">
+            <div class="kicker">Sources</div>
+            <div class="value" id="stat-sources">—</div>
+            <div class="hint">Registered KG sources</div>
+          </div>
+          <div class="stat">
+            <div class="kicker">Graphs</div>
+            <div class="value" id="stat-graphs">—</div>
+            <div class="hint">Named graphs available</div>
+          </div>
+          <div class="stat">
+            <div class="kicker">Backend</div>
+            <div class="value" id="stat-backend" style="font-size:18px;">—</div>
+            <div class="hint">Graph store</div>
+          </div>
+        </div>
+        <div class="grid two">
+          <div class="card">
+            <div class="panel-head"><h3>Sources</h3></div>
+            <div id="sources-box" class="list-clean">Loading…</div>
+          </div>
+          <div class="card">
+            <div class="panel-head"><h3>Graphs</h3></div>
+            <div id="graphs-box" class="list-clean">Loading…</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-ingest" class="hidden">
+        <div class="top">
+          <div>
+            <h2>1 · Ingest PLM data</h2>
+            <p>Step 1 of the admin workflow. Rebuilds <strong>own_products</strong> from <code>data/raw/own_products/</code> into Neo4j (development env).</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="actions">
+            <button class="btn" type="button" id="btn-ingest-status">Refresh status</button>
+            <button class="btn secondary" type="button" id="btn-ingest-run">Run own_products ingest</button>
+          </div>
+          <p class="hint-line">Long work runs as background jobs (ingest / rebuild / reload). The UI returns immediately and polls job status. When ingest is done, use Overview → Reload if chat still looks empty.</p>
+          <p class="hint-line">Jobs API: <code>GET /v1/admin/jobs</code> · <code>GET /v1/admin/jobs/{id}</code></p>
+          <p class="msg" id="ingest-msg"></p>
+          <pre id="ingest-out">—</pre>
+        </div>
+      </section>
+
+      <section id="view-pipeline" class="hidden">
+        <div class="top">
+          <div>
+            <h2>Scraping wizard</h2>
+            <p>Extract → chunk → propose → queue → approve → commit. Each step shows input and output before you continue.</p>
+          </div>
+        </div>
+        <div class="step-bar" id="scraping-step-bar">
+          <button type="button" class="step-tab active" data-step="1">1 · Extract</button>
+          <button type="button" class="step-tab" data-step="2">2 · Chunk</button>
+          <button type="button" class="step-tab" data-step="3">3 · Propose</button>
+          <button type="button" class="step-tab" data-step="4">4 · Queue</button>
+          <button type="button" class="step-tab" data-step="5">5 · Approve &amp; commit</button>
+        </div>
+
+        <div class="card step-panel active" data-step-panel="1">
+          <h3>Step 1 — Extract text</h3>
+          <div class="step-io">
+            <div>
+              <label for="scrape-kind">Kind</label>
+              <select id="scrape-kind">
+                <option value="text">text</option>
+                <option value="pdf">pdf</option>
+                <option value="docx">docx</option>
+                <option value="doc">doc</option>
+                <option value="json">json</option>
+              </select>
+              <label for="scrape-file">Upload file (optional)</label>
+              <input id="scrape-file" type="file" accept=".pdf,.doc,.docx,.txt,.md,.json" />
+              <label for="scrape-text">Or paste text / JSON</label>
+              <textarea id="scrape-text" placeholder="Paste scraped article text…"></textarea>
+              <div class="actions">
+                <button class="btn" type="button" id="btn-scrape-extract">Run extract</button>
+                <button class="btn secondary hidden" type="button" id="btn-scrape-next-1" data-goto="2">Next → Chunk</button>
+              </div>
+              <p class="msg" id="scrape-msg-1"></p>
+            </div>
+            <div>
+              <h3>Output</h3>
+              <pre id="scrape-out-1">—</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="card step-panel" data-step-panel="2">
+          <h3>Step 2 — Paragraph chunks</h3>
+          <div class="step-io">
+            <div>
+              <p class="msg ok" id="scrape-file-id-label">file_id: —</p>
+              <div class="actions">
+                <button class="btn secondary" type="button" data-goto="1">Back</button>
+                <button class="btn" type="button" id="btn-scrape-chunk">Run chunk</button>
+                <button class="btn secondary hidden" type="button" id="btn-scrape-next-2" data-goto="3">Next → Propose</button>
+              </div>
+              <p class="msg" id="scrape-msg-2"></p>
+            </div>
+            <div>
+              <h3>Chunks</h3>
+              <div class="chunk-list" id="scrape-chunks">No chunks yet.</div>
+              <pre id="scrape-out-2" style="margin-top:12px;">—</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="card step-panel" data-step-panel="3">
+          <h3>Step 3 — Propose relationships</h3>
+          <div class="step-io">
+            <div>
+              <label for="scrape-ontology">Ontology (hints)</label>
+              <select id="scrape-ontology">
+                <option value="news">news</option>
+              </select>
+              <label for="scrape-graph">Graph</label>
+              <select id="scrape-graph"></select>
+              <label class="check-row">
+                <input type="checkbox" id="scrape-model" checked />
+                <span>Use local Ollama LLM (required for real relationships)</span>
+              </label>
+              <p class="hint-text">
+                Keep this checked. Ollama prefers the ontology list below and invents
+                <span class="em">new</span> types when needed. Unchecked = MENTIONS fallback only.
+              </p>
+              <h3>Selected ontology relationships</h3>
+              <div class="chunk-list" id="scrape-ontology-rels" style="max-height:220px;">Loading…</div>
+              <div class="actions" style="margin-top:12px;">
+                <button class="btn secondary" type="button" data-goto="2">Back</button>
+                <button class="btn" type="button" id="btn-scrape-propose">Run propose</button>
+                <button class="btn secondary hidden" type="button" id="btn-scrape-next-3" data-goto="4">Next → Queue</button>
+              </div>
+              <p class="msg" id="scrape-msg-3"></p>
+            </div>
+            <div>
+              <h3>Proposed relationships</h3>
+              <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:12px;">
+                <table class="table rel-table">
+                  <thead>
+                    <tr><th>Method</th><th>Novelty</th><th>Type</th><th>From</th><th>To</th><th>Chunk</th></tr>
+                  </thead>
+                  <tbody id="scrape-rels-body">
+                    <tr><td colspan="6">No proposals yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <pre id="scrape-out-3" style="margin-top:12px;">—</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="card step-panel" data-step-panel="4">
+          <h3>Step 4 — Queue review</h3>
+          <div class="step-io">
+            <div>
+              <p class="hint-text">Saves proposed relationships for admin approve / reject.</p>
+              <div class="actions">
+                <button class="btn secondary" type="button" data-goto="3">Back</button>
+                <button class="btn" type="button" id="btn-scrape-queue">Queue review</button>
+                <button class="btn secondary hidden" type="button" id="btn-scrape-next-4" data-goto="5">Next → Approve &amp; commit</button>
+              </div>
+              <p class="msg" id="scrape-msg-4"></p>
+            </div>
+            <div>
+              <h3>Output</h3>
+              <pre id="scrape-out-4">—</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="card step-panel" data-step-panel="5">
+          <h3>Step 5 — Approve &amp; commit</h3>
+          <div class="step-io">
+            <div>
+              <p class="msg ok" id="scrape-review-label">review_id: —</p>
+              <div class="actions" style="margin-bottom:12px;">
+                <button class="btn" type="button" id="btn-scrape-approve">Approve all pending</button>
+                <button class="btn secondary" type="button" data-goto="4">Back</button>
+              </div>
+              <label for="scrape-commit-mode">Ontology mode</label>
+              <select id="scrape-commit-mode">
+                <option value="existing">Use existing ontology / graph</option>
+                <option value="new">Create new ontology + graph</option>
+              </select>
+              <div id="scrape-commit-existing">
+                <label for="scrape-commit-ontology">Ontology id</label>
+                <select id="scrape-commit-ontology"></select>
+                <label for="scrape-commit-graph">Graph id</label>
+                <select id="scrape-commit-graph"></select>
+              </div>
+              <div id="scrape-commit-new" class="hidden">
+                <label for="scrape-new-ontology-id">New ontology id</label>
+                <input id="scrape-new-ontology-id" placeholder="buyer-scraping" />
+                <label for="scrape-new-ontology-name">Ontology name</label>
+                <input id="scrape-new-ontology-name" placeholder="Buyer scraping" />
+                <label for="scrape-new-graph-id">New graph id</label>
+                <input id="scrape-new-graph-id" placeholder="buyer-hm" />
+                <label for="scrape-new-graph-name">Graph name</label>
+                <input id="scrape-new-graph-name" placeholder="Buyer H&amp;M" />
+                <label for="scrape-clone-from">Clone ontology from</label>
+                <input id="scrape-clone-from" value="news" />
+              </div>
+              <div class="actions">
+                <button class="btn" type="button" id="btn-scrape-commit">Commit to KG</button>
+              </div>
+              <p class="msg" id="scrape-msg-5"></p>
+            </div>
+            <div>
+              <h3>Review detail</h3>
+              <pre id="scrape-out-5">—</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-reviews" class="hidden">
+        <div class="top">
+          <div>
+            <h2>Reviews</h2>
+            <p>All queued reviews (including scraping). Prefer the Scraping wizard for the full flow.</p>
+          </div>
+          <button class="btn secondary" type="button" id="btn-refresh-reviews">Refresh</button>
+        </div>
+        <div class="card">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Rels</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="reviews-body">
+              <tr><td colspan="5">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>Selected review</h3>
+          <pre id="review-detail">Select a review.</pre>
+          <div class="actions" style="margin-top:12px;">
+            <button class="btn" type="button" id="btn-approve">Approve</button>
+            <button class="btn secondary" type="button" id="btn-commit">Commit / build</button>
+          </div>
+          <p class="msg" id="review-msg"></p>
+        </div>
+      </section>
+
+      <section id="view-query" class="hidden">
+        <div class="top">
+          <div>
+            <h2>Graph query</h2>
+            <p>Run an approved template against a named graph. No free-form Cypher.</p>
+          </div>
+        </div>
+        <div class="card">
+          <label for="q-graph">Graph</label>
+          <select id="q-graph">
+            <option value="own_products">own_products</option>
+            <option value="news">news</option>
+            <option value="shared">shared</option>
+            <option value="master">master</option>
+          </select>
+          <label for="q-template">Template</label>
+          <input id="q-template" value="list_products" />
+          <label for="q-params">Params JSON</label>
+          <textarea id="q-params">{}</textarea>
+          <div class="actions">
+            <button class="btn" type="button" id="btn-query">Run query</button>
+          </div>
+          <p class="msg" id="query-msg"></p>
+          <pre id="query-out">—</pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/shared/config.js"></script>
+  <script src="/shared/api.js"></script>
+  <script src="/admin/app.js"></script>
+</body>
+</html>

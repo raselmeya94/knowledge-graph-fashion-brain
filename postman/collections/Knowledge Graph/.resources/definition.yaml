@@ -1,0 +1,34 @@
+$kind: collection
+name: Knowledge Graph
+description: |-
+  Knowledge-graph construction only: extract a source, review relationships, and commit them.
+  Product search, graph templates, ingestion, and chat are not in this collection.
+variables:
+  - key: base_url
+    value: 'http://127.0.0.1:8001'
+    description: Knowledge-graph API. Start it with python -m knowledge_graph.cli serve.
+  - key: clearance
+    value: internal
+    description: Sent as X-Clearance.
+  - key: api_token
+    value: ''
+    description: Leave empty when FASHIONGPT_API_TOKEN is unset. Do not commit a real token.
+  - key: review_id
+    value: ''
+    description: Filled by a pipeline request from review.id.
+  - key: relationship_id
+    value: ''
+    description: Filled by a pipeline request from the first proposed relationship.
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{api_token}}'
+scripts:
+  - type: http:beforeRequest
+    language: text/javascript
+    code: |-
+      pm.request.headers.upsert({
+        key: 'X-Clearance',
+        value: pm.collectionVariables.get('clearance')
+      });
