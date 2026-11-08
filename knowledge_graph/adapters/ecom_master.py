@@ -64,7 +64,9 @@ def normalize_master_row(row: dict[str, Any]) -> dict[str, Any]:
         "out_stock_count": row.get("out_stock_count"),
         "currency": _text(row.get("currency")),
         "price": _text(row.get("price")),
+        "price_num": parse_price_num(row.get("price")),
         "original_price": _text(row.get("original_price")),
+        "original_price_num": parse_price_num(row.get("original_price")),
         "price_min": _text(row.get("price_min")),
         "price_max": _text(row.get("price_max")),
         "image": _text(row.get("image")),
@@ -141,9 +143,26 @@ def graph_sketch(product: dict[str, Any]) -> dict[str, Any]:
     """Compact view: product node props + relationship list (for docs/tests)."""
 
     mapping = load_mapping()
-    props = {key: product.get(key) for key in mapping["neo4j_product_properties"] if product.get(key) not in (None, "", [])}
+    props = {
+        key: product.get(key)
+        for key in mapping["neo4j_product_properties"]
+        if product.get(key) not in (None, "", [])
+    }
     props["name"] = product.get("product_name") or props.get("name")
     props["source"] = "ecom"
+    # Ensure numeric price props even when mapping filter skipped 0.0
+    if product.get("price_num") is not None:
+        props["price_num"] = product.get("price_num")
+    elif product.get("price"):
+        parsed = parse_price_num(product.get("price"))
+        if parsed is not None:
+            props["price_num"] = parsed
+    if product.get("original_price_num") is not None:
+        props["original_price_num"] = product.get("original_price_num")
+    elif product.get("original_price"):
+        parsed = parse_price_num(product.get("original_price"))
+        if parsed is not None:
+            props["original_price_num"] = parsed
     return {
         "product_id": product["product_id"],
         "labels": ["Product", "Entity"],
@@ -230,4 +249,23 @@ def _number(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def parse_price_num(value: Any) -> float | None:
+    """Parse display prices like €219.00 / $14.00 / £7.00 into a float."""
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value)
+    for ch in ("€", "$", "£", ",", " "):
+        text = text.replace(ch, "")
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
         return None

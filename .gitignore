@@ -10,6 +10,8 @@ generated/
 # Runtime only — keep folder via .gitkeep; ignore contents
 data/generated/**
 !data/generated/.gitkeep
+# Local DB dumps exceed GitHub's 100MB limit
+data/*.sql
 knowledge_graph/generated/
 *.log
 .neo4j/

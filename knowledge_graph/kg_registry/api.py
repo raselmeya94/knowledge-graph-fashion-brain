@@ -36,8 +36,14 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _create():
             record, ontology = platform.kg_registry.create_ontology(body)
-            platform.refresh_union_ontology()
-            return {"ontology": record.model_dump(), "definition": ontology.model_dump()}
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+            hooks = on_schema_changed(platform, ontology_id=record.id)
+            return {
+                "ontology": record.model_dump(),
+                "definition": ontology.model_dump(),
+                "schema_hooks": hooks,
+            }
 
         return await _run(platform, _create)
 
@@ -62,9 +68,15 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _replace():
             definition = platform.kg_registry.replace_ontology(ontology_id, body)
-            platform.refresh_union_ontology()
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+            hooks = on_schema_changed(platform, ontology_id=ontology_id)
             record = platform.kg_registry.get_ontology(ontology_id)
-            return {"ontology": record.model_dump(), "definition": definition.model_dump()}
+            return {
+                "ontology": record.model_dump(),
+                "definition": definition.model_dump(),
+                "schema_hooks": hooks,
+            }
 
         return await _run(platform, _replace)
 
@@ -77,8 +89,14 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _add():
             definition = platform.kg_registry.add_pair(ontology_id, body.type, body.start_type, body.end_type)
-            platform.refresh_union_ontology()
-            return {"ontology_id": ontology_id, "definition": definition.model_dump()}
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+            hooks = on_schema_changed(platform, ontology_id=ontology_id)
+            return {
+                "ontology_id": ontology_id,
+                "definition": definition.model_dump(),
+                "schema_hooks": hooks,
+            }
 
         return await _run(platform, _add)
 
@@ -91,14 +109,21 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _remove():
             definition = platform.kg_registry.remove_pair(ontology_id, body.type, body.start_type, body.end_type)
-            platform.refresh_union_ontology()
-            return {"ontology_id": ontology_id, "definition": definition.model_dump()}
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+            hooks = on_schema_changed(platform, ontology_id=ontology_id)
+            return {
+                "ontology_id": ontology_id,
+                "definition": definition.model_dump(),
+                "schema_hooks": hooks,
+            }
 
         return await _run(platform, _remove)
 
     @app.get("/graphs")
     def list_graphs(platform=Depends(current_platform), _principal=Depends(current_principal)):
         from knowledge_graph.kg_registry.store import enrich_graph_record
+        from knowledge_graph.retrieval.graph_counts import graph_node_edge_counts
 
         rows = []
         for item in platform.kg_registry.list_graphs():
@@ -107,13 +132,12 @@ def register_registry_routes(app, current_platform, current_principal, current_j
             except Exception:
                 ontology = None
             enriched = enrich_graph_record(item, ontology)
-            nodes = platform.graph.find_nodes(graph=item.id, include_deleted=False)
-            edges = platform.graph.find_edges(graph=item.id, include_deleted=False)
+            nodes, edges = graph_node_edge_counts(platform, item.id)
             rows.append(
                 {
                     **enriched.model_dump(),
-                    "node_count": len(nodes),
-                    "edge_count": len(edges),
+                    "node_count": nodes,
+                    "edge_count": edges,
                 }
             )
         # shared/master = interconnect overlay (not individual chat corpora).
@@ -124,6 +148,7 @@ def register_registry_routes(app, current_platform, current_principal, current_j
         ):
             if name in known:
                 continue
+            nodes, edges = graph_node_edge_counts(platform, name)
             rows.append(
                 {
                     "id": name,
@@ -134,8 +159,8 @@ def register_registry_routes(app, current_platform, current_principal, current_j
                     "builtin": True,
                     "status": "active",
                     "source_ids": [],
-                    "node_count": len(platform.graph.find_nodes(graph=name, include_deleted=False)),
-                    "edge_count": len(platform.graph.find_edges(graph=name, include_deleted=False)),
+                    "node_count": nodes,
+                    "edge_count": edges,
                 }
             )
         return {"graphs": rows}
@@ -169,16 +194,19 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _create():
             record = platform.kg_registry.create_graph(body)
-            platform.refresh_union_ontology()
-            return {"graph": record.model_dump()}
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+            hooks = on_schema_changed(platform, graph_id=record.id, ontology_id=record.ontology_id)
+            return {"graph": record.model_dump(), "schema_hooks": hooks}
 
         return await _run(platform, _create)
 
     @app.get("/graphs/{graph_id}")
     def get_graph(graph_id: str, platform=Depends(current_platform), _principal=Depends(current_principal)):
+        from knowledge_graph.retrieval.graph_counts import graph_node_edge_counts
+
+        nodes, edges = graph_node_edge_counts(platform, graph_id)
         if graph_id in {"shared", "master"}:
-            nodes = platform.graph.find_nodes(graph=graph_id, include_deleted=False)
-            edges = platform.graph.find_edges(graph=graph_id, include_deleted=False)
             return {
                 "graph": {
                     "id": graph_id,
@@ -187,16 +215,14 @@ def register_registry_routes(app, current_platform, current_principal, current_j
                     "builtin": True,
                     "status": "active",
                 },
-                "node_count": len(nodes),
-                "edge_count": len(edges),
+                "node_count": nodes,
+                "edge_count": edges,
             }
         record = platform.kg_registry.get_graph(graph_id)
-        nodes = platform.graph.find_nodes(graph=graph_id, include_deleted=False)
-        edges = platform.graph.find_edges(graph=graph_id, include_deleted=False)
         return {
             "graph": record.model_dump(),
-            "node_count": len(nodes),
-            "edge_count": len(edges),
+            "node_count": nodes,
+            "edge_count": edges,
             "ontology": platform.ontology_for(graph_id).model_dump(),
         }
 
@@ -209,26 +235,31 @@ def register_registry_routes(app, current_platform, current_principal, current_j
     ):
         def _sync() -> dict[str, Any]:
             from knowledge_graph.sources.sync import sync_source
+            from knowledge_graph.retrieval.schema_hooks import on_schema_changed
 
             record = platform.kg_registry.get_graph(graph_id)
             if record.kind == "product" or record.source_ids:
                 sources = record.source_ids or [graph_id]
                 # Unified dispatch (ecom SQL sync or file rebuild).
                 payloads = [sync_source(platform, source_id) for source_id in sources]
+                hooks = on_schema_changed(platform, graph_id=graph_id, ontology_id=record.ontology_id)
                 return {
                     "message": f"sync finished for {graph_id}",
                     "graph_id": graph_id,
                     "action": "sync",
                     "results": payloads,
+                    "schema_hooks": hooks,
                     "edge_count": len(platform.graph.find_edges(graph=graph_id, include_deleted=False)),
                 }
             save_source_snapshots(platform.graph, platform.settings.generated, [graph_id])
             save_master_snapshot(platform.graph, platform.settings.generated)
+            hooks = on_schema_changed(platform, graph_id=graph_id)
             return {
                 "message": f"sync finished for {graph_id}",
                 "graph_id": graph_id,
                 "action": "sync",
                 "reports": [],
+                "schema_hooks": hooks,
                 "edge_count": len(platform.graph.find_edges(graph=graph_id, include_deleted=False)),
             }
 

@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     extraction_mode: str = "deterministic"
     answer_mode: str = "llm"
+    # LLM schema→Cypher path for product asks; templated ecom Cypher remains fallback.
+    text2cypher_enabled: bool = True
+    # Resolve user terms to real Neo4j facet ids before Text-to-Cypher.
+    entity_linker_enabled: bool = True
+    entity_linker_embeddings: bool = True
+    entity_linker_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    entity_linker_top_k: int = 5
+    entity_linker_min_score: float = 0.35
+    entity_linker_score_delta: float = 0.08
     model_provider: str = "openrouter"
     model_base_url: str = "https://openrouter.ai/api/v1"
     model_api_key: str = ""

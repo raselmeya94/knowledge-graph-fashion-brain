@@ -162,6 +162,7 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                 (start_id, rel["start_type"], rel["start_name"]),
                 (end_id, end_type, rel["end_name"]),
             ):
+                nn = normalize_name(node_name)
                 graph.upsert_node(
                     GraphNode(
                         id=node_id,
@@ -169,8 +170,9 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                         graph=GRAPH_ID,
                         properties={
                             "id": node_id,
-                            "name": node_name,
-                            "normalized_name": normalize_name(node_name),
+                            # Facet display name = normalized (lowercase); matching uses normalized_name.
+                            "name": nn or str(node_name or "").strip(),
+                            "normalized_name": nn,
                             "entity_type": node_type,
                             "lifecycle": "active",
                             "prov_source_id": GRAPH_ID,
@@ -196,6 +198,7 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
             edges += 1
             continue
 
+        nn = normalize_name(rel["end_name"])
         graph.upsert_node(
             GraphNode(
                 id=end_id,
@@ -203,8 +206,8 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                 graph=GRAPH_ID,
                 properties={
                     "id": end_id,
-                    "name": rel["end_name"],
-                    "normalized_name": normalize_name(rel["end_name"]),
+                    "name": nn or str(rel.get("end_name") or "").strip(),
+                    "normalized_name": nn,
                     "entity_type": end_type,
                     "lifecycle": "active",
                     "prov_source_id": GRAPH_ID,
@@ -234,12 +237,115 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
     return {"nodes": nodes, "edges": edges}
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _write_sync_state(
+    settings: Settings,
+    *,
+    status: str,
+    products: int,
+    brands: dict[str, int],
+    errors: int,
+    last_updated_at: str | None,
+    since: str | None = None,
+    full: bool = False,
+    extras: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist ecom sync progress so generated/ stays current during long runs."""
+
+    state = {
+        "status": status,
+        "last_run_at": _utc_now(),
+        "last_updated_at": last_updated_at,
+        "last_products": products,
+        "brands": brands,
+        "errors": errors,
+        "full": full,
+        "since": since,
+        "graph": GRAPH_ID,
+        "source_table": "master_products",
+    }
+    if extras:
+        state.update(extras)
+    save_sync_state(settings, state)
+    return state
+
+
+def refresh_ecom_stats_only(platform) -> dict[str, Any]:
+    """Lightweight mid-sync refresh: column value counts for fast basic asks."""
+
+    from knowledge_graph.retrieval.kg_stats import refresh_ecom_stats
+
+    stats = refresh_ecom_stats(platform)
+    totals = stats.get("totals") or {}
+    return {
+        "graph": GRAPH_ID,
+        "stats_products": totals.get("products"),
+        "stats_brands": totals.get("brands"),
+        "stats_path": str(platform.settings.generated / "kg_stats" / f"{GRAPH_ID}.json"),
+    }
+
+
+def refresh_generated_after_ecom_sync(platform, *, heavy: bool = True) -> dict[str, Any]:
+    """Refresh stats (+ optional snapshots/system meta) so generated/ matches the live graph.
+
+    ``heavy=False`` only rewrites kg_stats (safe during long syncs). Full snapshots /
+    system meta dump Neo4j and should run at sync end only.
+    """
+
+    settings: Settings = platform.settings
+    refreshed: dict[str, Any] = {"graph": GRAPH_ID}
+    try:
+        refreshed["stats"] = refresh_ecom_stats_only(platform)
+    except Exception as exc:
+        LOGGER.warning("ecom sync: kg stats refresh failed: %s", exc)
+        refreshed["stats_error"] = str(exc)
+    if not heavy:
+        return refreshed
+
+    from knowledge_graph.graph.snapshots import save_master_snapshot, save_source_snapshots
+    from knowledge_graph.retrieval.system_meta import build_system_meta
+
+    try:
+        paths = save_source_snapshots(platform.graph, settings.generated, [GRAPH_ID])
+        refreshed["source_snapshot"] = [str(path) for path in paths]
+    except Exception as exc:
+        LOGGER.warning("ecom sync: source snapshot refresh failed: %s", exc)
+        refreshed["source_snapshot_error"] = str(exc)
+    try:
+        master = save_master_snapshot(platform.graph, settings.generated)
+        refreshed["master_snapshot"] = str(master) if master else None
+    except Exception as exc:
+        LOGGER.warning("ecom sync: master snapshot refresh failed: %s", exc)
+        refreshed["master_snapshot_error"] = str(exc)
+    try:
+        meta = build_system_meta(platform, persist=True)
+        refreshed["system_meta"] = {
+            "graphs": len(meta.get("graphs") or []),
+            "path": str(settings.generated / "kg_system_meta.json"),
+        }
+    except Exception as exc:
+        LOGGER.warning("ecom sync: system meta refresh failed: %s", exc)
+        refreshed["system_meta_error"] = str(exc)
+    try:
+        from knowledge_graph.retrieval.schema_hooks import on_schema_changed
+
+        refreshed["schema_hooks"] = on_schema_changed(platform, graph_id=GRAPH_ID)
+    except Exception as exc:
+        LOGGER.warning("ecom sync: schema hooks failed: %s", exc)
+        refreshed["schema_hooks_error"] = str(exc)
+    return refreshed
+
+
 def sync_ecom_to_neo4j(
     platform,
     *,
     brand: str | None = None,
     full: bool = False,
     limit: int | None = None,
+    refresh_generated: bool = True,
 ) -> dict[str, Any]:
     """Read master_products and upsert into the live graph backend."""
 
@@ -273,7 +379,19 @@ def sync_ecom_to_neo4j(
     errors: list[str] = []
     latest_updated = since
     brands: dict[str, int] = {}
+    progress_every = max(100, int(settings.ecom_sync_batch_size or 500))
 
+    _write_sync_state(
+        settings,
+        status="running",
+        products=0,
+        brands={},
+        errors=0,
+        last_updated_at=latest_updated,
+        since=since,
+        full=full,
+        extras={"brand_filter": brand, "limit": cap},
+    )
     LOGGER.info("ecom sync start brand=%s since=%s limit=%s", brand, since, cap)
     for row in iter_master_products(dsn, brand=brand, since=since, limit=cap):
         try:
@@ -289,6 +407,29 @@ def sync_ecom_to_neo4j(
                 text = updated.isoformat() if hasattr(updated, "isoformat") else str(updated)
                 if latest_updated is None or text > str(latest_updated):
                     latest_updated = text
+            if products % progress_every == 0:
+                extras: dict[str, Any] = {
+                    "node_writes": node_writes,
+                    "edge_writes": edge_writes,
+                }
+                # Mid-sync: refresh lightweight column stats only (not Neo4j snapshots).
+                if products % (progress_every * 2) == 0:
+                    try:
+                        extras["generated"] = refresh_generated_after_ecom_sync(platform, heavy=False)
+                    except Exception as exc:
+                        extras["generated_error"] = str(exc)
+                _write_sync_state(
+                    settings,
+                    status="running",
+                    products=products,
+                    brands=brands,
+                    errors=len(errors),
+                    last_updated_at=latest_updated,
+                    since=since,
+                    full=full,
+                    extras=extras,
+                )
+                LOGGER.info("ecom sync progress products=%s", products)
         except Exception as exc:
             key = f"{row.get('brand')}:{row.get('master_id')}"
             errors.append(f"{key}: {exc}")
@@ -297,15 +438,18 @@ def sync_ecom_to_neo4j(
                 errors.append("… further errors truncated")
                 break
 
-    finished = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    new_state = {
-        "last_run_at": finished,
-        "last_updated_at": latest_updated,
-        "last_products": products,
-        "brands": brands,
-        "errors": len(errors),
-    }
-    save_sync_state(settings, new_state)
+    finished = _utc_now()
+    new_state = _write_sync_state(
+        settings,
+        status="failed" if errors else "ok",
+        products=products,
+        brands=brands,
+        errors=len(errors),
+        last_updated_at=latest_updated,
+        since=since,
+        full=full,
+        extras={"node_writes": node_writes, "edge_writes": edge_writes, "finished_at": finished},
+    )
     report = {
         "ok": not errors,
         "graph": GRAPH_ID,
@@ -317,7 +461,28 @@ def sync_ecom_to_neo4j(
         "last_updated_at": latest_updated,
         "errors": errors,
         "finished_at": finished,
+        "sync_state": new_state,
     }
+    if refresh_generated and not errors:
+        report["generated"] = refresh_generated_after_ecom_sync(platform)
+        # Re-stamp state after generated refresh so mtime/content stay latest.
+        new_state = _write_sync_state(
+            settings,
+            status="ok",
+            products=products,
+            brands=brands,
+            errors=0,
+            last_updated_at=latest_updated,
+            since=since,
+            full=full,
+            extras={
+                "node_writes": node_writes,
+                "edge_writes": edge_writes,
+                "finished_at": finished,
+                "generated": report.get("generated"),
+            },
+        )
+        report["sync_state"] = new_state
     LOGGER.info("ecom sync done products=%s edges=%s errors=%s", products, edge_writes, len(errors))
     return report
 

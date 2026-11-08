@@ -6,6 +6,14 @@ from fashion_brain.ask import resolve_catalog_plan, sanitize_party_filters
 from fashion_brain.planning.kg_catalog import FieldCatalog, GraphFields, ValueHit, ground_filters_with_catalog
 
 
+def test_ecommerce_sources_count_prefers_ecom_not_garment():
+    question = "how many products are stored inside e-commerces sources"
+    plan = resolve_catalog_plan(question)
+    assert plan["preferred_graphs"] == ["ecom_products"]
+    assert "garment" not in plan["filters"]
+    assert plan["filters"] == {} or set(plan["filters"]) <= {"brand", "buyer"}
+
+
 def test_at_zara_brand_is_brand_not_garment():
     for question in (
         "how many products at zara brand",

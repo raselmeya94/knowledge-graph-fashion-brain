@@ -433,7 +433,7 @@ header h2 {
 .msg-row.assistant { align-items: flex-start; }
 
 .bubble {
-  max-width: min(100%, 620px);
+  max-width: min(100%, 720px);
   padding: 14px 16px;
   line-height: 1.6;
   word-break: break-word;
@@ -525,18 +525,36 @@ header h2 {
   background: transparent;
   padding: 0;
 }
+.bubble .body.md .table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 0 0 0.9em;
+}
 .bubble .body.md table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0 0 0.9em;
+  margin: 0;
   font-size: 13px;
+  table-layout: auto;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .bubble .body.md th,
 .bubble .body.md td {
   border-bottom: 1px solid var(--line);
   padding: 8px 10px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  white-space: nowrap;
+}
+.bubble .body.md th:first-child,
+.bubble .body.md td:first-child {
+  white-space: normal;
+  overflow-wrap: break-word;
+  min-width: 7rem;
+  max-width: 16rem;
 }
 .bubble .body.md th {
   font-size: 11px;
@@ -584,10 +602,11 @@ header h2 {
 }
 
 .answer-stack {
-  width: min(100%, 640px);
+  width: min(100%, 720px);
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 .answer-stack .bubble.assistant {
   width: 100%;

@@ -294,6 +294,83 @@ def create_app(platform: Platform | None = None) -> FastAPI:
 
         return await _run(platform, retrieve, platform, principal, body)
 
+    @app.post("/brain/cypher")
+    async def brain_cypher(
+        body: dict,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        """Execute one read-only Cypher plan from Fashion Brain Text2CypherAgent."""
+
+        from knowledge_graph.retrieval.cypher_safe import run_read_cypher
+
+        cypher = str((body or {}).get("cypher") or "")
+        params = (body or {}).get("params") if isinstance((body or {}).get("params"), dict) else {}
+        limit_rows = int((body or {}).get("limit_rows") or 200)
+
+        def _run_cypher():
+            try:
+                rows = run_read_cypher(platform, cypher, params, limit_rows=limit_rows)
+                return {"rows": rows, "count": len(rows)}
+            except Exception as exc:
+                return {"rows": [], "count": 0, "error": str(exc)}
+
+        _ = principal  # clearance already enforced by dependency
+        return await _run(platform, _run_cypher)
+
+    @app.post("/brain/link_entities")
+    async def brain_link_entities(
+        body: dict,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        """Resolve extracted terms to real Neo4j facet node ids."""
+
+        from knowledge_graph.linking.entity_linker import link_entities, resolved_payload
+
+        graph_id = str((body or {}).get("graph_id") or "ecom_products")
+        entities = (body or {}).get("entities") if isinstance((body or {}).get("entities"), dict) else {}
+
+        def _link():
+            results = link_entities(platform, entities, graph_id=graph_id)
+            return {
+                "results": [r.to_dict() for r in results],
+                "resolved": resolved_payload(results),
+            }
+
+        _ = principal
+        return await _run(platform, _link)
+
+    @app.get("/brain/brands")
+    async def brain_brands(
+        graph_id: str | None = None,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        from knowledge_graph.linking.entity_linker import list_live_brands
+        from knowledge_graph.retrieval.runtime_schema import default_product_graph_id
+
+        def _brands():
+            gid = graph_id or default_product_graph_id(platform)
+            return {"brands": list_live_brands(platform, gid) if gid else [], "graph_id": gid}
+
+        _ = principal
+        return await _run(platform, _brands)
+
+    @app.get("/brain/runtime_schema")
+    async def brain_runtime_schema(
+        graph_id: str | None = None,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        from knowledge_graph.retrieval.runtime_schema import build_runtime_schema
+
+        def _schema():
+            return build_runtime_schema(platform, graph_id).to_dict()
+
+        _ = principal
+        return await _run(platform, _schema)
+
     register_registry_routes(app, current_platform, current_principal, current_jobs)
     register_construction_routes(app, current_platform, current_principal)
     from knowledge_graph.api.plan_routes import register_plan_api_routes

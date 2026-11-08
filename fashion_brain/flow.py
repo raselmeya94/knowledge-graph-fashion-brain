@@ -583,29 +583,44 @@ def _iter_catalog_stream(
     reasoning = _catalog_reasoning_text(retrieved.text, retrieved.evidence, retrieved.caveats)
     trace_step("reasoning", "Streaming grounded findings", chars=len(reasoning))
     yield from _deltas("reasoning", reasoning)
-    parts: list[str] = []
-    try:
-        trace_step("response", "Response model stream started")
-        for event in _iter_model(
-            build_model_provider(platform.settings),
-            response_messages(question, retrieved),
-            timeout=platform.settings.request_timeout_seconds,
-        ):
-            # Model chain-of-thought is formatting noise; catalog reasoning already streamed above.
-            if event["type"] == "reasoning":
-                continue
-            if event["type"] == "answer":
-                parts.append(event["text"])
-            yield event
-        text = "".join(parts).strip()
-        trace_step("response", "Response model stream finished", chars=len(text))
-    except ModelUnavailableError:
-        text = ""
-        trace_step("response", "Response model unavailable → template compose")
-    if not text:
-        text = ResponseAgent().compose(platform, question, retrieved)
-        trace_step("response", "Template response composed", chars=len(text))
+    # Analysis / chart findings must reach the UI intact (chart fence + table).
+    # The response LLM often shrinks these to two sentences and drops ```chart blocks.
+    from fashion_brain.agents._impl import _findings_have_chart, _wants_full_breakdown
+
+    if _wants_full_breakdown(question, retrieved.text) and (
+        _findings_have_chart(retrieved.text) or "|" in (retrieved.text or "")
+    ):
+        text = retrieved.text.strip()
+        trace_step("response", "Analysis/chart findings returned directly", chars=len(text))
         yield from _deltas("answer", text)
+    else:
+        parts: list[str] = []
+        try:
+            trace_step("response", "Response model stream started")
+            for event in _iter_model(
+                build_model_provider(platform.settings),
+                response_messages(question, retrieved),
+                timeout=platform.settings.request_timeout_seconds,
+            ):
+                # Model chain-of-thought is formatting noise; catalog reasoning already streamed above.
+                if event["type"] == "reasoning":
+                    continue
+                if event["type"] == "answer":
+                    parts.append(event["text"])
+                yield event
+            text = "".join(parts).strip()
+            trace_step("response", "Response model stream finished", chars=len(text))
+        except ModelUnavailableError:
+            text = ""
+            trace_step("response", "Response model unavailable → template compose")
+        if not text:
+            text = ResponseAgent().compose(platform, question, retrieved)
+            trace_step("response", "Template response composed", chars=len(text))
+            yield from _deltas("answer", text)
+        elif _findings_have_chart(retrieved.text) and not _findings_have_chart(text):
+            text = retrieved.text.strip()
+            trace_step("response", "Restored chart findings after LLM drop", chars=len(text))
+            yield from _deltas("answer", text)
     answer = _grounded(question, ["catalog", *routes], text, retrieved, platform)
     trace_step("sources", "Streaming evidence/references", count=len(answer.evidence or []))
     yield from _iter_source_events(answer.evidence)
@@ -809,12 +824,22 @@ def _iter_model(provider, messages, *, timeout: float | None, tools=None, tool_c
 
 
 def _catalog_reasoning_text(findings: str, evidence: list | None = None, caveats: list | None = None) -> str:
-    """Explain how the catalog answer was grounded — counts/breakdown, not raw SKU lines."""
+    """Explain how the catalog answer was grounded — counts/breakdown, not raw SKU lines.
+
+    Chart/table markdown belongs in the answer bubble (FBMarkdown), not the plain-text
+    reasoning panel — dumping fences here made plots look "broken" in the UI.
+    """
 
     parts: list[str] = []
     text = (findings or "").strip()
-    if text:
-        parts.append(text)
+    has_viz = "```chart" in text or "```fbchart" in text or ("|" in text and "---" in text)
+    if has_viz:
+        headline = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if headline and not headline.startswith("```") and not headline.startswith("|"):
+            parts.append(headline)
+        parts.append("Breakdown chart and table are rendered in the answer below.")
+    elif text:
+        parts.append(text[:800])
     graphs = sorted(
         {
             str(getattr(item, "graph", None) or getattr(item, "source_id", "") or "").strip()
@@ -829,7 +854,7 @@ def _catalog_reasoning_text(findings: str, evidence: list | None = None, caveats
         parts.append(f"Checked {len(evidence)} sample product row(s) as supporting evidence.")
     for note in caveats or []:
         note = str(note or "").strip()
-        if note and note not in text:
+        if note and note not in text and note not in " ".join(parts):
             parts.append(note)
     return " ".join(parts)[:1600] if parts else "No grounded product findings were returned."
 

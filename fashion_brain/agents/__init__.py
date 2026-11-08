@@ -28,10 +28,14 @@ from fashion_brain.agents._impl import (
     sample_image_prompt,
     ungrounded_numbers,
 )
+from fashion_brain.agents.entity_extract import EntityExtractAgent, ExtractedEntities
+from fashion_brain.agents.text2cypher import Text2CypherAgent
 
 __all__ = [
     "ContextDecision",
     "ConversationContextAgent",
+    "EntityExtractAgent",
+    "ExtractedEntities",
     "GraphChoice",
     "GraphRouterAgent",
     "Intention",
@@ -44,6 +48,7 @@ __all__ = [
     "SAMPLE_DESIGN_SYSTEM",
     "SampleDesignAgent",
     "THINKING_SYSTEM",
+    "Text2CypherAgent",
     "ThinkingBrain",
     "_specification_text",
     "build_model_provider",

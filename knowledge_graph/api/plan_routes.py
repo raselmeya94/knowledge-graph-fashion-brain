@@ -94,6 +94,7 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
     @app.get("/api/graphs")
     def api_list_graphs(platform=Depends(current_platform), _principal=Depends(current_principal)):
         from knowledge_graph.kg_registry.store import enrich_graph_record
+        from knowledge_graph.retrieval.graph_counts import graph_node_edge_counts
 
         # Reuse the richer list from registry routes by calling the same logic inline.
         rows = []
@@ -103,9 +104,8 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
             except Exception:
                 ontology = None
             enriched = enrich_graph_record(item, ontology)
-            nodes = platform.graph.find_nodes(graph=item.id, include_deleted=False)
-            edges = platform.graph.find_edges(graph=item.id, include_deleted=False)
-            rows.append({**enriched.model_dump(), "node_count": len(nodes), "edge_count": len(edges)})
+            nodes, edges = graph_node_edge_counts(platform, item.id)
+            rows.append({**enriched.model_dump(), "node_count": nodes, "edge_count": edges})
         known = {item["id"] for item in rows}
         for name, kind, description in (
             ("shared", "interconnect", "Canonical entities and RESOLVES_TO links across individual KGs"),
@@ -113,6 +113,7 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
         ):
             if name in known:
                 continue
+            nodes, edges = graph_node_edge_counts(platform, name)
             rows.append(
                 {
                     "id": name,
@@ -126,20 +127,17 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
                     "capabilities": ["canonical_materials", "products_sharing_material"],
                     "entities": [],
                     "relationships": ["RESOLVES_TO"],
-                    "node_count": len(platform.graph.find_nodes(graph=name, include_deleted=False)),
-                    "edge_count": len(platform.graph.find_edges(graph=name, include_deleted=False)),
+                    "node_count": nodes,
+                    "edge_count": edges,
                 }
             )
         return {"graphs": rows}
 
     @app.get("/api/graphs/registry")
     def api_graphs_registry(platform=Depends(current_platform), _principal=Depends(current_principal)):
-        counts: dict[str, tuple[int, int]] = {}
-        for item in platform.kg_registry.list_graphs():
-            counts[item.id] = (
-                len(platform.graph.find_nodes(graph=item.id, include_deleted=False)),
-                len(platform.graph.find_edges(graph=item.id, include_deleted=False)),
-            )
+        from knowledge_graph.retrieval.graph_counts import registry_count_map
+
+        counts = registry_count_map(platform)
         entries = platform.kg_registry.unified_registry(node_counts=counts)
         return {"registry": [item.model_dump() for item in entries]}
 

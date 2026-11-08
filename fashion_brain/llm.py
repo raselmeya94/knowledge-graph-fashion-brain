@@ -47,17 +47,15 @@ class OpenAICompatibleProvider:
         self.extra_headers = extra_headers or {}
 
     def complete(self, prompt: str, *, timeout: float | None, system: str | None = None) -> str:
+        system_text = system or (
+            "You are Fashion Brain. Answer only from the supplied product evidence. "
+            "Write a short natural briefing for a colleague — not a Q&A dump or FAQ. "
+            "If evidence is missing, say so plainly. Do not invent products, counts, or citations."
+        )
+        # Timing is recorded inside chat() — avoid double-counting.
         body = self.chat(
             [
-                {
-                    "role": "system",
-                    "content": system
-                    or (
-                        "You are Fashion Brain. Answer only from the supplied product evidence. "
-                        "Write a short natural briefing for a colleague — not a Q&A dump or FAQ. "
-                        "If evidence is missing, say so plainly. Do not invent products, counts, or citations."
-                    ),
-                },
+                {"role": "system", "content": system_text},
                 {"role": "user", "content": prompt},
             ],
             timeout=timeout,
@@ -80,7 +78,18 @@ class OpenAICompatibleProvider:
     ) -> dict:
         """Post one chat completion and return the JSON body, including tool calls."""
 
-        return self._post(messages, timeout=timeout, tools=tools, tool_choice=tool_choice)
+        from fashion_brain.stage_timing import estimate_tokens, timed
+
+        prompt_chars = sum(len(str(item.get("content") or "")) for item in messages)
+        with timed(
+            "llm_chat",
+            model=self.model,
+            messages=len(messages),
+            tools=bool(tools),
+            prompt_tokens_est=estimate_tokens(*(str(item.get("content") or "") for item in messages)),
+            prompt_chars=prompt_chars,
+        ):
+            return self._post(messages, timeout=timeout, tools=tools, tool_choice=tool_choice)
 
     def generate_image(self, prompt: str, *, model: str, timeout: float | None) -> tuple[bytes, str]:
         """Generate one image. Returns the file bytes and a media type such as image/png."""
@@ -111,29 +120,38 @@ class OpenAICompatibleProvider:
         thinking: list[str] = []
         annotations: list = []
         tool_calls: dict[int, dict] = {}
-        try:
-            with self._open(messages, timeout=timeout, tools=tools, tool_choice=tool_choice, stream=True) as response:
-                for kind, text, extra in _iter_sse(response):
-                    if kind == "annotation" and isinstance(extra, list):
-                        annotations.extend(extra)
-                        continue
-                    if kind == "tool_call" and isinstance(extra, dict):
-                        _merge_tool_call(tool_calls, extra)
-                        continue
-                    if not text:
-                        continue
-                    if kind == "thinking":
-                        thinking.append(text)
-                    elif kind == "reasoning":
-                        reasoning.append(text)
-                    else:
-                        kind = "answer"
-                        content.append(text)
-                    yield kind, text
-        except error.HTTPError as exc:
-            raise _model_http_error(exc) from exc
-        except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise ModelUnavailableError(f"Model provider is unavailable: {exc.__class__.__name__}.") from exc
+        from fashion_brain.stage_timing import estimate_tokens, timed
+
+        with timed(
+            "llm_stream",
+            model=self.model,
+            messages=len(messages),
+            tools=bool(tools),
+            prompt_tokens_est=estimate_tokens(*(str(item.get("content") or "") for item in messages)),
+        ):
+            try:
+                with self._open(messages, timeout=timeout, tools=tools, tool_choice=tool_choice, stream=True) as response:
+                    for kind, text, extra in _iter_sse(response):
+                        if kind == "annotation" and isinstance(extra, list):
+                            annotations.extend(extra)
+                            continue
+                        if kind == "tool_call" and isinstance(extra, dict):
+                            _merge_tool_call(tool_calls, extra)
+                            continue
+                        if not text:
+                            continue
+                        if kind == "thinking":
+                            thinking.append(text)
+                        elif kind == "reasoning":
+                            reasoning.append(text)
+                        else:
+                            kind = "answer"
+                            content.append(text)
+                        yield kind, text
+            except error.HTTPError as exc:
+                raise _model_http_error(exc) from exc
+            except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raise ModelUnavailableError(f"Model provider is unavailable: {exc.__class__.__name__}.") from exc
         if sink is not None:
             message: dict = {"role": "assistant", "content": "".join(content)}
             if reasoning:

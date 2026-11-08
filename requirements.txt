@@ -11,3 +11,5 @@ openai>=1.50
 pytest>=8.3
 pypdf>=5.0,<6
 python-multipart>=0.0.9
+sentence-transformers>=3.0,<4
+numpy>=1.26,<3

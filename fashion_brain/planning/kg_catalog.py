@@ -55,8 +55,10 @@ _TOKEN_STOP = frozenset(
     for from at that this be any all number count total by per each past previous prior
     historic historical history earlier old existing type types kind kinds top bottom
     show give want please which what who when where list has have had made using use
-    buyer buyers brand brands ecom ecomm ecommerce commerce plm plmex plm-ex system
-    database graph graphs source sources neo4j postgres sql kg comm com
+    buyer buyers brand brands ecom ecomm ecommerce ecommerces commerce commerces
+    plm plmex plm-ex system database graph graphs source sources neo4j postgres sql
+    kg comm com stored inside within wise analysis analyze analysing analyzing
+    analyse profile review overview study breakdown distribution split
     """.split()
 )
 
@@ -137,8 +139,16 @@ class FieldCatalog:
         return keys
 
 
+_CATALOG_CACHE: dict[str, tuple[float, FieldCatalog]] = {}
+_CATALOG_CACHE_TTL_S = 30.0
+_BASE_CATALOG_KEY = "__graphs_base__"
+_BASE_CATALOG_TTL_S = 120.0
+
+
 def build_field_catalog(platform, question: str = "") -> FieldCatalog:
     """Load unique columns per active product + system KG, then match question tokens to values."""
+
+    import time
 
     try:
         from fashion_brain.trace import trace_debug, trace_step
@@ -149,11 +159,73 @@ def build_field_catalog(platform, question: str = "") -> FieldCatalog:
         def trace_debug(message: str, **fields):  # type: ignore[misc]
             return None
 
-    # Keep the system value index fresh so topic/graph_id grounding stays current.
     try:
-        from knowledge_graph.retrieval.system_meta import build_system_meta
+        from fashion_brain.stage_timing import record_stage, timed
+    except Exception:  # pragma: no cover
+        def timed(name: str, **fields):  # type: ignore[misc]
+            from contextlib import nullcontext
 
-        build_system_meta(platform, persist=True)
+            return nullcontext()
+
+        def record_stage(name: str, ms: float, **fields):  # type: ignore[misc]
+            return None
+
+    cache_key = normalize_name(question or "")
+    cached = _CATALOG_CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) < _CATALOG_CACHE_TTL_S:
+        record_stage("schema_catalog", 0.0, cache="hit", question=cache_key[:80])
+        trace_step(
+            "catalog",
+            "Field catalog cache hit",
+            graphs=list(cached[1].graphs.keys()),
+            hits=[f"{h.token}->{h.attribute}@{h.graph_id}" for h in (cached[1].hits or [])[:8]],
+            preferred=cached[1].preferred_graphs(),
+            system_meta=cached[1].prefers_system_meta(),
+        )
+        return cached[1]
+
+    # Reuse graph/attribute skeleton across questions; only re-match value hits.
+    base = _CATALOG_CACHE.get(_BASE_CATALOG_KEY)
+    if base and (time.monotonic() - base[0]) < _BASE_CATALOG_TTL_S:
+        with timed("schema_catalog", cache="base_hit", question=cache_key[:80]):
+            catalog = FieldCatalog(graphs=dict(base[1].graphs), hits=[])
+            if question.strip():
+                catalog.hits = match_question_values(platform, question, catalog)
+            _CATALOG_CACHE[cache_key] = (time.monotonic(), catalog)
+            if len(_CATALOG_CACHE) > 48:
+                oldest = sorted(
+                    ((k, v) for k, v in _CATALOG_CACHE.items() if k != _BASE_CATALOG_KEY),
+                    key=lambda item: item[1][0],
+                )[:16]
+                for key, _ in oldest:
+                    _CATALOG_CACHE.pop(key, None)
+            trace_step(
+                "catalog",
+                "Field catalog base reuse + value match",
+                graphs=list(catalog.graphs.keys()),
+                hits=[f"{h.token}->{h.attribute}@{h.graph_id}" for h in (catalog.hits or [])[:8]],
+                preferred=catalog.preferred_graphs(),
+                system_meta=catalog.prefers_system_meta(),
+            )
+            return catalog
+
+    with timed("schema_catalog", cache="miss", question=cache_key[:80]):
+        return _build_field_catalog_uncached(platform, question, cache_key, trace_step, trace_debug)
+
+
+def _build_field_catalog_uncached(platform, question: str, cache_key: str, trace_step, trace_debug) -> FieldCatalog:
+    import time
+
+    # Prefer cached system meta from sync/rebuild — rebuilding on every ask is very slow.
+    try:
+        from knowledge_graph.retrieval.system_meta import load_or_build_system_meta, system_meta_path
+
+        meta_path = system_meta_path()
+        sync_path = Path(getattr(platform.settings, "generated", Path())) / "ecom_sync_state.json"
+        refresh = not meta_path.is_file()
+        if not refresh and sync_path.is_file() and meta_path.is_file():
+            refresh = sync_path.stat().st_mtime > meta_path.stat().st_mtime + 1
+        load_or_build_system_meta(platform, refresh=refresh)
     except Exception:
         pass
 
@@ -207,6 +279,17 @@ def build_field_catalog(platform, question: str = "") -> FieldCatalog:
         preferred=catalog.preferred_graphs(),
         system_meta=catalog.prefers_system_meta(),
     )
+    # Persist graph skeleton separately so later asks skip registry/attribute rebuild.
+    skeleton = FieldCatalog(graphs=dict(catalog.graphs), hits=[])
+    _CATALOG_CACHE[_BASE_CATALOG_KEY] = (time.monotonic(), skeleton)
+    _CATALOG_CACHE[cache_key] = (time.monotonic(), catalog)
+    if len(_CATALOG_CACHE) > 48:
+        oldest = sorted(
+            ((k, v) for k, v in _CATALOG_CACHE.items() if k != _BASE_CATALOG_KEY),
+            key=lambda item: item[1][0],
+        )[:16]
+        for key, _ in oldest:
+            _CATALOG_CACHE.pop(key, None)
     return catalog
 
 
@@ -427,18 +510,18 @@ def planner_system_prompt(catalog: FieldCatalog) -> str:
         "filters.brand or filters.buyer for X — never filters.garment.",
         "When a token matches Brand values, use filter key brand and prefer that graph.",
         "When a token matches Buyer values, use filter key buyer and prefer that graph.",
-        "Words like ecom, ecomm, e-comm, ecommerce, plm, plmex name a knowledge graph — "
-        "put them in preferred_graphs, never in filters.brand/buyer/garment.",
+        "Tokens that match a registered graph's id/name/description/capabilities belong in "
+        "preferred_graphs, never in filters.brand/buyer/garment.",
         "Questions about registered sources/graphs/attributes/shared interconnect belong to "
         f"{SYSTEM_GRAPH_ID} (system metadata). Prefer that graph and leave product filters empty.",
         '"all buyers" or "all brands" means group_by buyer or brand with empty filters '
-        "(no single party value). On ecom_products use group_by brand.",
+        "(no single party value). Prefer Brand when the selected graph exposes Brand not Buyer.",
         'Shape: {"intent":"count","filters":{},"group_by":null,"limit":null,"season_name":null,'
         '"upcoming":false,"references_prior_chat":false,"preferred_graphs":[]}.'
         ' intent is "count", "analysis", "specification", or "unsupported".',
         "Use analysis for analysis/analyze/profile/review/overview/study of stored products.",
         "preferred_graphs lists graph_id values that own the matched filter values "
-        "or that the user named (ecom_products, own_products, kg_system).",
+        f"or that the user named (from the registry below, plus {SYSTEM_GRAPH_ID}).",
         "Copy filter values only from the user's words (or the matched catalog spelling).",
         "Set references_prior_chat true only for follow-ups that depend on earlier turns.",
     ]
@@ -548,12 +631,20 @@ def _unique_attributes(platform, graph_id: str, row: dict) -> list[str]:
         if "material" in text:
             add("material")
 
-    if graph_id == "ecom_products" or "ecom" in graph_id:
+    # Product-kind graphs: merge mapping keys + common retail facets when present in entities.
+    kind = str(row.get("kind") or "").casefold()
+    if kind == "product" or any(
+        str(e).casefold() in {"product", "brand", "material", "garmentcategory", "color"}
+        for e in (row.get("entities") or [])
+    ):
         for key in _ecom_mapping_keys():
             add(key)
         for key in ("brand", "category", "family", "subfamily", "color", "material", "availability", "section", "price"):
             add(key)
-    if graph_id == "own_products" or "plm" in graph_id or "own" in graph_id:
+    if kind == "product" and any(
+        tok in graph_id.casefold() or tok in " ".join(str(x) for x in (row.get("source_ids") or [])).casefold()
+        for tok in ("plm", "own")
+    ):
         for field in CATALOG_FIELDS:
             add(field.key)
 
@@ -630,11 +721,15 @@ def _candidate_tokens(question: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for token in tokens:
-        if token in _TOKEN_STOP or len(token) < 2 or token.isdigit():
+        # Strip hyphens so "e-commerces" matches stopword "ecommerces" and is never
+        # probed as a live brand/category value (that alone cost ~minutes per ask).
+        folded = token.replace("-", "").replace("_", "")
+        if token in _TOKEN_STOP or folded in _TOKEN_STOP or len(token) < 2 or token.isdigit():
             continue
-        if token in seen:
+        if token in seen or folded in seen:
             continue
         seen.add(token)
+        seen.add(folded)
         out.append(token)
     return out[:12]
 

@@ -20,9 +20,9 @@ def sync_source(platform, source_id: str, *, brand: str | None = None) -> dict[s
     if source_id == "ecom_products" or source.source_type == "ecom_products":
         from knowledge_graph.pipeline.ecom_sync import sync_ecom_to_neo4j
 
-        result = sync_ecom_to_neo4j(platform, brand=brand)
-        save_source_snapshots(platform.graph, platform.settings.generated, [graph_id])
-        save_master_snapshot(platform.graph, platform.settings.generated)
+        # sync_ecom_to_neo4j persists ecom_sync_state.json during the run and
+        # refreshes snapshots + kg_system_meta when finished.
+        result = sync_ecom_to_neo4j(platform, brand=brand, refresh_generated=True)
         return {
             "source_id": source_id,
             "graph_id": graph_id,

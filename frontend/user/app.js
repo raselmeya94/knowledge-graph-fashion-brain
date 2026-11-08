@@ -177,12 +177,16 @@ function ensureThreadReady() {
 
 function setAnswerContent(body, text, { streaming = false } = {}) {
   const value = text || "";
-  if (!streaming && value && globalThis.FBMarkdown) {
+  // Always paint markdown/charts when the renderer is loaded. Streaming used to
+  // force plain textContent, which left ```chart fences and tables unrendered.
+  if (value && globalThis.FBMarkdown) {
     body.classList.add("md");
+    body.dataset.streaming = streaming ? "1" : "0";
     FBMarkdown.paint(body, value);
     return;
   }
   body.classList.remove("md");
+  delete body.dataset.streaming;
   body.textContent = value;
 }
 
@@ -606,7 +610,22 @@ function askOverSocket(payload) {
         }
       } else if (type === "done") {
         result.answerObj = data.answer || {};
-        if (!result.answer && result.answerObj.answer) result.answer = result.answerObj.answer;
+        const doneAnswer = result.answerObj.answer || "";
+        if (doneAnswer) {
+          const streamed = result.answer || "";
+          const doneHasChart = doneAnswer.includes("```chart") || doneAnswer.includes("```fbchart");
+          const streamHasChart = streamed.includes("```chart") || streamed.includes("```fbchart");
+          if (
+            !streamed ||
+            (doneHasChart && !streamHasChart) ||
+            doneAnswer.length >= streamed.length
+          ) {
+            result.answer = doneAnswer;
+          }
+        }
+        if (ui && result.answer) {
+          setAnswerContent(ui.body, result.answer, { streaming: false });
+        }
         const doneEvidence = result.answerObj.evidence || [];
         if (!result.evidence.length && doneEvidence.length) {
           result.evidence = doneEvidence;

@@ -20,7 +20,7 @@ def ensure_ask_data(platform, question: str) -> None:
             graph_ids.append("master")
         platform.load_for_query(graph_ids or None)
         return
-    # Product counts/specs read Neo4j ecom_products; skip empty PLM catalog envelopes.
+    # Product counts/specs read Neo4j product graphs via registry; skip empty PLM envelopes.
     if route in {"product_count", "specification", "products"}:
         return
     if not getattr(platform, "products", None) or not platform.products.envelopes:

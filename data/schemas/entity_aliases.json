@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "description": "User-term aliases → canonical English search terms for entity linking (before fulltext/vector).",
+  "aliases": {
+    "tee": "t-shirt",
+    "tees": "t-shirts",
+    "t shirt": "t-shirt",
+    "t shirts": "t-shirts",
+    "jumper": "sweater",
+    "jumpers": "sweaters",
+    "hoodie": "hoodies",
+    "puffer coat": "puffer jackets",
+    "puffer": "puffer jackets",
+    "padded jacket": "puffer jackets",
+    "padded coat": "puffer jackets",
+    "bomber": "bomber jackets",
+    "denim jacket": "denim jackets",
+    "leather jacket": "leather jackets",
+    "jaket": "jackets",
+    "jackett": "jackets",
+    "instock": "InStock",
+    "in stock": "InStock",
+    "in_stock": "InStock",
+    "outofstock": "OutOfStock",
+    "out of stock": "OutOfStock",
+    "c&a": "c-and-a",
+    "c and a": "c-and-a",
+    "cand a": "c-and-a"
+  }
+}

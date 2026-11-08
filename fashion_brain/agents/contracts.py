@@ -22,6 +22,8 @@ class Intention:
     corrections: list[str] = field(default_factory=list)
     preferred_graphs: list[str] = field(default_factory=list)
     available_attributes: list[str] = field(default_factory=list)
+    # Distinct facet-node count ("how many brands") — not a product group_by.
+    count_entity: str | None = None
 
 
 @dataclass

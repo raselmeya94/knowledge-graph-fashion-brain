@@ -228,6 +228,47 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         except ProductBackendUnavailable as exc:
             unavailable.append(exc.message)
         lines.append("Live PLMEX analytics are unavailable. No count was estimated.")
+    elif intent == "parent_category" or (request.filters or {}).get("parent_of"):
+        from knowledge_graph.retrieval.ecom import cypher_parent_category, default_product_graph
+
+        child = str((request.filters or {}).get("parent_of") or "").strip()
+        target = default_product_graph(platform, request.graph_id)
+        trace_step("brain", "Parent category lookup", child=child, graph_id=target)
+        rows = cypher_parent_category(platform, target or "ecom_products", child, limit=int(request.limit or 10)) if child else []
+        if not rows:
+            lines.append(
+                f"No PARENT_CATEGORY link was found for '{child or 'that category'}' in the product graph. "
+                "Category names in the scrape may differ (e.g. CHAQUETA vs Jackets)."
+            )
+        else:
+            parents = []
+            seen: set[str] = set()
+            for row in rows:
+                parent = str(row.get("parent") or "").strip()
+                kid = str(row.get("child") or "").strip()
+                if parent and parent.casefold() not in seen:
+                    seen.add(parent.casefold())
+                    parents.append(parent)
+                evidence.append(
+                    EvidenceItem(
+                        source_id=target or "ecom_products",
+                        record_id=f"parent:{kid}->{parent}",
+                        title=f"{kid} → {parent}",
+                        excerpt="PARENT_CATEGORY",
+                        source_path="neo4j",
+                        verification_status="observed",
+                        graph=target or "ecom_products",
+                        node_id=None,
+                        synthetic=False,
+                    )
+                )
+            lines.append(
+                f"Parent categor{'y' if len(parents) == 1 else 'ies'} of {rows[0].get('child') or child}: "
+                + ", ".join(parents)
+                + "."
+            )
+        if not request.graph_id and target:
+            request.graph_id = target
     elif intent == "system_meta":
         from knowledge_graph.retrieval.system_meta import append_system_meta_answer
 
@@ -451,7 +492,8 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         hint.append(request.graph_id)
     elif request.graph_ids:
         hint.extend(request.graph_ids)
-    text = " ".join(lines)
+    # Keep newlines so ```chart fences and markdown tables survive to the UI.
+    text = "\n".join(lines)
     trace_step(
         "brain",
         "Retrieve response ready",

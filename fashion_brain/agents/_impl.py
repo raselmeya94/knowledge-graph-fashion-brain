@@ -599,18 +599,19 @@ VOICE
 - Reply in the language of the question. Keep names, units, and numbers exactly as in the findings.
 
 STRUCTURE
-1. One or two plain sentences with the direct answer.
-2. Never show the same ranking twice. If the findings already include a fenced chart for a field, keep that chart and do not also print a table (or second chart) of those same labels/values. If the findings include a table for a field, keep the table and do not invent a chart from it.
-3. For a single-field wise/breakdown (material wise, brand wise, …), answer only that field. Do not invent brand/category/color sections unless they appear in the findings for that ask.
-4. When findings have several fields, keep each field's own visualization from the findings (table or chart). Do not copy one field's numbers into another chart.
-5. Do not add any source footer or disclaimer about PLMEX, Postgres, Neo4j, imported data, or synced store data. Answer the question only.
+1. Open with one or two plain sentences that state the total and the leading value.
+2. Then keep EVERY visualization from the findings: every fenced ```chart block and every Markdown breakdown table, copied unchanged. Never drop charts.
+3. For analysis / summary / wise / breakdown asks, the reply must include the chart(s) and the full ranking table from the findings — a two-sentence summary alone is not enough.
+4. For a single-field wise/breakdown (material wise, brand wise, …), answer only that field. Do not invent other sections.
+5. When findings already include both a chart and a table for the same field, keep both (chart first, then table). Do not invent a second chart.
+6. Do not add any source footer or disclaimer about PLMEX, Postgres, Neo4j, imported data, or synced store data.
 
 SPECIAL CASES
-- Type-wise analysis: summarise briefly, then one visualization per important field from the findings — never table+chart of the same numbers.
-- A buyer is named and garment types are ranked: say which types they make most, highest first.
-- A product specification is present (a suggested new style): keep its steps and every field and value. Never say there are no products. Never refuse to create a specification when the findings already contain one. Do not invent marketing themes or fabrics that are not in the findings.
+- Type-wise analysis: brief summary, then every field visualization from the findings.
+- A buyer/brand is named and types/materials are ranked: say what leads, then keep the chart and table.
+- A product specification is present: keep its steps and every field and value. Never refuse when the findings already contain one.
 
-Keep the whole reply tight.
+Never shrink an analysis reply down to only the summary sentences.
 """
 
 THINKING_SYSTEM = (
@@ -624,8 +625,10 @@ THINKING_SYSTEM = (
     "(empty filters if it names none). When true, you may carry filters from earlier user questions. "
     "Use only values the user actually said. Cotton is not 100% cotton unless the user says 100%. "
     'For garment or product-type words such as sweater, jumper, dress, or cardigan, put the value under "garment", not garment_type. '
-    "Party vs garment: phrases like 'at Zara', 'from Primark', 'for Matalan', 'by H&M', or 'Zara brand' "
+    "Party vs garment: phrases like 'at <Brand>', 'from <Brand>', 'for <Buyer>', or '<Name> brand' "
     'mean the party name goes under "brand" (or "buyer" when that is the catalog role) — never under "garment". '
+    "Words that name a registered knowledge graph (from its id/name/description) belong in preferred_graphs "
+    "— never under garment/category filters. "
     "Return one JSON object and nothing else, in this shape: "
     '{"actual_intent":"<one short sentence>","filters_and_conditions":{"<field>":"<value>"},"group_by":"<field>"|null,'
     '"references_prior_chat":true|false,"clarification_required":true|false}. '
@@ -691,7 +694,9 @@ class ThinkingBrain:
                 intent=summary.actual_intent,
             )
             return summary
-        if platform is not None and platform.settings.answer_mode == "llm":
+        # Standalone asks: skip ThinkingBrain LLM — IntentionAgent still plans once.
+        # Prior-chat turns keep the model so references_prior_chat stays accurate.
+        if platform is not None and platform.settings.answer_mode == "llm" and history:
             modeled = self._from_model(platform, question, history)
             if modeled is not None:
                 self._merge(summary, modeled, question, history)
@@ -704,6 +709,8 @@ class ThinkingBrain:
                 )
             else:
                 trace_debug("ThinkingBrain model skipped — keyword only")
+        elif not history:
+            trace_debug("ThinkingBrain model skipped — standalone ask (IntentionAgent will plan)")
         note = ""
         if platform is not None:
             from fashion_brain.ask import apply_buyer_spelling
@@ -887,7 +894,10 @@ class IntentionAgent:
 
     def understand(self, platform, question: str, history: list | None = None, summary: IntentSummary | None = None) -> Intention:
         from fashion_brain.ask import (
+            _facet_entity_count,
             _is_analysis,
+            enrich_ecom_question_filters,
+            parent_category_name,
             plan_catalog_question,
             plan_routes,
             preferred_graphs_from_question,
@@ -908,6 +918,18 @@ class IntentionAgent:
         if route in {"live_sql", "news"}:
             trace_step("intention", "Early exit for non-catalog route", route=route)
             return Intention(route, {}, None, False, thinking)
+        # Shared-material / interconnect listings must not pick up spurious catalog filters
+        # (e.g. heuristic "share" → category) or fall through to Text2Cypher on ecom_products.
+        if route in {"shared_products", "shared"}:
+            trace_step("intention", f"Early exit for interconnect route={route}")
+            return Intention(
+                route,
+                {},
+                None,
+                False,
+                thinking or "Find products that share a material across registered graphs.",
+                preferred_graphs=["shared"],
+            )
 
         catalog = build_field_catalog(platform, question)
         # Schema/value grounding on kg_system — never a hard-coded question phrase list.
@@ -935,6 +957,17 @@ class IntentionAgent:
             preferred=catalog.preferred_graphs(),
         )
         carry = bool(getattr(summary, "references_prior_chat", False)) if summary is not None else False
+        child = parent_category_name(question)
+        if child:
+            # Skip LLM planner for structural PARENT_CATEGORY asks.
+            return Intention(
+                "parent_category",
+                enrich_ecom_question_filters(question, {"parent_of": child}),
+                None,
+                False,
+                thinking or f"Look up PARENT_CATEGORY for {child}.",
+                preferred_graphs=preferred_graphs_from_question(question, platform) or catalog.preferred_graphs(),
+            )
         if platform.settings.answer_mode == "llm":
             trace_step("intention", "LLM catalog planner started", carry=carry)
             plan = plan_catalog_question(platform, question, history, carry=carry if summary is not None else None)
@@ -967,7 +1000,7 @@ class IntentionAgent:
             )
             plan["preferred_graphs"] = (
                 list(plan.get("preferred_graphs") or [])
-                or preferred_graphs_from_question(question)
+                or preferred_graphs_from_question(question, platform)
                 or catalog.preferred_graphs()
             )
             plan["available_attributes"] = catalog.all_attributes()
@@ -991,10 +1024,12 @@ class IntentionAgent:
             plan["analysis"] = True
             if plan.get("limit") is None:
                 plan["limit"] = 5
-            # Keep group_by for "all buyers/brands"; clear it for single-party analysis.
-            if not all_parties and not plan.get("group_by"):
+            # Keep group_by for "all buyers/brands" and for ranked facets under a material/color filter.
+            # Only clear group_by for a named party profile ("analysis for Zara").
+            party = (plan.get("filters") or {}).get("brand") or (plan.get("filters") or {}).get("buyer")
+            if not all_parties and party:
                 plan["group_by"] = None
-            elif not all_parties and plan.get("filters"):
+            elif not all_parties and not plan.get("group_by"):
                 plan["group_by"] = None
 
         # Thinking filters fill gaps only when the agent decided this turn continues prior chat.
@@ -1030,6 +1065,7 @@ class IntentionAgent:
             plan.get("group_by"),
             question,
         )
+        plan["filters"] = enrich_ecom_question_filters(question, plan.get("filters") or {})
         if before_ground != plan.get("filters"):
             trace_step(
                 "intention",
@@ -1039,27 +1075,31 @@ class IntentionAgent:
             )
         preferred = (
             list(plan.get("preferred_graphs") or [])
-            or preferred_graphs_from_question(question)
+            or preferred_graphs_from_question(question, platform)
             or catalog.preferred_graphs()
         )
-        # E-comm stores Brand, not Buyer.
-        if preferred == ["ecom_products"] or (
-            "ecom_products" in preferred and "own_products" not in preferred
-        ):
-            if plan.get("group_by") == "buyer":
-                plan["group_by"] = "brand"
-                trace_debug("Ecom remap group_by buyer→brand")
-            filters = dict(plan.get("filters") or {})
-            if filters.get("buyer") and not filters.get("brand"):
-                filters["brand"] = filters.pop("buyer")
-                trace_debug("Ecom remap filter buyer→brand", brand=filters.get("brand"))
-            else:
-                filters.pop("buyer", None)
-            if all_parties:
-                filters.pop("brand", None)
-                filters.pop("buyer", None)
-                trace_debug("Ecom all-parties cleared brand/buyer filters")
-            plan["filters"] = filters
+        schema = None
+        try:
+            from fashion_brain.planning.runtime_schema import get_runtime_schema
+
+            schema = get_runtime_schema(platform, preferred[0] if preferred else None)
+        except Exception:
+            schema = None
+        count_entity = _facet_entity_count(question, schema)
+        from fashion_brain.ask import _remap_buyer_to_brand_if_needed
+
+        remapped, group_remapped = _remap_buyer_to_brand_if_needed(
+            dict(plan.get("filters") or {}),
+            plan.get("group_by"),
+            preferred,
+            platform,
+        )
+        if all_parties:
+            remapped.pop("brand", None)
+            remapped.pop("buyer", None)
+            trace_debug("All-parties cleared brand/buyer filters")
+        plan["filters"] = remapped
+        plan["group_by"] = group_remapped
         available = list(plan.get("available_attributes") or []) or catalog.all_attributes()
 
         if (plan.get("suggest") or route == "specification") and not analysis:
@@ -1085,7 +1125,15 @@ class IntentionAgent:
             )
 
         # Graph listing templates only when there are no catalog filters to apply.
-        if route in _LISTING_ROUTES and not analysis and not plan.get("filters") and not plan.get("group_by"):
+        # Never keep a bare "shared" listing for facet-count asks ("how many brands").
+        if (
+            route in _LISTING_ROUTES
+            and not analysis
+            and not plan.get("filters")
+            and not plan.get("group_by")
+            and not count_entity
+            and "how many" not in question.casefold()
+        ):
             trace_step("intention", f"Resolved intention={route} (listing)", preferred=preferred)
             return Intention(route, {}, None, False, thinking, preferred_graphs=preferred, available_attributes=available)
 
@@ -1096,24 +1144,30 @@ class IntentionAgent:
             or plan.get("group_by")
             or plan.get("unsupported")
             or "how many" in question.lower()
+            or bool(count_entity)
         )
         intent = "product_count" if counts else route
+        # Distinct facet-node count is not a product group_by breakdown.
+        group_by = None if count_entity else plan.get("group_by")
+        if count_entity and not preferred:
+            preferred = list(catalog.preferred_graphs() or [])
         trace_step(
             "intention",
             f"Resolved intention={intent}",
             filters=plan.get("filters"),
-            group_by=plan.get("group_by"),
+            group_by=group_by,
             analysis=analysis,
             field_wise=field_wise,
             all_parties=all_parties,
             preferred=preferred,
             limit=plan.get("limit"),
+            count_entity=count_entity,
         )
 
         return Intention(
             intent,
             dict(plan.get("filters") or {}),
-            plan.get("group_by"),
+            group_by,
             bool(plan.get("unsupported")),
             thinking,
             plan.get("limit") if intent == "product_count" else None,
@@ -1123,6 +1177,7 @@ class IntentionAgent:
             corrections=list(plan.get("corrections") or []),
             preferred_graphs=preferred,
             available_attributes=available,
+            count_entity=count_entity,
         )
 
 
@@ -1140,6 +1195,7 @@ class GraphRouterAgent:
 
     _KIND_TEMPLATES = {
         "product_count": ("product", "catalog_summary"),
+        "parent_category": ("product", "catalog_summary"),
         "specification": ("product", "catalog_summary"),
         "products": ("product", "catalog_summary"),
         "shared_products": ("interconnect", "products_sharing_material"),
@@ -1342,27 +1398,10 @@ def _score_graph(
     has_brand_filter = "brand" in filters
     has_buyer_filter = "buyer" in filters
     brand_capable = bool(
-        blob_tokens
-        & {
-            "brand",
-            "brands",
-            "brand_comparison",
-            "ecom",
-            "ecom_products",
-            "commerce",
-            "has_brand",
-        }
-    ) or "commerce" in blob
+        blob_tokens & {"brand", "brands", "brand_comparison", "has_brand"}
+    )
     buyer_capable = bool(
-        blob_tokens
-        & {
-            "buyer",
-            "buyers",
-            "buyer_analysis",
-            "plm",
-            "plmex",
-            "own_products",
-        }
+        blob_tokens & {"buyer", "buyers", "buyer_analysis"}
     )
 
     if has_brand_filter and brand_capable:
@@ -1552,24 +1591,89 @@ def response_messages(question: str, retrieved: Retrieved) -> list[dict[str, str
     ]
 
 
+def _findings_have_chart(text: str) -> bool:
+    return "```chart" in (text or "") or "```fbchart" in (text or "")
+
+
+def _findings_have_table(text: str) -> bool:
+    return bool(re.search(r"^\| .+\|\s*$", text or "", re.MULTILINE)) and "| ---" in (text or "")
+
+
+def _answer_keeps_charts(answer: str, findings: str) -> bool:
+    """True when every chart fence from findings still appears in the reply."""
+
+    if not _findings_have_chart(findings):
+        return True
+    return _findings_have_chart(answer)
+
+
+def _wants_full_breakdown(question: str, findings: str) -> bool:
+    text = f"{question} {findings}".casefold()
+    return any(
+        token in text
+        for token in (
+            "analysis",
+            "analyze",
+            "analyse",
+            "summary",
+            "summarise",
+            "summarize",
+            "breakdown",
+            " wise",
+            "```chart",
+        )
+    )
+
+
 class ResponseAgent:
     """LLM agent that writes the reply from the user question and the retrieved rows.
 
     The reply is checked against the findings. A reply with figures that are not in the
     findings is replaced by the retrieved text, so a wrong count never reaches the user.
+    Analysis/breakdown replies must keep chart fences from the findings.
     """
 
     def compose(self, platform, question: str, retrieved: Retrieved) -> str:
+        from fashion_brain.stage_timing import estimate_tokens, record_stage, timed
+
         if platform.settings.answer_mode != "llm" or retrieved.text.startswith("No count was estimated"):
+            return retrieved.text
+        # Analysis / chart / table findings: do not let the LLM shrink the reply.
+        if _wants_full_breakdown(question, retrieved.text) and (
+            _findings_have_chart(retrieved.text) or _findings_have_table(retrieved.text)
+        ):
+            record_stage(
+                "response_format",
+                0.0,
+                mode="passthrough_chart",
+                finding_chars=len(retrieved.text or ""),
+            )
+            return retrieved.text
+        if any("Text-to-Cypher" in str(c) for c in (retrieved.caveats or [])) and _findings_have_table(
+            retrieved.text
+        ):
+            record_stage(
+                "response_format",
+                0.0,
+                mode="passthrough_text2cypher_table",
+                finding_chars=len(retrieved.text or ""),
+            )
             return retrieved.text
         provider = build_model_provider(platform.settings)
         messages = response_messages(question, retrieved)
+        record_stage(
+            "response_prompt_build",
+            0.0,
+            finding_chars=len(retrieved.text or ""),
+            prompt_tokens_est=estimate_tokens(messages[0]["content"], messages[1]["content"]),
+        )
         try:
-            raw = provider.complete(
-                messages[1]["content"],
-                timeout=platform.settings.request_timeout_seconds,
-                system=messages[0]["content"],
-            )
+            with timed("response_llm", finding_chars=len(retrieved.text or "")):
+                raw = provider.complete(
+                    messages[1]["content"],
+                    timeout=platform.settings.request_timeout_seconds,
+                    system=messages[0]["content"],
+                )
         except Exception as exc:
             detail = exc.message if isinstance(exc, FashionGPTError) else str(exc)
             retrieved.unavailable.append(
@@ -1588,7 +1692,11 @@ class ResponseAgent:
                 "The retrieved data is returned instead."
             )
             return retrieved.text
-        return _strip_source_footer(answer)
+        answer = _strip_source_footer(answer)
+        if not _answer_keeps_charts(answer, retrieved.text):
+            LOGGER.warning("response agent dropped chart fences; returning grounded findings")
+            return retrieved.text
+        return answer
 
 
 # --------------------------------------------------------------------------------------

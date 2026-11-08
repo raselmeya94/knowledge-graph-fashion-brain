@@ -49,8 +49,117 @@
     return isTableStart(lines, index);
   }
 
+  /** Extract a balanced `{…}` object starting at index. */
+  function readJsonObject(text, start) {
+    if (text[start] !== "{") return null;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escape) escape = false;
+        else if (char === "\\") escape = true;
+        else if (char === "\"") inString = false;
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+      if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return text.slice(start, index + 1);
+      }
+    }
+    return null;
+  }
+
+  /** Pull markdown table rows (2+ cells) out of a flattened blob. */
+  function extractTableRows(blob) {
+    const rows = [];
+    const rowRe = /\|(?:[^|\n]+\|){2,}/g;
+    let match;
+    while ((match = rowRe.exec(String(blob || "")))) {
+      rows.push(match[0].trim());
+    }
+    return rows;
+  }
+
+  function repairFlatTables(text) {
+    // "| Name | Count | | --- | ---: | | a | 1 |" → real markdown rows
+    const dividerRe = /\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|/;
+    const parts = [];
+    let cursor = 0;
+    let searchFrom = 0;
+    while (searchFrom < text.length) {
+      const dividerMatch = text.slice(searchFrom).match(dividerRe);
+      if (!dividerMatch || dividerMatch.index == null) break;
+      const dividerAt = searchFrom + dividerMatch.index;
+      const divider = dividerMatch[0];
+      const before = text.slice(cursor, dividerAt);
+      const headers = extractTableRows(before);
+      if (!headers.length) {
+        searchFrom = dividerAt + divider.length;
+        continue;
+      }
+      const header = headers[headers.length - 1];
+      const headerAt = dividerAt - before.length + before.lastIndexOf(header);
+      const after = text.slice(dividerAt + divider.length);
+      const bodyRows = extractTableRows(after);
+      if (!bodyRows.length) {
+        searchFrom = dividerAt + divider.length;
+        continue;
+      }
+      let bodyEnd = dividerAt + divider.length;
+      bodyRows.forEach((row) => {
+        const at = text.indexOf(row, bodyEnd);
+        if (at >= 0) bodyEnd = at + row.length;
+      });
+      parts.push(text.slice(cursor, headerAt).replace(/[ \t]+$/g, ""));
+      parts.push("\n" + header + "\n" + divider + "\n" + bodyRows.join("\n") + "\n");
+      cursor = bodyEnd;
+      searchFrom = bodyEnd;
+    }
+    parts.push(text.slice(cursor));
+    return parts.join("");
+  }
+
+  /** Repair space-collapsed ```chart {…} ``` blobs so fences parse again. */
+  function normalizeVizMarkdown(source) {
+    let text = String(source || "").replace(/\r\n/g, "\n");
+    const fence = /```(chart|fbchart)\s*/gi;
+    let match;
+    const chunks = [];
+    let cursor = 0;
+    while ((match = fence.exec(text))) {
+      const lang = match[1].toLowerCase();
+      const jsonStart = match.index + match[0].length;
+      if (text[jsonStart] !== "{") {
+        fence.lastIndex = match.index + 3;
+        continue;
+      }
+      const json = readJsonObject(text, jsonStart);
+      if (!json) {
+        fence.lastIndex = match.index + 3;
+        continue;
+      }
+      let close = jsonStart + json.length;
+      const after = text.slice(close).match(/^\s*```/);
+      if (after) close += after[0].length;
+      const before = text.slice(cursor, match.index).replace(/[ \t]+$/g, "");
+      chunks.push(before.endsWith("\n") ? before : before + "\n");
+      chunks.push("```" + lang + "\n" + json + "\n```\n");
+      cursor = close;
+      fence.lastIndex = close;
+    }
+    chunks.push(text.slice(cursor).replace(/^[ \t]+/g, ""));
+    return repairFlatTables(chunks.join(""));
+  }
+
   function parseMarkdown(source) {
-    const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
+    const lines = normalizeVizMarkdown(source).split("\n");
     const blocks = [];
     let index = 0;
     while (index < lines.length) {
@@ -397,6 +506,8 @@
       return list;
     }
     if (block.type === "table") {
+      const wrap = document.createElement("div");
+      wrap.className = "table-wrap";
       const table = document.createElement("table");
       const head = document.createElement("thead");
       const headRow = document.createElement("tr");
@@ -418,7 +529,8 @@
         body.appendChild(tr);
       });
       table.append(head, body);
-      return table;
+      wrap.appendChild(table);
+      return wrap;
     }
     const paragraph = document.createElement("p");
     fillLines(paragraph, block.text);

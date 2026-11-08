@@ -77,11 +77,14 @@ Fashion Brain **must not** hard-code source ids (`own_products`, `ecom_products`
 |---|---|
 | Which graphs exist | `GET /api/graphs` / `GET /api/graphs/registry` |
 | Schema / relationships | `GET /api/sources/{id}/schema`, ontology registry |
-| Attribute values (brands, …) | `GET /api/metadata/values` (paginated) |
+| Runtime schema for catalog agents | `GET /brain/runtime_schema?graph_id=` → `RuntimeSchemaContext` |
+| Attribute values (brands, …) | `GET /api/metadata/values` / `GET /brain/brands` (paginated) |
 | Sync / rebuild after admin changes | `POST /api/sources/{id}/sync`, `POST /api/graphs/rebuild` |
 | Chat sessions / users | Fashion Brain SQLite at `data/generated/fashion_brain/app.db` (auth/history only — not product data) |
 
-When an admin registers a new Postgres source and builds a graph via the KG API, Fashion Brain picks it up on the next router call through the registry — no code change.
+**Catalog agents** (EntityExtract, EntityLinker, Text2Cypher, facet counts, preferred-graph matching) consume **`RuntimeSchemaContext` only** — built from the registry + ontology APIs (cached briefly). Facet labels, filter keys, scope tokens, and canonical hints come from that context; agents must not embed graph ids, brand lists, or facet label lists in source.
+
+When an admin registers a new ontology/graph (or a source sync finishes), schema hooks refresh union ontology, ensure facet fulltext indexes, reset/warm embeddings, and invalidate the runtime schema cache so the next ask auto-connects — no code change per source.
 
 ## Why `data/generated/fashion_brain/app.db`?
 

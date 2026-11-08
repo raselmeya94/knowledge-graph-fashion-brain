@@ -64,7 +64,7 @@ _COUNT_STOPWORDS = _words(
     used shared share same interconnect interconnection found matched match result results currently available
     across among amongst only also present available registered registry metadata attribute attributes
     unique values description descriptions knowledge graph graphs kg kgs source sources system basic info
-    information overview
+    information overview stored inside within ecommerce ecommerces commerce commerces ecom ecomm
     """
 )
 _RANK_WORDS = _words("top bottom highest lowest leading most")
@@ -75,16 +75,11 @@ _SYSTEM_WORDS = _words(
     "plm plmex plm-ex system database catalog catalogue ecom ecomm ecommerce commerce "
     "neo4j postgres sql kg graph graphs source sources"
 )
-# Question phrases that name a product KG (not a filter value).
-_GRAPH_SOURCE_ALIASES = {
-    "ecom": "ecom_products",
-    "ecomm": "ecom_products",
-    "ecommerce": "ecom_products",
-    "commerce": "ecom_products",
-    "plm": "own_products",
-    "plmex": "own_products",
-    "own": "own_products",
-}
+# Legacy soft tokens used only to strip graph-scope noise from party filters.
+# Preferred graph ids come from the live registry (see preferred_graphs_from_question).
+_GRAPH_SCOPE_NOISE = _words(
+    "ecom ecomm ecommerce ecommerces commerce commerces plm plmex own"
+)
 # A filter value containing any of these is the question pasted back, not a catalog value.
 _FILTER_NOISE = _words(
     "normally usually typical typically making make makes made type types kind kinds which what "
@@ -219,19 +214,52 @@ def plan_routes(question: str) -> list[str]:
         return ["product_count"]
     if _buyer_ranking_question(question):
         return ["product_count"]
+    # "how many <facet>s" — product KG facet entity count, not shared interconnect.
+    if _facet_entity_count(question):
+        return ["product_count"]
     if ("how many" in text and "product" in text) or _group_field(question) or _product_type_breakdown(question):
         return ["product_count"]
     if news_question(question):
         return ["news"]
     if any(word in text for word in ("share", "shared", "same material", "interconnect")):
         # Shared *products* / materials — system shared overview is selected via kg_system grounding.
+        # Do not treat the English verb "found" / "are found" as shared.
         return ["shared_products"]
     if tokens & {"product", "products", "material", "materials", "fabric"}:
         return ["products"]
     if _asked_dimension(question):
         return ["product_count"]
-    return ["shared"]
+    # Bare count/list asks default to the product catalog — never the shared interconnect.
+    if tokens & {"how", "many", "count", "total", "number", "list", "show"}:
+        return ["product_count"]
+    return ["product_count"]
 
+
+def _facet_entity_count(question: str, schema=None) -> str | None:
+    """'How many <facet>s' → ontology facet label (or product), else None."""
+
+    if schema is not None:
+        from fashion_brain.agents.entity_extract import facet_entity_count_from_schema
+
+        hit = facet_entity_count_from_schema(question, schema)
+        if hit:
+            return hit
+    text = normalize_name(question)
+    if not re.search(r"\b(how many|number of|count of|total)\b", text):
+        return None
+    # Breakdown ("how many products per brand") is group_by, not entity count.
+    if re.search(r"\b(per|by|wise|grouped|breakdown|each)\b", text):
+        return None
+    tokens = set(text.split())
+    # Without schema: treat plural facet-ish tokens as product-count routing signal.
+    # Concrete label comes from RuntimeSchemaContext when platform is available.
+    for token in tokens:
+        if token in {"product", "products"}:
+            return "product"
+        if token.endswith("s") and len(token) > 3 and token not in _SYSTEM_WORDS | _GRAPH_SCOPE_NOISE:
+            # brands → brand, colors → color
+            return token[:-1] if token.endswith("s") else token
+    return None
 
 def _is_analysis(question: str) -> bool:
     """Buyer / product analysis: type-wise tops, not a suggested new spec sheet."""
@@ -366,6 +394,49 @@ def _grounded(question: str, routes: list[str], answer: str, retrieved, platform
     )
 
 
+def enrich_ecom_question_filters(question: str, filters: dict | None = None) -> dict:
+    """Fill availability / price / section cues the LLM often omits."""
+
+    out = {key: value for key, value in dict(filters or {}).items() if value not in (None, "")}
+    text = (question or "").casefold()
+    if "availability" not in out and re.search(
+        r"\b(in[\s_-]?stock|instock|available now|currently available)\b", text
+    ):
+        out["availability"] = "InStock"
+    if "price_max" not in out:
+        match = re.search(
+            r"(?:under|below|less than|cheaper than|<)\s*[€$£]?\s*(\d+(?:\.\d+)?)",
+            text,
+        )
+        if match:
+            out["price_max"] = match.group(1)
+    if "currency" not in out and (" eur" in f" {text}" or "€" in (question or "") or "euro" in text):
+        out["currency"] = "EUR"
+    if "section" not in out and re.search(r"\bwomen\b", text):
+        out["section"] = "women"
+    if "category" not in out and "garment" not in out and "garment_type" not in out:
+        if re.search(r"\bjackets?\b", text):
+            out["garment"] = "jacket"
+        elif re.search(r"\bshirts?\b", text):
+            out["garment"] = "shirt"
+    return out
+
+
+def parent_category_name(question: str) -> str | None:
+    """Extract 'Jackets' from 'parent category of Jackets' / 'what is the parent of X'."""
+
+    text = question or ""
+    match = re.search(
+        r"(?:parent\s+category\s+of|parent\s+of|belongs\s+under)\s+([A-Za-z][\w\s\-&']{1,40})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    name = match.group(1).strip().rstrip("?.!,")
+    return name or None
+
+
 def _retrieve(
     platform: Platform,
     principal: Principal,
@@ -375,14 +446,20 @@ def _retrieve(
     graph_ids: list[str] | None = None,
 ):
     from fashion_brain.agents import Retrieved
-    from fashion_brain.kg_client import retrieve_remote, uses_kg_api
+    from fashion_brain.execution.kg_client import retrieve_remote, uses_kg_api
     from fashion_brain.trace import trace_debug, trace_step
+    from knowledge_graph.errors import GraphBackendUnavailable
     from knowledge_graph.retrieval.brain import BrainRetrieveRequest, retrieve as local_retrieve
+
+    filters = enrich_ecom_question_filters(question, dict(intention.filters or {}))
+    parent_of = parent_category_name(question)
+    if parent_of:
+        filters = {**filters, "parent_of": parent_of}
 
     request = BrainRetrieveRequest(
         question=question,
-        intent=intention.intent,
-        filters=dict(intention.filters or {}),
+        intent="parent_category" if parent_of else intention.intent,
+        filters=filters,
         group_by=intention.group_by,
         unsupported=bool(intention.unsupported),
         limit=intention.limit,
@@ -406,10 +483,25 @@ def _retrieve(
         graph_id=request.graph_id,
         graph_ids=request.graph_ids,
     )
-    if remote:
-        payload = retrieve_remote(platform.settings, principal.clearance, request)
-    else:
-        payload = local_retrieve(platform, principal, request)
+    try:
+        if remote:
+            payload = retrieve_remote(platform.settings, principal.clearance, request)
+        else:
+            payload = local_retrieve(platform, principal, request)
+    except GraphBackendUnavailable as exc:
+        # Fail fast with a usable message instead of an empty Fashion Brain bubble.
+        message = (
+            f"The knowledge graph retrieve timed out or failed ({exc}). "
+            "Try a narrower question (one brand or one field), or retry shortly."
+        )
+        trace_step("kg", "Brain retrieve failed fast", error=str(exc)[:200])
+        return Retrieved(
+            text=message,
+            evidence=[],
+            caveats=["Knowledge graph retrieve did not finish in time."],
+            unavailable=["knowledge_graph_timeout"],
+            synthetic_data=False,
+        )
     trace_debug(
         "Brain retrieve response",
         chars=len(payload.text or ""),
@@ -694,7 +786,7 @@ def carries_history_filters(question: str, history: list | None = None, *, carry
 
 
 def _question_tokens(question: str) -> list[str]:
-    """Normalize and glue graph phrases like 'e comm' / 'e-comm' → ecomm."""
+    """Normalize and glue graph phrases like 'e comm' / 'e-commerces' → ecomm/ecommerce."""
 
     tokens = normalize_name(question).split()
     glued: list[str] = []
@@ -706,24 +798,116 @@ def _question_tokens(question: str) -> list[str]:
             glued.append("ecomm")
             index += 2
             continue
-        if token == "e" and nxt == "commerce":
+        if token == "e" and nxt in {"commerce", "commerces"}:
             glued.append("ecommerce")
             index += 2
+            continue
+        if token in {"ecommerce", "ecommerces"}:
+            glued.append("ecommerce")
+            index += 1
             continue
         glued.append(token)
         index += 1
     return glued
 
 
-def preferred_graphs_from_question(question: str) -> list[str]:
-    """Map 'in ecomm' / 'plm data' phrasing to registry graph ids."""
+def preferred_graphs_from_question(question: str, platform=None) -> list[str]:
+    """Match question tokens to live registry name/description/capabilities/id.
+
+    Never hard-codes graph ids. When no token matches, returns [] so callers
+    fall back to catalog.preferred_graphs() / first active product graph.
+    """
 
     tokens = set(_question_tokens(question))
+    text = " ".join(_question_tokens(question))
     preferred: list[str] = []
-    for token, graph_id in _GRAPH_SOURCE_ALIASES.items():
-        if token in tokens and graph_id not in preferred:
+    graphs = _registry_graph_rows(platform)
+    for row in graphs:
+        graph_id = str(row.get("graph_id") or row.get("id") or "")
+        if not graph_id or graph_id in preferred:
+            continue
+        kind = str(row.get("kind") or "")
+        if kind == "interconnect":
+            continue
+        blob_parts = [
+            graph_id,
+            str(row.get("name") or row.get("graph_name") or ""),
+            str(row.get("description") or ""),
+            " ".join(str(x) for x in (row.get("source_ids") or [])),
+            " ".join(str(x) for x in (row.get("capabilities") or [])),
+        ]
+        blob = normalize_name(" ".join(blob_parts))
+        blob_tokens = set(blob.split())
+        # Also match collapsed id: ecom_products → ecomproducts / ecom
+        id_parts = set(normalize_name(part) for part in re.split(r"[_\-\s]+", graph_id) if part)
+        if tokens & (blob_tokens | id_parts):
             preferred.append(graph_id)
+            continue
+        # Phrase containment for multi-word description tokens already in text.
+        for part in sorted(id_parts | blob_tokens, key=len, reverse=True):
+            if len(part) >= 3 and part in text and graph_id not in preferred:
+                preferred.append(graph_id)
+                break
     return preferred
+
+
+def _registry_graph_rows(platform=None) -> list[dict]:
+    if platform is None:
+        return []
+    try:
+        from fashion_brain.planning.runtime_schema import get_runtime_schema
+
+        ctx = get_runtime_schema(platform)
+        return [
+            {
+                "graph_id": g.graph_id,
+                "id": g.graph_id,
+                "name": g.name,
+                "kind": g.kind,
+                "description": g.description,
+                "capabilities": g.capabilities,
+                "source_ids": g.source_ids,
+                "status": g.status,
+            }
+            for g in ctx.graphs
+            if g.status == "active"
+        ]
+    except Exception:
+        return []
+
+
+def _remap_buyer_to_brand_if_needed(filters: dict, group_by: str | None, preferred: list[str], platform=None) -> tuple[dict, str | None]:
+    """If preferred product graphs expose Brand but not Buyer, remap buyer→brand."""
+
+    if not preferred:
+        return filters, group_by
+    has_brand = False
+    has_buyer = False
+    for gid in preferred:
+        try:
+            from fashion_brain.planning.runtime_schema import get_runtime_schema
+
+            ctx = get_runtime_schema(platform, gid) if platform is not None else None
+            if ctx is None:
+                continue
+            keys = {k.casefold() for k in (ctx.filter_keys or [])}
+            facets = {t.casefold() for t in (ctx.facet_types or [])}
+            if "brand" in keys or "brand" in facets or (ctx.brand_label or "").casefold() == "brand":
+                has_brand = True
+            if "buyer" in keys or "buyer" in facets:
+                has_buyer = True
+        except Exception:
+            continue
+    if has_brand and not has_buyer:
+        out = dict(filters or {})
+        if group_by == "buyer":
+            group_by = "brand"
+        if out.get("buyer") and not out.get("brand"):
+            out["brand"] = out.pop("buyer")
+        else:
+            out.pop("buyer", None)
+        return out, group_by
+    return filters, group_by
 
 
 def _all_parties_dimension(tokens: list[str]) -> str | None:
@@ -763,8 +947,8 @@ def _catalog_plan(question: str) -> dict:
             index += 1
             continue
 
-        # "top 5 [field]"
-        if token in _RANK_WORDS and index + 1 < len(tokens) and tokens[index + 1].isdigit():
+        # "top 5 [field]" / "show 5 …"
+        if token in (_RANK_WORDS | {"show", "list", "give"}) and index + 1 < len(tokens) and tokens[index + 1].isdigit():
             limit = int(tokens[index + 1])
             found = _alias_at(tokens, index + 2)
             if found:
@@ -902,7 +1086,7 @@ def _catalog_plan(question: str) -> dict:
         else:
             group_by = None
             party = _analysis_party_name(tokens)
-            if party and party not in _SYSTEM_WORDS and party not in _GRAPH_SOURCE_ALIASES:
+            if party and party not in _SYSTEM_WORDS and party not in _GRAPH_SCOPE_NOISE:
                 explicit_buyer = bool(set(tokens) & {"buyer", "buyers"})
                 explicit_brand = bool(set(tokens) & {"brand", "brands"})
                 if explicit_brand and not explicit_buyer:
@@ -912,25 +1096,15 @@ def _catalog_plan(question: str) -> dict:
                     filters["buyer"] = [party]
                     filters.pop("brand", None)
                 else:
-                    # Unqualified party (e.g. "analysis primark data"): keep both until
+                    # Unqualified party (e.g. "analysis for X"): keep both until
                     # live metadata picks brand vs buyer for the selected KG.
                     filters["brand"] = [party]
                     filters["buyer"] = [party]
 
-    # E-comm KGs store Brand, not PLM Buyer.
-    if preferred_graphs == ["ecom_products"] or (
-        "ecom_products" in preferred_graphs and "own_products" not in preferred_graphs
-    ):
-        if group_by == "buyer":
-            group_by = "brand"
-        if filters.get("buyer") and not filters.get("brand"):
-            filters["brand"] = filters.pop("buyer")
-        else:
-            filters.pop("buyer", None)
-
     flat = {key: " ".join(values) for key, values in filters.items()}
     flat = sanitize_party_filters(flat)
     flat = _drop_group_by_as_filter(flat, group_by, question)
+    flat, group_by = _remap_buyer_to_brand_if_needed(flat, group_by, preferred_graphs)
 
     if limit is None and group_by == "garment_type" and flat.get("buyer"):
         limit = 10
@@ -967,9 +1141,17 @@ def sanitize_party_filters(filters: dict) -> dict:
         value = cleaned.get(key)
         if value:
             parties.append(normalize_name(str(value)))
-    if not parties:
-        return cleaned
     party_set = set(parties)
+    graph_noise = set(_GRAPH_SCOPE_NOISE) | {
+        "stored",
+        "inside",
+        "within",
+        "source",
+        "sources",
+        "e",
+        "comm",
+        "com",
+    }
     for key in ("garment", "garment_type", "category"):
         value = cleaned.get(key)
         if not value:
@@ -978,6 +1160,11 @@ def sanitize_party_filters(filters: dict) -> dict:
         core = _party_filter_core(raw)
         tokens = set(raw.split())
         if raw in party_set or core in party_set or (tokens & party_set):
+            cleaned.pop(key, None)
+            continue
+        # Drop values that are only graph/source phrasing ("stored inside commerces").
+        content = {tok for tok in tokens if tok not in graph_noise and tok not in _COUNT_STOPWORDS}
+        if not content:
             cleaned.pop(key, None)
     return cleaned
 
@@ -1009,15 +1196,15 @@ def _analysis_party_name(tokens: list[str]) -> str | None:
         after = tokens[index + 1] if index + 1 < len(tokens) else ""
         if before == "all":
             return None
-        if before and _is_party_token(before) and before not in _GRAPH_SOURCE_ALIASES:
+        if before and _is_party_token(before) and before not in _GRAPH_SCOPE_NOISE:
             return before
-        if after and _is_party_token(after) and after not in _GRAPH_SOURCE_ALIASES:
+        if after and _is_party_token(after) and after not in _GRAPH_SCOPE_NOISE:
             return after
-    # "analysis primark data" / "study zara" — sole party token is the subject.
+    # Sole party token is the analysis subject.
     parties = [
         token
         for token in tokens
-        if _is_party_token(token) and token not in _GRAPH_SOURCE_ALIASES and token not in _SYSTEM_WORDS
+        if _is_party_token(token) and token not in _GRAPH_SCOPE_NOISE and token not in _SYSTEM_WORDS
     ]
     if len(parties) == 1:
         return parties[0]
@@ -1063,7 +1250,11 @@ def plan_catalog_question(
             catalog,
             question=question,
         )
-        plan["preferred_graphs"] = list(plan.get("preferred_graphs") or []) or preferred_graphs_from_question(question) or catalog.preferred_graphs()
+        plan["preferred_graphs"] = (
+            list(plan.get("preferred_graphs") or [])
+            or preferred_graphs_from_question(question, platform)
+            or catalog.preferred_graphs()
+        )
         plan["available_attributes"] = catalog.all_attributes()
         return plan
     if carry is None:
@@ -1090,8 +1281,7 @@ def plan_catalog_question(
     keyword = resolve_catalog_plan(question, history, carry=carry)
     if not model_plan["filters"] and keyword.get("filters"):
         model_plan["filters"] = dict(keyword["filters"])
-    # Keyword party cues ("at zara", "zara brand") beat a model that stuffed the
-    # same name under garment/category.
+    # Keyword party cues beat a model that stuffed the same name under garment/category.
     kw_filters = dict(keyword.get("filters") or {})
     if kw_filters.get("brand") or kw_filters.get("buyer"):
         for key in ("brand", "buyer"):
@@ -1118,27 +1308,23 @@ def plan_catalog_question(
     model_plan["filters"] = _drop_group_by_as_filter(model_plan.get("filters") or {}, model_plan.get("group_by"), question)
     preferred = (
         list(model_plan.get("preferred_graphs") or [])
-        or preferred_graphs_from_question(question)
+        or preferred_graphs_from_question(question, platform)
         or catalog.preferred_graphs()
     )
     model_plan["preferred_graphs"] = preferred
     model_plan["available_attributes"] = catalog.all_attributes()
-    # E-comm: buyer → brand for filters/group_by.
-    if preferred == ["ecom_products"] or (
-        "ecom_products" in preferred and "own_products" not in preferred
-    ):
-        if model_plan.get("group_by") == "buyer":
-            model_plan["group_by"] = "brand"
-        filters = dict(model_plan.get("filters") or {})
-        if filters.get("buyer") and not filters.get("brand"):
-            filters["brand"] = filters.pop("buyer")
-        else:
-            filters.pop("buyer", None)
-        if re.search(r"\ball\s+(buyers?|brands?)\b", question.casefold()):
-            filters.pop("brand", None)
-            filters.pop("buyer", None)
-            model_plan["group_by"] = model_plan.get("group_by") or "brand"
-        model_plan["filters"] = filters
+    filters, group_by = _remap_buyer_to_brand_if_needed(
+        dict(model_plan.get("filters") or {}),
+        model_plan.get("group_by"),
+        preferred,
+        platform,
+    )
+    if re.search(r"\ball\s+(buyers?|brands?)\b", question.casefold()):
+        filters.pop("brand", None)
+        filters.pop("buyer", None)
+        group_by = group_by or "brand"
+    model_plan["filters"] = filters
+    model_plan["group_by"] = group_by
     model_plan["source"] = "model"
     return model_plan
 
@@ -1366,10 +1552,10 @@ def apply_buyer_spelling(platform, holder) -> str:
             continue
         typed = str(filters[key])
         typed_key = normalize_name(typed)
-        # Never fuzzy-match graph/source words ("ecomm", "comm", "plm") onto Primark etc.
+        # Never fuzzy-match graph/source words ("ecomm", "comm", "plm") onto parties.
         if (
             typed_key in _SYSTEM_WORDS
-            or typed_key in _GRAPH_SOURCE_ALIASES
+            or typed_key in _GRAPH_SCOPE_NOISE
             or typed_key in {"comm", "com", "data", "all"}
         ):
             filters.pop(key, None)
