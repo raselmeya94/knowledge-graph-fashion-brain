@@ -1,0 +1,12 @@
+{
+  "id": "ecom_postgres",
+  "host": "127.0.0.1",
+  "port": 5432,
+  "database": "fashion_brain_live",
+  "user": "postgres",
+  "password_env": "POSTGRES_PASSWORD",
+  "table_default": "master_products",
+  "schema_default": "public",
+  "driver": "postgresql",
+  "description": "E-comm scrape Postgres (password from POSTGRES_PASSWORD / .env)"
+}

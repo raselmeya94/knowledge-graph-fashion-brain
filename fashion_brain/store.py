@@ -99,6 +99,7 @@ class FashionBrainStore:
                 """
             )
             self._ensure_column(conn, "conversations", "graph_id", "TEXT")
+            self._ensure_column(conn, "conversations", "session_json", "TEXT")
 
     def _ensure_column(self, conn, table: str, column: str, decl: str) -> None:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -274,6 +275,33 @@ class FashionBrainStore:
                     "UPDATE conversations SET updated_at = ? WHERE id = ?",
                     (utc_now(), conversation_id),
                 )
+
+    def get_session_state(self, conversation_id: str) -> dict[str, Any]:
+        """Working memory for the next turn (last graph, filters, result text)."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT session_json FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return {}
+        raw = row["session_json"] if "session_json" in row.keys() else None
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def set_session_state(self, conversation_id: str, state: dict[str, Any] | None) -> None:
+        payload = json.dumps(state or {})
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE conversations SET session_json = ?, updated_at = ? WHERE id = ?",
+                (payload, utc_now(), conversation_id),
+            )
 
     def add_message(
         self,

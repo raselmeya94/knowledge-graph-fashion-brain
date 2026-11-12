@@ -5,7 +5,11 @@ from __future__ import annotations
 from fashion_brain.ask import resolve_catalog_plan
 from knowledge_graph.access import Principal
 from knowledge_graph.models import GraphEdge, GraphNode
-from knowledge_graph.retrieval.ecom import clean_product_filters, match_neo4j_products
+from knowledge_graph.retrieval.ecom import (
+    append_neo4j_product_details_answer,
+    clean_product_filters,
+    match_neo4j_products,
+)
 
 
 def test_cotton_every_brand_wise_plan():
@@ -54,3 +58,40 @@ def test_ecom_material_filter_matches_related_nodes(tmp_path):
     assert cleaned == {"material": "cotton"}
     matched = match_neo4j_products(platform, principal, "ecom_products", cleaned)
     assert [node.id for node in matched] == ["ecom:p:1"]
+
+
+def test_product_details_answer_includes_public_product_fields(monkeypatch):
+    node = GraphNode(
+        id="product-1",
+        labels=["Entity", "Product"],
+        graph="ecom_products",
+        properties={
+            "name": "Primark crew-neck sweater",
+            "brand": "Primark",
+            "category_path": "Women / Clothing / Cardigans & Sweaters",
+            "composition": "Cotton 100",
+            "price": "€19.00",
+            "classification": "internal",
+            "prov_record_id": "raw-1",
+        },
+    )
+    monkeypatch.setattr(
+        "knowledge_graph.retrieval.ecom.search_neo4j_products",
+        lambda *_args, **_kwargs: ([node], 1),
+    )
+    lines = []
+    evidence = []
+    append_neo4j_product_details_answer(
+        object(),
+        Principal(subject="test", clearance="internal"),
+        "ecom_products",
+        {"brand": "Primark", "category": "sweater"},
+        lines,
+        evidence,
+    )
+    text = "\n".join(lines)
+    assert "Primark crew-neck sweater" in text
+    assert "Cotton 100" in text
+    assert "€19.00" in text
+    assert "classification" not in text
+    assert len(evidence) == 1

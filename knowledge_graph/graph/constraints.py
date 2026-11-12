@@ -25,6 +25,14 @@ INDEXES = INDEXES + [
     for label in _BASELINE_FACETS
 ]
 
+# Temporal e-com event indexes (product_change_events sync).
+INDEXES = INDEXES + [
+    "CREATE INDEX pricechangeevent_detected IF NOT EXISTS FOR (n:PriceChangeEvent) ON (n.detected_at)",
+    "CREATE INDEX pricechangeevent_direction IF NOT EXISTS FOR (n:PriceChangeEvent) ON (n.direction)",
+    "CREATE INDEX pricechangeevent_pg_event IF NOT EXISTS FOR (n:PriceChangeEvent) ON (n.pg_event_id)",
+    "CREATE INDEX pricesnapshot_observed IF NOT EXISTS FOR (n:PriceSnapshot) ON (n.observed_at)",
+    "CREATE INDEX availabilitysnapshot_observed IF NOT EXISTS FOR (n:AvailabilitySnapshot) ON (n.observed_at)",
+]
 FULLTEXT_INDEXES = [
     f"CREATE FULLTEXT INDEX {re.sub(r'[^A-Za-z0-9_]', '', label).lower()}_name_ft IF NOT EXISTS "
     f"FOR (n:{label}) ON EACH [n.name, n.normalized_name]"

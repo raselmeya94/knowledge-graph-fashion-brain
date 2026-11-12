@@ -1,0 +1,9 @@
+{
+  "graph_id": "ecom_products",
+  "template": "get_product",
+  "params": {
+    "node_id": "{{productId}}"
+  },
+  "limit": 1,
+  "offset": 0
+}

@@ -22,7 +22,7 @@ def main() -> int:
     from knowledge_graph.pipeline.service import Platform
 
     settings = load_settings()
-    settings = settings.model_copy(update={"entity_linker_embeddings": False})
+    settings = settings
     platform = Platform(settings)
     session_factory = getattr(platform.graph, "_session", None)
     if not callable(session_factory):

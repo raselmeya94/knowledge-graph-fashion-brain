@@ -1,0 +1,4350 @@
+{
+  "name": "plmex-products-ontology",
+  "version": "1.1.0",
+  "description": "PLMEX ontology for Postgres plmex_live.public.plmex_products (43 columns). Product is central (code PK). Filterable columns map to entities/edges; measures stay Product properties. canonical_entities are exact distinct values from plmex_live (aliases = exact DB string only; no invented spellings). Materials parsed from composition percent tokens.",
+  "entity_types": [
+    "Product",
+    "Brand",
+    "Buyer",
+    "Material",
+    "GarmentCategory",
+    "PlmMainCategory",
+    "PlmSubCategory",
+    "PlmSubSubCategory",
+    "GarmentType",
+    "Gender",
+    "Color",
+    "Gauge",
+    "SampleType",
+    "DesignPurpose",
+    "MachineType",
+    "DesignFeature",
+    "StyleFeature",
+    "Department",
+    "ShoppingDepartment",
+    "SeasonYear",
+    "Person",
+    "StyleReference",
+    "CustomerStyleReference",
+    "Location",
+    "InventoryRecord",
+    "Shipment",
+    "Unit",
+    "EventTag",
+    "ConstructionTag",
+    "AiMaterialTag",
+    "FinishTag",
+    "SpecialTag"
+  ],
+  "relationship_allowlist": {
+    "HAS_BRAND": [
+      [
+        "Product",
+        "Brand"
+      ]
+    ],
+    "HAS_BUYER": [
+      [
+        "Product",
+        "Buyer"
+      ]
+    ],
+    "USES_MATERIAL": [
+      [
+        "Product",
+        "Material"
+      ]
+    ],
+    "PRIMARY_MATERIAL": [
+      [
+        "Product",
+        "Material"
+      ]
+    ],
+    "BELONGS_TO_CATEGORY": [
+      [
+        "Product",
+        "GarmentCategory"
+      ]
+    ],
+    "HAS_PLM_MAIN_CATEGORY": [
+      [
+        "Product",
+        "PlmMainCategory"
+      ]
+    ],
+    "HAS_PLM_SUB_CATEGORY": [
+      [
+        "Product",
+        "PlmSubCategory"
+      ]
+    ],
+    "HAS_PLM_SUB_SUB_CATEGORY": [
+      [
+        "Product",
+        "PlmSubSubCategory"
+      ]
+    ],
+    "PARENT_CATEGORY": [
+      [
+        "PlmSubCategory",
+        "PlmMainCategory"
+      ],
+      [
+        "PlmSubSubCategory",
+        "PlmSubCategory"
+      ],
+      [
+        "GarmentCategory",
+        "PlmMainCategory"
+      ]
+    ],
+    "HAS_GARMENT_TYPE": [
+      [
+        "Product",
+        "GarmentType"
+      ]
+    ],
+    "HAS_GENDER": [
+      [
+        "Product",
+        "Gender"
+      ]
+    ],
+    "HAS_COLOR": [
+      [
+        "Product",
+        "Color"
+      ]
+    ],
+    "PRIMARY_COLOR": [
+      [
+        "Product",
+        "Color"
+      ]
+    ],
+    "HAS_GAUGE": [
+      [
+        "Product",
+        "Gauge"
+      ]
+    ],
+    "HAS_SAMPLE_TYPE": [
+      [
+        "Product",
+        "SampleType"
+      ]
+      ],
+    "DESIGNED_FOR": [
+      [
+        "Product",
+        "DesignPurpose"
+      ]
+    ],
+    "USES_KNIT_MACHINE": [
+      [
+        "Product",
+        "MachineType"
+      ]
+    ],
+    "HAS_DESIGN_FEATURE": [
+      [
+        "Product",
+        "DesignFeature"
+      ]
+    ],
+    "HAS_STYLE_FEATURE": [
+      [
+        "Product",
+        "StyleFeature"
+      ]
+    ],
+    "BELONGS_TO_DEPARTMENT": [
+      [
+        "Product",
+        "Department"
+      ]
+    ],
+    "BELONGS_TO_SHOPPING_DEPARTMENT": [
+      [
+        "Product",
+        "ShoppingDepartment"
+      ]
+    ],
+    "IN_SEASON_YEAR": [
+      [
+        "Product",
+        "SeasonYear"
+      ]
+    ],
+    "CREATED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "DESIGNED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "MANAGED_BY": [
+      [
+        "Product",
+        "Person"
+      ]
+    ],
+    "PURCHASED_BY": [
+      [
+        "Product",
+        "Person"
+      ],
+      [
+        "Product",
+        "Buyer"
+      ]
+    ],
+    "HAS_STYLE_REFERENCE": [
+      [
+        "Product",
+        "StyleReference"
+      ]
+    ],
+    "HAS_CUSTOMER_STYLE_REFERENCE": [
+      [
+        "Product",
+        "CustomerStyleReference"
+      ]
+    ],
+    "HAS_UNIT": [
+      [
+        "Product",
+        "Unit"
+      ]
+    ],
+    "STORED_AT": [
+      [
+        "Product",
+        "Location"
+      ],
+      [
+        "InventoryRecord",
+        "Location"
+      ]
+    ],
+    "HAS_INVENTORY_RECORD": [
+      [
+        "Product",
+        "InventoryRecord"
+      ]
+    ],
+    "HAS_SHIPMENT": [
+      [
+        "Product",
+        "Shipment"
+      ]
+    ],
+    "HAS_EVENT_TAG": [
+      [
+        "Product",
+        "EventTag"
+      ]
+    ],
+    "HAS_CONSTRUCTION_TAG": [
+      [
+        "Product",
+        "ConstructionTag"
+      ]
+    ],
+    "HAS_AI_MATERIAL_TAG": [
+      [
+        "Product",
+        "AiMaterialTag"
+      ]
+    ],
+    "HAS_FINISH_TAG": [
+      [
+        "Product",
+        "FinishTag"
+      ]
+    ],
+    "HAS_SPECIAL_TAG": [
+      [
+        "Product",
+        "SpecialTag"
+      ]
+    ],
+    "RELATED_TO_TAG": [
+      [
+        "EventTag",
+        "EventTag"
+      ],
+      [
+        "EventTag",
+        "ConstructionTag"
+      ],
+      [
+        "EventTag",
+        "AiMaterialTag"
+      ],
+      [
+        "EventTag",
+        "FinishTag"
+      ],
+      [
+        "EventTag",
+        "SpecialTag"
+      ],
+      [
+        "ConstructionTag",
+        "ConstructionTag"
+      ],
+      [
+        "ConstructionTag",
+        "AiMaterialTag"
+      ],
+      [
+        "ConstructionTag",
+        "FinishTag"
+      ],
+      [
+        "ConstructionTag",
+        "SpecialTag"
+      ],
+      [
+        "AiMaterialTag",
+        "AiMaterialTag"
+      ],
+      [
+        "AiMaterialTag",
+        "FinishTag"
+      ],
+      [
+        "AiMaterialTag",
+        "SpecialTag"
+      ],
+      [
+        "FinishTag",
+        "FinishTag"
+      ],
+      [
+        "FinishTag",
+        "SpecialTag"
+      ],
+      [
+        "SpecialTag",
+        "SpecialTag"
+      ]
+    ],
+    "SAME_STYLE_AS": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "VARIANT_OF": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "SIMILAR_TO": [
+      [
+        "Product",
+        "Product"
+      ]
+    ]
+  },
+  "review_stopwords": [],
+  "review_min_token_length": 5,
+  "canonical_entities": [
+    {
+      "id": "plmex:gender:women",
+      "type": "Gender",
+      "name": "Women",
+      "aliases": [
+        "Women"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:girl",
+      "type": "Gender",
+      "name": "Girl",
+      "aliases": [
+        "Girl"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:men",
+      "type": "Gender",
+      "name": "Men",
+      "aliases": [
+        "Men"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:boy",
+      "type": "Gender",
+      "name": "Boy",
+      "aliases": [
+        "Boy"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:baby-girl",
+      "type": "Gender",
+      "name": "Baby Girl",
+      "aliases": [
+        "Baby Girl"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:baby-boy",
+      "type": "Gender",
+      "name": "Baby Boy",
+      "aliases": [
+        "Baby Boy"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:others",
+      "type": "Gender",
+      "name": "Others",
+      "aliases": [
+        "Others"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:pets",
+      "type": "Gender",
+      "name": "Pets",
+      "aliases": [
+        "Pets"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:unisex",
+      "type": "Gender",
+      "name": "Unisex",
+      "aliases": [
+        "Unisex"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gender:maternal-infants",
+      "type": "Gender",
+      "name": "Maternal & Infants",
+      "aliases": [
+        "Maternal & Infants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:primark",
+      "type": "Buyer",
+      "name": "PRIMARK",
+      "aliases": [
+        "PRIMARK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:matalan",
+      "type": "Buyer",
+      "name": "MATALAN",
+      "aliases": [
+        "MATALAN"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:kmart",
+      "type": "Buyer",
+      "name": "KMART",
+      "aliases": [
+        "KMART"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:inditex-zara-kids",
+      "type": "Buyer",
+      "name": "INDITEX(ZARA KIDS)",
+      "aliases": [
+        "INDITEX(ZARA KIDS)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:river-island",
+      "type": "Buyer",
+      "name": "RIVER ISLAND",
+      "aliases": [
+        "RIVER ISLAND"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:sainsburys",
+      "type": "Buyer",
+      "name": "SAINSBURYS",
+      "aliases": [
+        "SAINSBURYS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:mango",
+      "type": "Buyer",
+      "name": "MANGO",
+      "aliases": [
+        "MANGO"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:bettex-uk",
+      "type": "Buyer",
+      "name": "BETTEX-UK",
+      "aliases": [
+        "BETTEX-UK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:c-a-europe",
+      "type": "Buyer",
+      "name": "C&A(Europe)",
+      "aliases": [
+        "C&A(Europe)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:babyshop",
+      "type": "Buyer",
+      "name": "BABYSHOP",
+      "aliases": [
+        "BABYSHOP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:global-gate-inc",
+      "type": "Buyer",
+      "name": "GLOBAL GATE INC",
+      "aliases": [
+        "GLOBAL GATE INC"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:inditex",
+      "type": "Buyer",
+      "name": "INDITEX",
+      "aliases": [
+        "INDITEX"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:the-very-group",
+      "type": "Buyer",
+      "name": "THE VERY GROUP",
+      "aliases": [
+        "THE VERY GROUP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:morrison",
+      "type": "Buyer",
+      "name": "MORRISON",
+      "aliases": [
+        "MORRISON"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:bestseller-a-s",
+      "type": "Buyer",
+      "name": "BESTSELLER A/S",
+      "aliases": [
+        "BESTSELLER A/S"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:lpp",
+      "type": "Buyer",
+      "name": "LPP",
+      "aliases": [
+        "LPP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:giii",
+      "type": "Buyer",
+      "name": "GIII",
+      "aliases": [
+        "GIII"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:c-a-mexico",
+      "type": "Buyer",
+      "name": "C&A Mexico",
+      "aliases": [
+        "C&A Mexico"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:cupcake",
+      "type": "Buyer",
+      "name": "CUPCAKE",
+      "aliases": [
+        "CUPCAKE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:yagi-co-ltd",
+      "type": "Buyer",
+      "name": "YAGI\uff06CO.\uff0cLTD.",
+      "aliases": [
+        "YAGI\uff06CO.\uff0cLTD."
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:landmark-splash",
+      "type": "Buyer",
+      "name": "landmark  Splash",
+      "aliases": [
+        "landmark  Splash"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:asda-dtr",
+      "type": "Buyer",
+      "name": "ASDA DTR",
+      "aliases": [
+        "ASDA DTR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:moririn-co-ltd",
+      "type": "Buyer",
+      "name": "MORIRIN CO., LTD.",
+      "aliases": [
+        "MORIRIN CO., LTD."
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:rmixed",
+      "type": "Buyer",
+      "name": "RMIXED",
+      "aliases": [
+        "RMIXED"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:walmart",
+      "type": "Buyer",
+      "name": "WALMART",
+      "aliases": [
+        "WALMART"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:c-a-brazil",
+      "type": "Buyer",
+      "name": "C&A (Brazil)",
+      "aliases": [
+        "C&A (Brazil)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:pegase",
+      "type": "Buyer",
+      "name": "PEGASE",
+      "aliases": [
+        "PEGASE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:inditex-pull-bear",
+      "type": "Buyer",
+      "name": "INDITEX(PULL&BEAR)",
+      "aliases": [
+        "INDITEX(PULL&BEAR)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:inditex-zara-lady",
+      "type": "Buyer",
+      "name": "INDITEX(ZARA LADY)",
+      "aliases": [
+        "INDITEX(ZARA LADY)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:inditex-stradivarius",
+      "type": "Buyer",
+      "name": "INDITEX(STRADIVARIUS)",
+      "aliases": [
+        "INDITEX(STRADIVARIUS)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:wear-medicine",
+      "type": "Buyer",
+      "name": "WEAR MEDICINE",
+      "aliases": [
+        "WEAR MEDICINE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:actif-co-ltd",
+      "type": "Buyer",
+      "name": "ACTIF CO.,LTD",
+      "aliases": [
+        "ACTIF CO.,LTD"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:nt-planning-co-ltd",
+      "type": "Buyer",
+      "name": "NT PLANNING CO.,LTD",
+      "aliases": [
+        "NT PLANNING CO.,LTD"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:global-gold-inc",
+      "type": "Buyer",
+      "name": "GLOBAL GOLD, INC",
+      "aliases": [
+        "GLOBAL GOLD, INC"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:nj-international",
+      "type": "Buyer",
+      "name": "NJ INTERNATIONAL",
+      "aliases": [
+        "NJ INTERNATIONAL"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:h-m",
+      "type": "Buyer",
+      "name": "H&M",
+      "aliases": [
+        "H&M"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:myer",
+      "type": "Buyer",
+      "name": "MYER",
+      "aliases": [
+        "MYER"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:buyer:n-v-i-co-ltd",
+      "type": "Buyer",
+      "name": "N.V.I Co.,Ltd.",
+      "aliases": [
+        "N.V.I Co.,Ltd."
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:primark",
+      "type": "Brand",
+      "name": "PRIMARK",
+      "aliases": [
+        "PRIMARK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:zara-kids",
+      "type": "Brand",
+      "name": "ZARA KIDS",
+      "aliases": [
+        "ZARA KIDS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:river-island",
+      "type": "Brand",
+      "name": "RIVER ISLAND",
+      "aliases": [
+        "RIVER ISLAND"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:zara",
+      "type": "Brand",
+      "name": "ZARA",
+      "aliases": [
+        "ZARA"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:c-a",
+      "type": "Brand",
+      "name": "C&A",
+      "aliases": [
+        "C&A"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:kmart",
+      "type": "Brand",
+      "name": "KMART",
+      "aliases": [
+        "KMART"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:sainsburys",
+      "type": "Brand",
+      "name": "SAINSBURYS",
+      "aliases": [
+        "SAINSBURYS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:bettex-industries-ltd",
+      "type": "Brand",
+      "name": "BETTEX INDUSTRIES LTD.",
+      "aliases": [
+        "BETTEX INDUSTRIES LTD."
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:uk-showroom-sample",
+      "type": "Brand",
+      "name": "UK SHOWROOM SAMPLE",
+      "aliases": [
+        "UK SHOWROOM SAMPLE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:h-m",
+      "type": "Brand",
+      "name": "H&M",
+      "aliases": [
+        "H&M"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:stradivarius",
+      "type": "Brand",
+      "name": "STRADIVARIUS",
+      "aliases": [
+        "STRADIVARIUS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:juniors",
+      "type": "Brand",
+      "name": "JUNIORS",
+      "aliases": [
+        "JUNIORS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:nutmeg",
+      "type": "Brand",
+      "name": "NUTMEG",
+      "aliases": [
+        "NUTMEG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:next",
+      "type": "Brand",
+      "name": "NEXT",
+      "aliases": [
+        "NEXT"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:reserved",
+      "type": "Brand",
+      "name": "RESERVED",
+      "aliases": [
+        "RESERVED"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:papaya",
+      "type": "Brand",
+      "name": "PAPAYA",
+      "aliases": [
+        "PAPAYA"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:george",
+      "type": "Brand",
+      "name": "GEORGE",
+      "aliases": [
+        "GEORGE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:zara-lady",
+      "type": "Brand",
+      "name": "ZARA LADY",
+      "aliases": [
+        "ZARA LADY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:vilet",
+      "type": "Brand",
+      "name": "VILET",
+      "aliases": [
+        "VILET"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:m-s",
+      "type": "Brand",
+      "name": "M&S",
+      "aliases": [
+        "M&S"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:bd-design-team",
+      "type": "Brand",
+      "name": "BD DESIGN TEAM",
+      "aliases": [
+        "BD DESIGN TEAM"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:mango",
+      "type": "Brand",
+      "name": "MANGO",
+      "aliases": [
+        "MANGO"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:babyshop",
+      "type": "Brand",
+      "name": "BABYSHOP",
+      "aliases": [
+        "BABYSHOP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:shopping-sample-uk",
+      "type": "Brand",
+      "name": "Shopping Sample(UK)",
+      "aliases": [
+        "Shopping Sample(UK)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:the-very-group",
+      "type": "Brand",
+      "name": "THE VERY GROUP",
+      "aliases": [
+        "THE VERY GROUP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:magnolia-grace",
+      "type": "Brand",
+      "name": "MAGNOLIA GRACE",
+      "aliases": [
+        "MAGNOLIA GRACE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:tu",
+      "type": "Brand",
+      "name": "TU",
+      "aliases": [
+        "TU"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:zara-home",
+      "type": "Brand",
+      "name": "ZARA HOME",
+      "aliases": [
+        "ZARA HOME"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:pull-bear",
+      "type": "Brand",
+      "name": "PULL&BEAR",
+      "aliases": [
+        "PULL&BEAR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:bcbg",
+      "type": "Brand",
+      "name": "BCBG",
+      "aliases": [
+        "BCBG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:oysho",
+      "type": "Brand",
+      "name": "OYSHO",
+      "aliases": [
+        "OYSHO"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:urban-revivo",
+      "type": "Brand",
+      "name": "URBAN REVIVO",
+      "aliases": [
+        "URBAN REVIVO"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:fashion-uk",
+      "type": "Brand",
+      "name": "FASHION UK",
+      "aliases": [
+        "FASHION UK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:older-girl",
+      "type": "Brand",
+      "name": "OLDER GIRL",
+      "aliases": [
+        "OLDER GIRL"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:brand:infant",
+      "type": "Brand",
+      "name": "INFANT",
+      "aliases": [
+        "INFANT"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:sweater",
+      "type": "GarmentCategory",
+      "name": "Sweater",
+      "aliases": [
+        "Sweater"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:cut-sew-woven",
+      "type": "GarmentCategory",
+      "name": "Cut & Sew-Woven",
+      "aliases": [
+        "Cut & Sew-Woven"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:cut-sew-jersey",
+      "type": "GarmentCategory",
+      "name": "Cut & Sew-Jersey",
+      "aliases": [
+        "Cut & Sew-Jersey"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:hybrid-garment",
+      "type": "GarmentCategory",
+      "name": "Hybrid Garment",
+      "aliases": [
+        "Hybrid Garment"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:others",
+      "type": "GarmentCategory",
+      "name": "Others",
+      "aliases": [
+        "Others"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:tp-cut-sew-design",
+      "type": "GarmentCategory",
+      "name": "TP-(Cut & Sew Design)",
+      "aliases": [
+        "TP-(Cut & Sew Design)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:home-textile",
+      "type": "GarmentCategory",
+      "name": "Home Textile",
+      "aliases": [
+        "Home Textile"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:tp-sweater-design",
+      "type": "GarmentCategory",
+      "name": "TP-(Sweater Design)",
+      "aliases": [
+        "TP-(Sweater Design)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:fabric-swatch",
+      "type": "GarmentCategory",
+      "name": "Fabric Swatch",
+      "aliases": [
+        "Fabric Swatch"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:yarn-swatch",
+      "type": "GarmentCategory",
+      "name": "Yarn Swatch",
+      "aliases": [
+        "Yarn Swatch"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:hardgoods",
+      "type": "GarmentCategory",
+      "name": "Hardgoods",
+      "aliases": [
+        "Hardgoods"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:cad",
+      "type": "GarmentCategory",
+      "name": "CAD",
+      "aliases": [
+        "CAD"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmentcategory:flat-knit-pattern",
+      "type": "GarmentCategory",
+      "name": "Flat Knit Pattern",
+      "aliases": [
+        "Flat Knit Pattern"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:everyday-clothing",
+      "type": "PlmMainCategory",
+      "name": "Everyday Clothing",
+      "aliases": [
+        "Everyday Clothing"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:swimwear-beachwear",
+      "type": "PlmMainCategory",
+      "name": "Swimwear / Beachwear",
+      "aliases": [
+        "Swimwear / Beachwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:accessories",
+      "type": "PlmMainCategory",
+      "name": "Accessories",
+      "aliases": [
+        "Accessories"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:loungewear",
+      "type": "PlmMainCategory",
+      "name": "Loungewear",
+      "aliases": [
+        "Loungewear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:sports-yoga-outdoor",
+      "type": "PlmMainCategory",
+      "name": "Sports / Yoga / Outdoor",
+      "aliases": [
+        "Sports / Yoga / Outdoor"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:home-textiles",
+      "type": "PlmMainCategory",
+      "name": "Home Textiles",
+      "aliases": [
+        "Home Textiles"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmmaincategory:pets",
+      "type": "PlmMainCategory",
+      "name": "Pets",
+      "aliases": [
+        "Pets"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:knitwear",
+      "type": "PlmSubCategory",
+      "name": "Knitwear",
+      "aliases": [
+        "Knitwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:jacket-outerwear",
+      "type": "PlmSubCategory",
+      "name": "Jacket Outerwear",
+      "aliases": [
+        "Jacket Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:swimwear",
+      "type": "PlmSubCategory",
+      "name": "Swimwear",
+      "aliases": [
+        "Swimwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:hats-scarves-gloves",
+      "type": "PlmSubCategory",
+      "name": "Hats, Scarves & Gloves",
+      "aliases": [
+        "Hats, Scarves & Gloves"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:beachwear",
+      "type": "PlmSubCategory",
+      "name": "Beachwear",
+      "aliases": [
+        "Beachwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:pants",
+      "type": "PlmSubCategory",
+      "name": "Pants",
+      "aliases": [
+        "Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:woven-knit-tops",
+      "type": "PlmSubCategory",
+      "name": "Woven & Knit Tops",
+      "aliases": [
+        "Woven & Knit Tops"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:t-shirts-polos",
+      "type": "PlmSubCategory",
+      "name": "T-shirts & Polos",
+      "aliases": [
+        "T-shirts & Polos"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:vest",
+      "type": "PlmSubCategory",
+      "name": "Vest",
+      "aliases": [
+        "Vest"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:dress",
+      "type": "PlmSubCategory",
+      "name": "Dress",
+      "aliases": [
+        "Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:sweatshirt",
+      "type": "PlmSubCategory",
+      "name": "Sweatshirt",
+      "aliases": [
+        "Sweatshirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:shirt",
+      "type": "PlmSubCategory",
+      "name": "Shirt",
+      "aliases": [
+        "Shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:loungewear-top",
+      "type": "PlmSubCategory",
+      "name": "Loungewear Top",
+      "aliases": [
+        "Loungewear Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:sports-tops",
+      "type": "PlmSubCategory",
+      "name": "Sports Tops",
+      "aliases": [
+        "Sports Tops"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:jumpsuit",
+      "type": "PlmSubCategory",
+      "name": "Jumpsuit",
+      "aliases": [
+        "Jumpsuit"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:flat-padded-outerwear",
+      "type": "PlmSubCategory",
+      "name": "Flat-Padded Outerwear",
+      "aliases": [
+        "Flat-Padded Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:underwear-briefs",
+      "type": "PlmSubCategory",
+      "name": "Underwear & Briefs",
+      "aliases": [
+        "Underwear & Briefs"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:skirt",
+      "type": "PlmSubCategory",
+      "name": "Skirt",
+      "aliases": [
+        "Skirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:loungewear-set",
+      "type": "PlmSubCategory",
+      "name": "Loungewear Set",
+      "aliases": [
+        "Loungewear Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:loungewear-pants",
+      "type": "PlmSubCategory",
+      "name": "Loungewear Pants",
+      "aliases": [
+        "Loungewear Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:sports-bottom",
+      "type": "PlmSubCategory",
+      "name": "Sports Bottom",
+      "aliases": [
+        "Sports Bottom"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:other",
+      "type": "PlmSubCategory",
+      "name": "Other",
+      "aliases": [
+        "Other"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:trench-coat",
+      "type": "PlmSubCategory",
+      "name": "Trench Coat",
+      "aliases": [
+        "Trench Coat"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:suits-dress-pants",
+      "type": "PlmSubCategory",
+      "name": "Suits & Dress Pants",
+      "aliases": [
+        "Suits & Dress Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:socks",
+      "type": "PlmSubCategory",
+      "name": "Socks",
+      "aliases": [
+        "Socks"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:blanket",
+      "type": "PlmSubCategory",
+      "name": "Blanket",
+      "aliases": [
+        "Blanket"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:pet-clothing",
+      "type": "PlmSubCategory",
+      "name": "Pet Clothing",
+      "aliases": [
+        "Pet Clothing"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:bags",
+      "type": "PlmSubCategory",
+      "name": "Bags",
+      "aliases": [
+        "Bags"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:sports-set",
+      "type": "PlmSubCategory",
+      "name": "Sports Set",
+      "aliases": [
+        "Sports Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:leather-fur",
+      "type": "PlmSubCategory",
+      "name": "Leather & Fur",
+      "aliases": [
+        "Leather & Fur"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:loungewear-dress",
+      "type": "PlmSubCategory",
+      "name": "Loungewear Dress",
+      "aliases": [
+        "Loungewear Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:denim",
+      "type": "PlmSubCategory",
+      "name": "Denim",
+      "aliases": [
+        "Denim"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:cushion",
+      "type": "PlmSubCategory",
+      "name": "Cushion",
+      "aliases": [
+        "Cushion"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:sports-one-piece",
+      "type": "PlmSubCategory",
+      "name": "Sports One-Piece",
+      "aliases": [
+        "Sports One-Piece"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:layering-vest-cami-top",
+      "type": "PlmSubCategory",
+      "name": "Layering Vest/Cami Top",
+      "aliases": [
+        "Layering Vest/Cami Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:cape-shawl",
+      "type": "PlmSubCategory",
+      "name": "Cape/Shawl",
+      "aliases": [
+        "Cape/Shawl"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:woolen",
+      "type": "PlmSubCategory",
+      "name": "Woolen",
+      "aliases": [
+        "Woolen"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:hand-stuffed-padded-outerwear",
+      "type": "PlmSubCategory",
+      "name": "Hand-Stuffed Padded Outerwear",
+      "aliases": [
+        "Hand-Stuffed Padded Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:pillowcase",
+      "type": "PlmSubCategory",
+      "name": "Pillowcase",
+      "aliases": [
+        "Pillowcase"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:down",
+      "type": "PlmSubCategory",
+      "name": "Down",
+      "aliases": [
+        "Down"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:romper",
+      "type": "PlmSubCategory",
+      "name": "Romper",
+      "aliases": [
+        "Romper"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:pet-bed",
+      "type": "PlmSubCategory",
+      "name": "Pet Bed",
+      "aliases": [
+        "Pet Bed"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:belts",
+      "type": "PlmSubCategory",
+      "name": "Belts",
+      "aliases": [
+        "Belts"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:loungewear-jumpsuit",
+      "type": "PlmSubCategory",
+      "name": "Loungewear Jumpsuit",
+      "aliases": [
+        "Loungewear Jumpsuit"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:headband",
+      "type": "PlmSubCategory",
+      "name": "Headband",
+      "aliases": [
+        "Headband"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubcategory:calendar",
+      "type": "PlmSubCategory",
+      "name": "Calendar",
+      "aliases": [
+        "Calendar"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:pullover-sweater",
+      "type": "PlmSubSubCategory",
+      "name": "Pullover Sweater",
+      "aliases": [
+        "Pullover Sweater"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:cardigan-sweater",
+      "type": "PlmSubSubCategory",
+      "name": "Cardigan Sweater",
+      "aliases": [
+        "Cardigan Sweater"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-jacket-outerwear",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Jacket Outerwear",
+      "aliases": [
+        "Woven Jacket Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-vest",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Vest",
+      "aliases": [
+        "Knitwear Vest"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-dress",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Dress",
+      "aliases": [
+        "Knitwear Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:swimwear-set",
+      "type": "PlmSubSubCategory",
+      "name": "Swimwear Set",
+      "aliases": [
+        "Swimwear Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:one-piece-swimwear",
+      "type": "PlmSubSubCategory",
+      "name": "One-Piece Swimwear",
+      "aliases": [
+        "One-Piece Swimwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-set",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Set",
+      "aliases": [
+        "Knitwear Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-polo",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Polo",
+      "aliases": [
+        "Knitwear Polo"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-pants",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Pants",
+      "aliases": [
+        "Knitwear Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-jacket-outerwear",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Jacket Outerwear",
+      "aliases": [
+        "Knit Jacket Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:t-shirt",
+      "type": "PlmSubSubCategory",
+      "name": "T-shirt",
+      "aliases": [
+        "T-shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:beachwear-bottom",
+      "type": "PlmSubSubCategory",
+      "name": "Beachwear Bottom",
+      "aliases": [
+        "Beachwear Bottom"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:hat",
+      "type": "PlmSubSubCategory",
+      "name": "Hat",
+      "aliases": [
+        "Hat"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-pants",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Pants",
+      "aliases": [
+        "Woven Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:pullover-sweatshirt",
+      "type": "PlmSubSubCategory",
+      "name": "Pullover Sweatshirt",
+      "aliases": [
+        "Pullover Sweatshirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-vest",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Vest",
+      "aliases": [
+        "Woven Vest"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-dress",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Dress",
+      "aliases": [
+        "Woven Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:scarf",
+      "type": "PlmSubSubCategory",
+      "name": "Scarf",
+      "aliases": [
+        "Scarf"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-skirt",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Skirt",
+      "aliases": [
+        "Knitwear Skirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-pants",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Pants",
+      "aliases": [
+        "Knit Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-shirt",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Shirt",
+      "aliases": [
+        "Woven Shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-vest",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Vest",
+      "aliases": [
+        "Knit Vest"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-dress",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Dress",
+      "aliases": [
+        "Knit Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-pullover",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Pullover",
+      "aliases": [
+        "Knit Pullover"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knitwear-jumpsuit",
+      "type": "PlmSubSubCategory",
+      "name": "Knitwear Jumpsuit",
+      "aliases": [
+        "Knitwear Jumpsuit"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:flat-padded-outerwear",
+      "type": "PlmSubSubCategory",
+      "name": "Flat-Padded Outerwear",
+      "aliases": [
+        "Flat-Padded Outerwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:underwear",
+      "type": "PlmSubSubCategory",
+      "name": "Underwear",
+      "aliases": [
+        "Underwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-loungewear-top",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Loungewear Top",
+      "aliases": [
+        "Knit Loungewear Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-pullover",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Pullover",
+      "aliases": [
+        "Woven Pullover"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-jumpsuit",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Jumpsuit",
+      "aliases": [
+        "Knit Jumpsuit"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:swimwear-bottom",
+      "type": "PlmSubSubCategory",
+      "name": "Swimwear Bottom",
+      "aliases": [
+        "Swimwear Bottom"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-cardigan",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Cardigan",
+      "aliases": [
+        "Woven Cardigan"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-loungewear-pants",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Loungewear Pants",
+      "aliases": [
+        "Knit Loungewear Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-skirt",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Skirt",
+      "aliases": [
+        "Woven Skirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:swimwear-top",
+      "type": "PlmSubSubCategory",
+      "name": "Swimwear Top",
+      "aliases": [
+        "Swimwear Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:other",
+      "type": "PlmSubSubCategory",
+      "name": "Other",
+      "aliases": [
+        "Other"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-loungewear-set",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Loungewear Set",
+      "aliases": [
+        "Knit Loungewear Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:knit-cardigan",
+      "type": "PlmSubSubCategory",
+      "name": "Knit Cardigan",
+      "aliases": [
+        "Knit Cardigan"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-trench-coat",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Trench Coat",
+      "aliases": [
+        "Woven Trench Coat"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:beachwear-top",
+      "type": "PlmSubSubCategory",
+      "name": "Beachwear Top",
+      "aliases": [
+        "Beachwear Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:beachwear-one-piece",
+      "type": "PlmSubSubCategory",
+      "name": "Beachwear One-Piece",
+      "aliases": [
+        "Beachwear One-Piece"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:sports-t-shirt",
+      "type": "PlmSubSubCategory",
+      "name": "Sports T-shirt",
+      "aliases": [
+        "Sports T-shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-jumpsuit",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Jumpsuit",
+      "aliases": [
+        "Woven Jumpsuit"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:beachwear-set",
+      "type": "PlmSubSubCategory",
+      "name": "Beachwear Set",
+      "aliases": [
+        "Beachwear Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:sports-loose-pants",
+      "type": "PlmSubSubCategory",
+      "name": "Sports Loose Pants",
+      "aliases": [
+        "Sports Loose Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:polo",
+      "type": "PlmSubSubCategory",
+      "name": "POLO",
+      "aliases": [
+        "POLO"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:woven-loungewear-top",
+      "type": "PlmSubSubCategory",
+      "name": "Woven Loungewear Top",
+      "aliases": [
+        "Woven Loungewear Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:sports-leggings",
+      "type": "PlmSubSubCategory",
+      "name": "Sports Leggings",
+      "aliases": [
+        "Sports Leggings"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:plmsubsubcategory:sweatshirt-set",
+      "type": "PlmSubSubCategory",
+      "name": "Sweatshirt Set",
+      "aliases": [
+        "Sweatshirt Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:jumper",
+      "type": "GarmentType",
+      "name": "Jumper",
+      "aliases": [
+        "Jumper"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:top-cardigan",
+      "type": "GarmentType",
+      "name": "Top Cardigan",
+      "aliases": [
+        "Top Cardigan"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:jacket-light-weight-bomber",
+      "type": "GarmentType",
+      "name": "Jacket/Light Weight/Bomber",
+      "aliases": [
+        "Jacket/Light Weight/Bomber"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:vest-waistcoat",
+      "type": "GarmentType",
+      "name": "Vest/Waistcoat",
+      "aliases": [
+        "Vest/Waistcoat"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:swimwear",
+      "type": "GarmentType",
+      "name": "Swimwear",
+      "aliases": [
+        "Swimwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:dress",
+      "type": "GarmentType",
+      "name": "Dress",
+      "aliases": [
+        "Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:suit-suit-pants",
+      "type": "GarmentType",
+      "name": "Suit/Suit Pants",
+      "aliases": [
+        "Suit/Suit Pants"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:scarf-cap-gloves",
+      "type": "GarmentType",
+      "name": "Scarf/Cap/Gloves",
+      "aliases": [
+        "Scarf/Cap/Gloves"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:beachwear",
+      "type": "GarmentType",
+      "name": "Beachwear",
+      "aliases": [
+        "Beachwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:polo-shirt",
+      "type": "GarmentType",
+      "name": "Polo Shirt",
+      "aliases": [
+        "Polo Shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:loungewear",
+      "type": "GarmentType",
+      "name": "Loungewear",
+      "aliases": [
+        "Loungewear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:t-shirt",
+      "type": "GarmentType",
+      "name": "T-Shirt",
+      "aliases": [
+        "T-Shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:coat-jacket-outwear",
+      "type": "GarmentType",
+      "name": "Coat/Jacket/Outwear",
+      "aliases": [
+        "Coat/Jacket/Outwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:jumpsuits",
+      "type": "GarmentType",
+      "name": "Jumpsuits",
+      "aliases": [
+        "Jumpsuits"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:hoodies-sweatshirts",
+      "type": "GarmentType",
+      "name": "Hoodies & Sweatshirts",
+      "aliases": [
+        "Hoodies & Sweatshirts"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:skirt",
+      "type": "GarmentType",
+      "name": "Skirt",
+      "aliases": [
+        "Skirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:sportswear-yoga",
+      "type": "GarmentType",
+      "name": "Sportswear/Yoga",
+      "aliases": [
+        "Sportswear/Yoga"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:shirt",
+      "type": "GarmentType",
+      "name": "Shirt",
+      "aliases": [
+        "Shirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:padded-down-jacket",
+      "type": "GarmentType",
+      "name": "Padded/Down Jacket",
+      "aliases": [
+        "Padded/Down Jacket"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:underwear",
+      "type": "GarmentType",
+      "name": "Underwear",
+      "aliases": [
+        "Underwear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:brushed-jacket",
+      "type": "GarmentType",
+      "name": "Brushed Jacket",
+      "aliases": [
+        "Brushed Jacket"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:homewear",
+      "type": "GarmentType",
+      "name": "Homewear",
+      "aliases": [
+        "Homewear"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:others",
+      "type": "GarmentType",
+      "name": "Others",
+      "aliases": [
+        "Others"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:shacket",
+      "type": "GarmentType",
+      "name": "Shacket",
+      "aliases": [
+        "Shacket"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:socks",
+      "type": "GarmentType",
+      "name": "Socks",
+      "aliases": [
+        "Socks"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:dog-clothing",
+      "type": "GarmentType",
+      "name": "Dog Clothing",
+      "aliases": [
+        "Dog Clothing"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:bag",
+      "type": "GarmentType",
+      "name": "Bag",
+      "aliases": [
+        "Bag"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:cape",
+      "type": "GarmentType",
+      "name": "Cape",
+      "aliases": [
+        "Cape"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:raincoat",
+      "type": "GarmentType",
+      "name": "Raincoat",
+      "aliases": [
+        "Raincoat"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:denim",
+      "type": "GarmentType",
+      "name": "Denim",
+      "aliases": [
+        "Denim"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:leather-pu",
+      "type": "GarmentType",
+      "name": "Leather/PU",
+      "aliases": [
+        "Leather/PU"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:lace",
+      "type": "GarmentType",
+      "name": "Lace",
+      "aliases": [
+        "Lace"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:shorts",
+      "type": "GarmentType",
+      "name": "Shorts",
+      "aliases": [
+        "Shorts"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:sweatshirt",
+      "type": "GarmentType",
+      "name": "Sweatshirt",
+      "aliases": [
+        "Sweatshirt"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:garmenttype:crop-top",
+      "type": "GarmentType",
+      "name": "Crop Top",
+      "aliases": [
+        "Crop Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:sampletype:development-sample",
+      "type": "SampleType",
+      "name": "Development Sample",
+      "aliases": [
+        "Development Sample"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:sampletype:shipment-sample",
+      "type": "SampleType",
+      "name": "Shipment Sample",
+      "aliases": [
+        "Shipment Sample"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:sampletype:shopping-sample",
+      "type": "SampleType",
+      "name": "Shopping Sample",
+      "aliases": [
+        "Shopping Sample"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:sampletype:borrowing-sample",
+      "type": "SampleType",
+      "name": "Borrowing Sample",
+      "aliases": [
+        "Borrowing Sample"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:piece",
+      "type": "Unit",
+      "name": "Piece",
+      "aliases": [
+        "Piece"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:grams",
+      "type": "Unit",
+      "name": "Grams",
+      "aliases": [
+        "Grams"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:set",
+      "type": "Unit",
+      "name": "Set",
+      "aliases": [
+        "Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:pair",
+      "type": "Unit",
+      "name": "PAIR",
+      "aliases": [
+        "PAIR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:kg",
+      "type": "Unit",
+      "name": "KG",
+      "aliases": [
+        "KG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:lbs",
+      "type": "Unit",
+      "name": "Lbs.",
+      "aliases": [
+        "Lbs."
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:yard",
+      "type": "Unit",
+      "name": "Yard",
+      "aliases": [
+        "Yard"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:centimeter",
+      "type": "Unit",
+      "name": "Centimeter",
+      "aliases": [
+        "Centimeter"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:unit:box",
+      "type": "Unit",
+      "name": "Box",
+      "aliases": [
+        "Box"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:top",
+      "type": "DesignPurpose",
+      "name": "Top",
+      "aliases": [
+        "Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:bottom",
+      "type": "DesignPurpose",
+      "name": "Bottom",
+      "aliases": [
+        "Bottom"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:all-in-one",
+      "type": "DesignPurpose",
+      "name": "All-in-one",
+      "aliases": [
+        "All-in-one"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:set",
+      "type": "DesignPurpose",
+      "name": "Set",
+      "aliases": [
+        "Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:long-top",
+      "type": "DesignPurpose",
+      "name": "Long Top",
+      "aliases": [
+        "Long Top"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:others",
+      "type": "DesignPurpose",
+      "name": "Others",
+      "aliases": [
+        "Others"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:top-bottom-set",
+      "type": "DesignPurpose",
+      "name": "Top Bottom Set",
+      "aliases": [
+        "Top Bottom Set"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:designpurpose:dress",
+      "type": "DesignPurpose",
+      "name": "Dress",
+      "aliases": [
+        "Dress"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2026",
+      "type": "SeasonYear",
+      "name": "2026",
+      "aliases": [
+        "2026"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2025",
+      "type": "SeasonYear",
+      "name": "2025",
+      "aliases": [
+        "2025"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2024",
+      "type": "SeasonYear",
+      "name": "2024",
+      "aliases": [
+        "2024"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2023",
+      "type": "SeasonYear",
+      "name": "2023",
+      "aliases": [
+        "2023"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2021",
+      "type": "SeasonYear",
+      "name": "2021",
+      "aliases": [
+        "2021"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2022",
+      "type": "SeasonYear",
+      "name": "2022",
+      "aliases": [
+        "2022"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2020",
+      "type": "SeasonYear",
+      "name": "2020",
+      "aliases": [
+        "2020"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2027",
+      "type": "SeasonYear",
+      "name": "2027",
+      "aliases": [
+        "2027"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2019",
+      "type": "SeasonYear",
+      "name": "2019",
+      "aliases": [
+        "2019"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2018",
+      "type": "SeasonYear",
+      "name": "2018",
+      "aliases": [
+        "2018"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2017",
+      "type": "SeasonYear",
+      "name": "2017",
+      "aliases": [
+        "2017"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2028",
+      "type": "SeasonYear",
+      "name": "2028",
+      "aliases": [
+        "2028"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2015",
+      "type": "SeasonYear",
+      "name": "2015",
+      "aliases": [
+        "2015"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:seasonyear:2205",
+      "type": "SeasonYear",
+      "name": "2205",
+      "aliases": [
+        "2205"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:7gg",
+      "type": "Gauge",
+      "name": "7GG",
+      "aliases": [
+        "7GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:12gg",
+      "type": "Gauge",
+      "name": "12GG",
+      "aliases": [
+        "12GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:12g",
+      "type": "Gauge",
+      "name": "12G",
+      "aliases": [
+        "12G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:5gg",
+      "type": "Gauge",
+      "name": "5GG",
+      "aliases": [
+        "5GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:7g",
+      "type": "Gauge",
+      "name": "7G",
+      "aliases": [
+        "7G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:5g",
+      "type": "Gauge",
+      "name": "5G",
+      "aliases": [
+        "5G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:3gg",
+      "type": "Gauge",
+      "name": "3GG",
+      "aliases": [
+        "3GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:3g",
+      "type": "Gauge",
+      "name": "3G",
+      "aliases": [
+        "3G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:5-7gg",
+      "type": "Gauge",
+      "name": "5.7GG",
+      "aliases": [
+        "5.7GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:3-5gg",
+      "type": "Gauge",
+      "name": "3.5GG",
+      "aliases": [
+        "3.5GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:14gg",
+      "type": "Gauge",
+      "name": "14GG",
+      "aliases": [
+        "14GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:3-5g",
+      "type": "Gauge",
+      "name": "3.5G",
+      "aliases": [
+        "3.5G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:18g",
+      "type": "Gauge",
+      "name": "18G",
+      "aliases": [
+        "18G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:crochet",
+      "type": "Gauge",
+      "name": "CROCHET",
+      "aliases": [
+        "CROCHET"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:10-2g",
+      "type": "Gauge",
+      "name": "10.2G",
+      "aliases": [
+        "10.2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:14g",
+      "type": "Gauge",
+      "name": "14G",
+      "aliases": [
+        "14G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:15g",
+      "type": "Gauge",
+      "name": "15G",
+      "aliases": [
+        "15G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:5-7g",
+      "type": "Gauge",
+      "name": "5.7G",
+      "aliases": [
+        "5.7G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:6-2g",
+      "type": "Gauge",
+      "name": "6.2G",
+      "aliases": [
+        "6.2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:15gg",
+      "type": "Gauge",
+      "name": "15GG",
+      "aliases": [
+        "15GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:2gg",
+      "type": "Gauge",
+      "name": "2GG",
+      "aliases": [
+        "2GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:9g",
+      "type": "Gauge",
+      "name": "9G",
+      "aliases": [
+        "9G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:10gg",
+      "type": "Gauge",
+      "name": "10GG",
+      "aliases": [
+        "10GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:3-5-7g",
+      "type": "Gauge",
+      "name": "3.5.7G",
+      "aliases": [
+        "3.5.7G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:9gg",
+      "type": "Gauge",
+      "name": "9GG",
+      "aliases": [
+        "9GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:2g",
+      "type": "Gauge",
+      "name": "2G",
+      "aliases": [
+        "2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:16gg",
+      "type": "Gauge",
+      "name": "16GG",
+      "aliases": [
+        "16GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:10g",
+      "type": "Gauge",
+      "name": "10G",
+      "aliases": [
+        "10G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:16g",
+      "type": "Gauge",
+      "name": "16G",
+      "aliases": [
+        "16G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:6gg",
+      "type": "Gauge",
+      "name": "6GG",
+      "aliases": [
+        "6GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:4g",
+      "type": "Gauge",
+      "name": "4G",
+      "aliases": [
+        "4G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:18gg",
+      "type": "Gauge",
+      "name": "18GG",
+      "aliases": [
+        "18GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:12-2g",
+      "type": "Gauge",
+      "name": "12.2G",
+      "aliases": [
+        "12.2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:5gg-12gg",
+      "type": "Gauge",
+      "name": "5GG,12GG",
+      "aliases": [
+        "5GG,12GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:7-2g",
+      "type": "Gauge",
+      "name": "7.2G",
+      "aliases": [
+        "7.2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:13-2g",
+      "type": "Gauge",
+      "name": "13.2G",
+      "aliases": [
+        "13.2G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:12gg-7gg",
+      "type": "Gauge",
+      "name": "12GG,7GG",
+      "aliases": [
+        "12GG,7GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:7gg-3-5gg",
+      "type": "Gauge",
+      "name": "7GG,3.5GG",
+      "aliases": [
+        "7GG,3.5GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:gauge:7gg-12gg",
+      "type": "Gauge",
+      "name": "7GG,12GG",
+      "aliases": [
+        "7GG,12GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d6",
+      "type": "Department",
+      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6",
+      "aliases": [
+        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d5",
+      "type": "Department",
+      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5",
+      "aliases": [
+        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d11",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11",
+      "aliases": [
+        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d2",
+      "type": "Department",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d9",
+      "type": "Department",
+      "name": "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9",
+      "aliases": [
+        "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d1",
+      "type": "Department",
+      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1",
+      "aliases": [
+        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d4",
+      "type": "Department",
+      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4",
+      "aliases": [
+        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d15",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15",
+      "aliases": [
+        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d7",
+      "type": "Department",
+      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7",
+      "aliases": [
+        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d6-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:marketing-sourcing-d2",
+      "type": "Department",
+      "name": "MARKETING&SOURCING D2",
+      "aliases": [
+        "MARKETING&SOURCING D2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d1-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d11-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d5-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d9-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d5-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d2-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d3",
+      "type": "Department",
+      "name": "\u7b2c\u4e09\u4e8b\u4e1a\u90e8\u00b7\u00b7D3",
+      "aliases": [
+        "\u7b2c\u4e09\u4e8b\u4e1a\u90e8\u00b7\u00b7D3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d15-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d4-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d2-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d15-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d1-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d6-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:marketing-sourcing-d1",
+      "type": "Department",
+      "name": "MARKETING&SOURCING D1",
+      "aliases": [
+        "MARKETING&SOURCING D1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d11-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:p-d",
+      "type": "Department",
+      "name": "P&D",
+      "aliases": [
+        "P&D"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d4-3-t3",
+      "type": "Department",
+      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 3\u7ec4\u00b7\u00b7T3",
+      "aliases": [
+        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 3\u7ec4\u00b7\u00b7T3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d15-3-t3",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 3\u7ec4\u00b7\u00b7T3",
+      "aliases": [
+        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 3\u7ec4\u00b7\u00b7T3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d10-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:showroom-sample-management",
+      "type": "Department",
+      "name": "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management",
+      "aliases": [
+        "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d2-6-t6",
+      "type": "Department",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 6\u7ec4\u00b7\u00b7T6",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 6\u7ec4\u00b7\u00b7T6"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d2-4-t4-shang-hai",
+      "type": "Department",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 4\u7ec4(\u4e0a\u6d77\uff09\u00b7\u00b7T4(Shang Hai)",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 4\u7ec4(\u4e0a\u6d77\uff09\u00b7\u00b7T4(Shang Hai)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:design-pd",
+      "type": "Department",
+      "name": "DESIGN&PD",
+      "aliases": [
+        "DESIGN&PD"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d7-2-t2",
+      "type": "Department",
+      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:qd-p-d-qd-sample-merchandising",
+      "type": "Department",
+      "name": "\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D - \u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising",
+      "aliases": [
+        "\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D - \u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d7-1-t1",
+      "type": "Department",
+      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:d6-3-t3-qing-dao",
+      "type": "Department",
+      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao)",
+      "aliases": [
+        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:uk-d1",
+      "type": "Department",
+      "name": "UK\u00b7\u00b7D1",
+      "aliases": [
+        "UK\u00b7\u00b7D1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:department:marketing-sourcing-d3",
+      "type": "Department",
+      "name": "MARKETING&SOURCING D3",
+      "aliases": [
+        "MARKETING&SOURCING D3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:1-t1",
+      "type": "ShoppingDepartment",
+      "name": "1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:r-d",
+      "type": "ShoppingDepartment",
+      "name": "R&D",
+      "aliases": [
+        "R&D"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d2",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:2-t2",
+      "type": "ShoppingDepartment",
+      "name": "2\u7ec4\u00b7\u00b7T2",
+      "aliases": [
+        "2\u7ec4\u00b7\u00b7T2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:uk-d2",
+      "type": "ShoppingDepartment",
+      "name": "UK\u00b7\u00b7D2",
+      "aliases": [
+        "UK\u00b7\u00b7D2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d2-1-t1",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2, 1\u7ec4\u00b7\u00b7T1",
+      "aliases": [
+        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2, 1\u7ec4\u00b7\u00b7T1"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d6",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6",
+      "aliases": [
+        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:3-t3-qing-dao-3",
+      "type": "ShoppingDepartment",
+      "name": "3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao), \u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b73\u7ec4\uff08\u9752\u5c9b\uff09",
+      "aliases": [
+        "3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao), \u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b73\u7ec4\uff08\u9752\u5c9b\uff09"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:knitwear-development",
+      "type": "ShoppingDepartment",
+      "name": "\u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development",
+      "aliases": [
+        "\u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:qd-sample-merchandising-qd-p-d-qd-product-design-development",
+      "type": "ShoppingDepartment",
+      "name": "\u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising, \u4ea7\u54c1\u5f00\u53d1\u4e2d\u5fc3\u00b7\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8, \u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development",
+      "aliases": [
+        "\u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising, \u4ea7\u54c1\u5f00\u53d1\u4e2d\u5fc3\u00b7\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8, \u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d13-sh",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u5341\u4e09\u4e8b\u4e1a\u90e8\uff08\u4e0a\u6d77\uff09\u00b7\u00b7 D13 (SH)",
+      "aliases": [
+        "\u7b2c\u5341\u4e09\u4e8b\u4e1a\u90e8\uff08\u4e0a\u6d77\uff09\u00b7\u00b7 D13 (SH)"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d10",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10",
+      "aliases": [
+        "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:d5",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5",
+      "aliases": [
+        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:qd-product-design-development",
+      "type": "ShoppingDepartment",
+      "name": "\u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development",
+      "aliases": [
+        "\u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:uk-d5",
+      "type": "ShoppingDepartment",
+      "name": "UK\u00b7\u00b7D5",
+      "aliases": [
+        "UK\u00b7\u00b7D5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:bettex-india-bettex-spain-bettex-usa-bettex-ireland-bettex-italy-bettex-turkey-bettex-uk-r-d-bettex-australia-logistics",
+      "type": "ShoppingDepartment",
+      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS",
+      "aliases": [
+        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:vp-office-2",
+      "type": "ShoppingDepartment",
+      "name": "\u7b2c\u4e8c\u526f\u603b\u7ecf\u7406\u529e\u516c\u5ba4\u00b7\u00b7VP OFFICE\u00b7\u00b72",
+      "aliases": [
+        "\u7b2c\u4e8c\u526f\u603b\u7ecf\u7406\u529e\u516c\u5ba4\u00b7\u00b7VP OFFICE\u00b7\u00b72"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:showroom-sample-management",
+      "type": "ShoppingDepartment",
+      "name": "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management",
+      "aliases": [
+        "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:knitwear-r-d",
+      "type": "ShoppingDepartment",
+      "name": "\u6bdb\u7ec7\u4ea7\u54c1\u7814\u53d1\u53ca\u5e02\u573a\u5f00\u53d1\u90e8\u00b7Knitwear R&D",
+      "aliases": [
+        "\u6bdb\u7ec7\u4ea7\u54c1\u7814\u53d1\u53ca\u5e02\u573a\u5f00\u53d1\u90e8\u00b7Knitwear R&D"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:t-jzh-product-design-development",
+      "type": "ShoppingDepartment",
+      "name": "T\u00b7\u8bbe\u8ba1\u7814\u53d1\u90e8, \u6c5f\u6d59\u6caa\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7JZH Product Design & Development",
+      "aliases": [
+        "T\u00b7\u8bbe\u8ba1\u7814\u53d1\u90e8, \u6c5f\u6d59\u6caa\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7JZH Product Design & Development"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:1-t1-knitwear-development",
+      "type": "ShoppingDepartment",
+      "name": "1\u7ec4\u00b7\u00b7T1, \u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development",
+      "aliases": [
+        "1\u7ec4\u00b7\u00b7T1, \u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:6-t6",
+      "type": "ShoppingDepartment",
+      "name": "6\u7ec4\u00b7\u00b7T6",
+      "aliases": [
+        "6\u7ec4\u00b7\u00b7T6"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:shoppingdepartment:bettex-india-bettex-spain-bettex-usa-bettex-ireland-bettex-italy-bettex-turkey-bettex-uk-r-d-marketing-sourcing-d1-bettex-australia-logistics",
+      "type": "ShoppingDepartment",
+      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS",
+      "aliases": [
+        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:no-machine-selected",
+      "type": "MachineType",
+      "name": "No Machine Selected",
+      "aliases": [
+        "No Machine Selected"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:domestic",
+      "type": "MachineType",
+      "name": "Domestic",
+      "aliases": [
+        "Domestic"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:cixing",
+      "type": "MachineType",
+      "name": "Cixing",
+      "aliases": [
+        "Cixing"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:stoll",
+      "type": "MachineType",
+      "name": "Stoll",
+      "aliases": [
+        "Stoll"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:shima-seiki",
+      "type": "MachineType",
+      "name": "Shima Seiki",
+      "aliases": [
+        "Shima Seiki"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:wholegarment",
+      "type": "MachineType",
+      "name": "Wholegarment",
+      "aliases": [
+        "Wholegarment"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:running-tiger",
+      "type": "MachineType",
+      "name": "Running Tiger",
+      "aliases": [
+        "Running Tiger"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:steiger",
+      "type": "MachineType",
+      "name": "Steiger",
+      "aliases": [
+        "Steiger"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:machinetype:terry",
+      "type": "MachineType",
+      "name": "Terry",
+      "aliases": [
+        "Terry"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:white",
+      "type": "Color",
+      "name": "WHITE",
+      "aliases": [
+        "WHITE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:black",
+      "type": "Color",
+      "name": "BLACK",
+      "aliases": [
+        "BLACK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:beige",
+      "type": "Color",
+      "name": "BEIGE",
+      "aliases": [
+        "BEIGE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:pink",
+      "type": "Color",
+      "name": "PINK",
+      "aliases": [
+        "PINK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:brown",
+      "type": "Color",
+      "name": "BROWN",
+      "aliases": [
+        "BROWN"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:blue",
+      "type": "Color",
+      "name": "BLUE",
+      "aliases": [
+        "BLUE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:grey",
+      "type": "Color",
+      "name": "GREY",
+      "aliases": [
+        "GREY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:multicolour",
+      "type": "Color",
+      "name": "MULTICOLOUR",
+      "aliases": [
+        "MULTICOLOUR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:off-white",
+      "type": "Color",
+      "name": "OFF WHITE",
+      "aliases": [
+        "OFF WHITE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:green",
+      "type": "Color",
+      "name": "GREEN",
+      "aliases": [
+        "GREEN"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:red",
+      "type": "Color",
+      "name": "RED",
+      "aliases": [
+        "RED"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:dark-blue",
+      "type": "Color",
+      "name": "DARK BLUE",
+      "aliases": [
+        "DARK BLUE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:navy",
+      "type": "Color",
+      "name": "NAVY",
+      "aliases": [
+        "NAVY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:khaki",
+      "type": "Color",
+      "name": "KHAKI",
+      "aliases": [
+        "KHAKI"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:purple",
+      "type": "Color",
+      "name": "PURPLE",
+      "aliases": [
+        "PURPLE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:yellow",
+      "type": "Color",
+      "name": "YELLOW",
+      "aliases": [
+        "YELLOW"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:gery",
+      "type": "Color",
+      "name": "GERY",
+      "aliases": [
+        "GERY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:dark-grey",
+      "type": "Color",
+      "name": "DARK GREY",
+      "aliases": [
+        "DARK GREY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:orange",
+      "type": "Color",
+      "name": "ORANGE",
+      "aliases": [
+        "ORANGE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:dark-green",
+      "type": "Color",
+      "name": "DARK GREEN",
+      "aliases": [
+        "DARK GREEN"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:light-gray",
+      "type": "Color",
+      "name": "LIGHT GRAY",
+      "aliases": [
+        "LIGHT GRAY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:white-and-black",
+      "type": "Color",
+      "name": "WHITE AND BLACK",
+      "aliases": [
+        "WHITE AND BLACK"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:dark-red",
+      "type": "Color",
+      "name": "DARK RED",
+      "aliases": [
+        "DARK RED"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:multi-colour",
+      "type": "Color",
+      "name": "MULTI COLOUR",
+      "aliases": [
+        "MULTI COLOUR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "plmex:color:stripes",
+      "type": "Color",
+      "name": "STRIPES",
+      "aliases": [
+        "STRIPES"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester",
+      "type": "Material",
+      "name": "POLYESTER",
+      "aliases": [
+        "POLYESTER"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:cotton",
+      "type": "Material",
+      "name": "COTTON",
+      "aliases": [
+        "COTTON"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:nylon",
+      "type": "Material",
+      "name": "NYLON",
+      "aliases": [
+        "NYLON"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:spandex",
+      "type": "Material",
+      "name": "SPANDEX",
+      "aliases": [
+        "SPANDEX"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:elastane",
+      "type": "Material",
+      "name": "ELASTANE",
+      "aliases": [
+        "ELASTANE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:viscose-28",
+      "type": "Material",
+      "name": "VISCOSE 28",
+      "aliases": [
+        "VISCOSE 28"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic",
+      "type": "Material",
+      "name": "ACRYLIC",
+      "aliases": [
+        "ACRYLIC"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:wool",
+      "type": "Material",
+      "name": "WOOL",
+      "aliases": [
+        "WOOL"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyamide",
+      "type": "Material",
+      "name": "POLYAMIDE",
+      "aliases": [
+        "POLYAMIDE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-15",
+      "type": "Material",
+      "name": "POLYESTER 15",
+      "aliases": [
+        "POLYESTER 15"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:cotton-40",
+      "type": "Material",
+      "name": "COTTON 40",
+      "aliases": [
+        "COTTON 40"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:viscose-30",
+      "type": "Material",
+      "name": "VISCOSE 30",
+      "aliases": [
+        "VISCOSE 30"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-5",
+      "type": "Material",
+      "name": "POLYESTER 5",
+      "aliases": [
+        "POLYESTER 5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:wool-2",
+      "type": "Material",
+      "name": "WOOL 2",
+      "aliases": [
+        "WOOL 2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-31",
+      "type": "Material",
+      "name": "ACRYLIC 31",
+      "aliases": [
+        "ACRYLIC 31"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:wool-3",
+      "type": "Material",
+      "name": "WOOL 3",
+      "aliases": [
+        "WOOL 3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-25",
+      "type": "Material",
+      "name": "ACRYLIC 25",
+      "aliases": [
+        "ACRYLIC 25"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-37",
+      "type": "Material",
+      "name": "ACRYLIC 37",
+      "aliases": [
+        "ACRYLIC 37"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-35",
+      "type": "Material",
+      "name": "POLYESTER 35",
+      "aliases": [
+        "POLYESTER 35"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:viscose",
+      "type": "Material",
+      "name": "VISCOSE",
+      "aliases": [
+        "VISCOSE"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-30",
+      "type": "Material",
+      "name": "ACRYLIC 30",
+      "aliases": [
+        "ACRYLIC 30"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-2-2",
+      "type": "Material",
+      "name": "POLYESTER 2",
+      "aliases": [
+        "POLYESTER 2"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:cotton-5",
+      "type": "Material",
+      "name": "COTTON 5",
+      "aliases": [
+        "COTTON 5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-8",
+      "type": "Material",
+      "name": "POLYESTER 8",
+      "aliases": [
+        "POLYESTER 8"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:recycled-polyester-50",
+      "type": "Material",
+      "name": "RECYCLED POLYESTER 50",
+      "aliases": [
+        "RECYCLED POLYESTER 50"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-20",
+      "type": "Material",
+      "name": "POLYESTER 20",
+      "aliases": [
+        "POLYESTER 20"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-10",
+      "type": "Material",
+      "name": "POLYESTER 10",
+      "aliases": [
+        "POLYESTER 10"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-28",
+      "type": "Material",
+      "name": "ACRYLIC 28",
+      "aliases": [
+        "ACRYLIC 28"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-16",
+      "type": "Material",
+      "name": "POLYESTER 16",
+      "aliases": [
+        "POLYESTER 16"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:acrylic-5",
+      "type": "Material",
+      "name": "ACRYLIC 5",
+      "aliases": [
+        "ACRYLIC 5"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-30",
+      "type": "Material",
+      "name": "POLYESTER 30",
+      "aliases": [
+        "POLYESTER 30"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:viscose-25",
+      "type": "Material",
+      "name": "VISCOSE 25",
+      "aliases": [
+        "VISCOSE 25"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:recycled-polyester-30",
+      "type": "Material",
+      "name": "RECYCLED POLYESTER 30",
+      "aliases": [
+        "RECYCLED POLYESTER 30"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-3",
+      "type": "Material",
+      "name": "POLYESTER 3",
+      "aliases": [
+        "POLYESTER 3"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:recycled-polyester",
+      "type": "Material",
+      "name": "RECYCLED POLYESTER",
+      "aliases": [
+        "RECYCLED POLYESTER"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:cotton-30",
+      "type": "Material",
+      "name": "COTTON 30",
+      "aliases": [
+        "COTTON 30"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-12",
+      "type": "Material",
+      "name": "POLYESTER 12",
+      "aliases": [
+        "POLYESTER 12"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:polyester-40",
+      "type": "Material",
+      "name": "POLYESTER 40",
+      "aliases": [
+        "POLYESTER 40"
+      ],
+      "external_ids": []
+    }
+  ]
+}

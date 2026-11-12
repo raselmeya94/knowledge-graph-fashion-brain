@@ -2,54 +2,58 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
-from knowledge_graph.config import DATA_ROOT
 from knowledge_graph.errors import NotFoundError, ValidationFailed
 from knowledge_graph.kg_registry.store import enrich_graph_record
 
 
 def _product_attributes_for_graph(platform, graph_id: str, enriched) -> dict[str, str]:
-    """Distinct Product columns for one KG (ontology + mapping + sampled nodes)."""
+    """Distinct Product columns for one KG (mapping + ontology entities + sampled nodes).
+
+    Mapping/relationships for this graph_id are the source of truth — not a fixed field set.
+    """
 
     attrs: dict[str, str] = {"name": "string", "id": "string"}
     caps = {str(item).casefold() for item in (enriched.capabilities or [])}
     entities = {str(item) for item in (enriched.entities or [])}
 
-    if "Brand" in entities or any("brand" in cap for cap in caps):
-        attrs["brand"] = "string"
-    if any("buyer" in cap for cap in caps) or graph_id == "own_products":
-        attrs["buyer"] = "string"
-    if "GarmentCategory" in entities:
-        attrs["category"] = "string"
-    if "Material" in entities:
-        attrs["material"] = "string"
-        attrs["composition"] = "string"
-    if "Color" in entities:
-        attrs["color"] = "string"
-    if "Season" in entities:
-        attrs["season"] = "string"
-    if "Availability" in entities:
-        attrs["availability"] = "string"
-    if "Section" in entities:
-        attrs["section"] = "string"
-    if any("price" in cap for cap in caps) or "Currency" in entities:
-        attrs["price"] = "number"
-        attrs["currency"] = "string"
+    # Ontology entity types → filter keys (Buyer → buyer, GarmentCategory → category, …).
+    try:
+        from knowledge_graph.retrieval.runtime_schema import _facet_filter_key
 
-    if graph_id == "ecom_products" or "ecom" in graph_id:
-        mapping_path = Path(DATA_ROOT) / "schemas" / "ecom_master_products_mapping.json"
-        if mapping_path.exists():
-            try:
-                payload = json.loads(mapping_path.read_text(encoding="utf-8"))
-                for key in (payload.get("product_properties") or {}):
-                    attrs[str(key)] = "string"
-            except Exception:
-                pass
-        for key in ("family", "subfamily", "section", "availability", "brand", "category"):
-            attrs.setdefault(key, "string")
+        for entity in entities:
+            if entity in {"Product", "Entity"} or str(entity).startswith("Price") or str(entity).startswith("Availability"):
+                continue
+            attrs.setdefault(_facet_filter_key(entity), "string")
+    except Exception:
+        pass
+    if any("price" in cap for cap in caps) or "Currency" in entities:
+        attrs.setdefault("price", "number")
+        attrs.setdefault("currency", "string")
+
+    # Any authorized_sql / mapped product KG: load that graph's mapping.
+    try:
+        from knowledge_graph.sources.mapping_store import get_mapping, mapping_exists
+
+        if mapping_exists(graph_id):
+            mapping = get_mapping(graph_id).get("mapping") or {}
+            for key in (mapping.get("product_properties") or {}):
+                attrs.setdefault(str(key), "string")
+            from knowledge_graph.retrieval.runtime_schema import _facet_filter_key
+
+            for rel in mapping.get("relationships") or []:
+                if not isinstance(rel, dict):
+                    continue
+                col = str(rel.get("from_column") or "").strip()
+                if col:
+                    attrs.setdefault(col, "string")
+                end = str(rel.get("end_type") or "").strip()
+                if end:
+                    attrs.setdefault(_facet_filter_key(end), "string")
+    except Exception:
+        pass
+
     if graph_id == "own_products":
         from knowledge_graph.retrieval.products import CATALOG_FIELDS
 

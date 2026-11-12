@@ -10,7 +10,18 @@ from fashion_brain.agents.contracts import (
     Retrieved,
 )
 from fashion_brain.agents.conversation_context import ConversationContextAgent
-from fashion_brain.agents.product_spec import ProductSpecificationAgent
+from fashion_brain.agents.product_spec import (
+    ProductSpecificationAgent,
+    SPEC_ANCHOR_FIELDS,
+    SPEC_CORE_FIELDS,
+    SPEC_FIELD_ORDER,
+    SPEC_IMAGE_FIELDS,
+    SPEC_SUPPORT_FIELDS,
+    SAMPLE_IMAGE_SYSTEM,
+    SPECIFICATION_RESPONSE_SYSTEM,
+    findings_are_product_specification,
+)
+from fashion_brain.agents.slash_commands import parse_slash_command
 from fashion_brain.agents._impl import (
     IntentionAgent,
     GraphRouterAgent,
@@ -43,6 +54,13 @@ __all__ = [
     "IntentSummary",
     "ProductSpecificationAgent",
     "RESPONSE_SYSTEM",
+    "SPEC_ANCHOR_FIELDS",
+    "SPEC_CORE_FIELDS",
+    "SPEC_FIELD_ORDER",
+    "SPEC_IMAGE_FIELDS",
+    "SPEC_SUPPORT_FIELDS",
+    "SAMPLE_IMAGE_SYSTEM",
+    "SPECIFICATION_RESPONSE_SYSTEM",
     "ResponseAgent",
     "Retrieved",
     "SAMPLE_DESIGN_SYSTEM",
@@ -52,6 +70,8 @@ __all__ = [
     "ThinkingBrain",
     "_specification_text",
     "build_model_provider",
+    "findings_are_product_specification",
+    "parse_slash_command",
     "requests_sample_design",
     "response_messages",
     "sample_design_messages",

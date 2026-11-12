@@ -10,9 +10,15 @@ generated/
 # Runtime only — keep folder via .gitkeep; ignore contents
 data/generated/**
 !data/generated/.gitkeep
-# Local DB dumps exceed GitHub's 100MB limit
+# Local DB dumps / large data exceed GitHub's 100MB limit
 data/*.sql
+data_backup_*/
+plmex_data/*.csv
+*.sql.bak
+fashion_brain.zip
+fashion_brain1/
 knowledge_graph/generated/
+tmp_probe_*.py
 *.log
 .neo4j/
 .idea/

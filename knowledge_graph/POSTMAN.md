@@ -12,7 +12,28 @@ Complete step-by-step guide to rebuild the KG **only via HTTP / Postman**, using
 
 **Assumption after wipe:** Neo4j is empty, `data/raw` is empty, no `kg_registry.json`, no schemas on disk. The API boots empty; you create everything with POST.
 
-Do **not** start with sync/query — those fail until ontologies, graphs, and sources exist.
+### Official UI wizard (preferred)
+
+Collection folder **`0 UI wizard (empty → live)`** — all HTTP, no file copy. Full plan: [`UI_CONTROL_PLAN.md`](UI_CONTROL_PLAN.md).
+
+| # | Method | URL | Body |
+| --- | --- | --- | --- |
+| 1 | `GET` | `/health` | — |
+| 2–4 | `GET` | `/ontologies` · `/api/sources` · `/api/graphs` | inspect |
+| 5 | `GET` | `/api/setup/checklist` | — |
+| 6 | `POST` | `/ontologies` | `POST_ontologies_ecom.json` |
+| 7 | `GET` | `/ontologies/ecom` | — |
+| 8 | `PUT` | `/api/sources/ecom_products/mapping` | `ecom_master_products_mapping.json` |
+| 9–10 | `POST` | `/api/db/connections` · `…/test` | `POST_api_db_connections.json` |
+| 11 | `GET` | `/api/db/connection?table=master_products` | — |
+| 12 | `POST` | `/api/sources` | `POST_api_sources_ecom_products.json` |
+| 13 | `POST` | `/graphs` | `POST_graphs_ecom_products.json` |
+| 14 | `GET` | `/api/setup/checklist` | expect `ready_to_build: true` |
+| 15 | `POST` | `/api/graphs/ecom_products/build` | `POST_api_graphs_build.json` |
+| 16–17 | `GET` | `/jobs/{{jobId}}` · `/api/graphs/…/build/status` | poll progress |
+| 18+ | query / brain | … | … |
+
+Do **not** start build until checklist is ready.
 
 ---
 
@@ -63,9 +84,9 @@ FASHIONGPT_ECOM_DSN=postgresql://USER:PASSWORD@HOST:5432/DB
 # or POSTGRES_HOST / POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 ```
 
-### 0.4 E-com column mapping file (not an API)
+### 0.4 E-com column mapping file
 
-Sync reads the mapping from disk. Before Step 5, copy:
+Sync reads the mapping from disk. `POST /api/kg/build` restores it automatically when missing. For manual sync only, copy:
 
 ```text
 postman/bodies/ecom_master_products_mapping.json
@@ -81,6 +102,8 @@ For each POST below: **Body → raw → JSON**, then paste the file contents fro
 ## Pipeline overview
 
 ```text
+Fast:  GET /api/db/connection → POST /api/kg/build (sync) → poll job → query
+Manual:
 1 Health / empty checks
 2 POST ontologies      (ecom → product → news → system)
 3 POST graphs          (ecom_products → own_products → news → kg_system)
@@ -334,7 +357,10 @@ Other useful bodies (edit in Postman):
 
 | Method | URL |
 | --- | --- |
-| `GET` | `/products?material=cotton&limit=5&offset=0` |
+| `GET` | `/products?material=cotton&limit=5&offset=0` | Neo4j cards; saves `productId` |
+| `POST` | `/api/graphs/query` | body [`POST_api_graphs_get_product.json`](../postman/bodies/POST_api_graphs_get_product.json) — full detail |
+
+Collection folder: **`Products (list → detail)`** (run 01 → 03).
 
 Prefer `/brain/retrieve` for Neo4j e-com.
 
@@ -394,6 +420,8 @@ Use `ontology_id=news`, `graph_id=news` after Steps 2–3.
 | POST | `/api/graphs/rebuild` | 5A alternate |
 | GET | `/api/metadata` | Step 6 |
 | GET | `/api/metadata/values` | Step 6 |
+| GET | `/api/db/connection` | Folder 0 step 02 / Plan API `0` |
+| POST | `/api/kg/build` | Folder 0 step 03 / Plan API `0b` · body `POST_api_kg_build.json` |
 
 ### Registry / graphs (legacy mounts, same server)
 
@@ -450,7 +478,9 @@ Use `ontology_id=news`, `graph_id=news` after Steps 2–3.
 | `POST_api_sources_ecom_products.json` | POST `/api/sources` |
 | `POST_api_sources_own_products.json` | POST `/api/sources` |
 | `POST_api_sources_news.json` | POST `/api/sources` |
-| `POST_api_graphs_query_ecom.json` | POST `/api/graphs/query` |
+| `POST_api_kg_build.json` | POST `/api/kg/build` |
+| `POST_api_graphs_query_ecom.json` | POST `/api/graphs/query` (`list_products`) |
+| `POST_api_graphs_get_product.json` | POST `/api/graphs/query` (`get_product`, `{{productId}}`) |
 | `POST_api_graphs_cross_query.json` | POST `/api/graphs/cross-query` |
 | `POST_brain_retrieve_ecom_brand.json` | POST `/brain/retrieve` |
 | `POST_kg_pipeline_news_text.json` | POST `/kg/pipeline` |

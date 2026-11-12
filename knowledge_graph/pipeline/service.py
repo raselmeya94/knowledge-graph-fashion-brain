@@ -74,20 +74,8 @@ class Platform:
             self.graph.ping()
         except GraphBackendUnavailable as exc:
             self.degraded_reason = exc.message
-        # Warm facet embeddings once in a background thread (non-blocking boot).
-        if getattr(settings, "entity_linker_embeddings", False) and not self.degraded_reason:
-            import threading
-
-            def _warm():
-                try:
-                    from knowledge_graph.linking.embeddings import warm_facet_index
-
-                    warm = warm_facet_index(self, "ecom_products")
-                    LOGGER.info("entity linker embeddings warm=%s", warm)
-                except Exception as exc:
-                    LOGGER.warning("entity linker embedding warm skipped: %s", exc)
-
-            threading.Thread(target=_warm, name="entity-linker-warm", daemon=True).start()
+        # Facet warm runs from reload_query_data (background) after registry load —
+        # avoid a second warm thread here that races reset_facet_index().
 
     def ontology_for(self, graph_id: str) -> Ontology:
         graph = self.kg_registry.get_graph(graph_id)
@@ -410,14 +398,6 @@ class Platform:
             shared_n,
             catalog_n,
         )
-        if getattr(self.settings, "entity_linker_embeddings", False):
-            try:
-                from knowledge_graph.linking.embeddings import reset_facet_index, warm_facet_index
-
-                reset_facet_index()
-                warm_facet_index(self, "ecom_products")
-            except Exception as exc:
-                LOGGER.warning("entity linker re-warm after reload failed: %s", exc)
         return stats
 
     def load_saved_envelopes(self, source_id: str) -> int:
@@ -448,6 +428,7 @@ class Platform:
     def build_shared(self) -> dict[str, int]:
         if self.degraded_reason:
             return {}
+        self.refresh_union_ontology()
         scorer = None
         if self.settings.resolution_similarity == "lexical":
             scorer = TokenJaccardScorer(set(self.ontology.review_stopwords), self.ontology.review_min_token_length)

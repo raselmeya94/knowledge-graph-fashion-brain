@@ -84,7 +84,11 @@ def validate_ontology(ontology: Ontology) -> None:
         ids.add(entity.id)
         names = [entity.name, *entity.aliases]
         for name in names:
-            key = (entity.type, normalize_name(name))
+            nn = normalize_name(name)
+            # Symbol-only aliases (£, €, $) normalize to "" — skip, do not collide.
+            if not nn:
+                continue
+            key = (entity.type, nn)
             owner = alias_index.get(key)
             if owner is not None and owner != entity.id:
                 raise ValidationFailed(
@@ -173,6 +177,8 @@ def combine_ontologies(product: Ontology, news: Ontology) -> Ontology:
 
     entity_types = list(product.entity_types)
     allowlist = {key: [list(pair) for pair in pairs] for key, pairs in product.relationship_allowlist.items()}
+    canonical_entities = list(product.canonical_entities)
+    canonical_ids = {entity.id for entity in canonical_entities}
     for entity_type in news.entity_types:
         if entity_type not in entity_types:
             entity_types.append(entity_type)
@@ -181,6 +187,10 @@ def combine_ontologies(product: Ontology, news: Ontology) -> Ontology:
         for pair in pairs:
             if pair not in bucket:
                 bucket.append(list(pair))
+    for entity in news.canonical_entities:
+        if entity.id not in canonical_ids:
+            canonical_entities.append(entity)
+            canonical_ids.add(entity.id)
     return Ontology(
         name=product.name,
         version=product.version,
@@ -189,5 +199,5 @@ def combine_ontologies(product: Ontology, news: Ontology) -> Ontology:
         relationship_allowlist=allowlist,
         review_stopwords=list(product.review_stopwords),
         review_min_token_length=product.review_min_token_length,
-        canonical_entities=list(product.canonical_entities),
+        canonical_entities=canonical_entities,
     )

@@ -160,6 +160,26 @@ def test_agent_answers_are_grounded(demo, monkeypatch):
     assert plan_routes("How many synthetic demo products are in the catalog?") == ["product_count"]
     assert plan_routes("Who exports denim to the EU?") == ["news"]
     assert plan_routes("What is Bangladesh's denim market share?") == ["news"]
+    # Catalog price movers must not route to news ("largest" used to false-trigger RANKED_IN).
+    assert plan_routes("Which products had the largest price decreases?") == ["product_count"]
+    assert plan_routes("Which products had the largest price increases?") == ["product_count"]
+    # Ranking/metric phrasing must never become garment/category filters.
+    from fashion_brain.ask import resolve_catalog_plan
+
+    assert resolve_catalog_plan("Which products had the largest price decreases?").get("filters") == {}
+    assert resolve_catalog_plan("Which products had the largest price increases?").get("filters") == {}
+    # Compare asks: party names are brands; task words (similar/moves) never become filters.
+    compare_q = (
+        "Compare historical price moves for similar Zara and Primark products "
+        "in the same category."
+    )
+    assert plan_routes(compare_q) == ["product_count"]
+    compare_plan = resolve_catalog_plan(compare_q)
+    brand = str((compare_plan.get("filters") or {}).get("brand") or "").casefold()
+    assert "zara" in brand and "primark" in brand
+    assert "|" in brand
+    assert not (compare_plan.get("filters") or {}).get("garment")
+    assert not (compare_plan.get("filters") or {}).get("buyer")
 
     materials = answer_question(demo, "Which materials are used by our demo products?", INTERNAL)
     assert "Cotton" in materials.answer

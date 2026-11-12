@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
-from knowledge_graph.config import DATA_ROOT
 from knowledge_graph.errors import NotFoundError
+from knowledge_graph.sources.mapping_store import get_mapping, mapping_exists
 
 
 def source_schema(platform, source_id: str) -> dict[str, Any]:
@@ -35,7 +33,16 @@ def source_schema(platform, source_id: str) -> dict[str, Any]:
         except Exception:
             ontology = None
 
-    mapping = _load_mapping(source_id)
+    mapping = None
+    mapping_path = None
+    if mapping_exists(source_id):
+        try:
+            payload = get_mapping(source_id)
+            mapping = payload.get("mapping")
+            mapping_path = payload.get("path")
+        except Exception:
+            mapping = None
+
     return {
         "source_id": source_id,
         "source": source.model_dump(),
@@ -43,19 +50,7 @@ def source_schema(platform, source_id: str) -> dict[str, Any]:
         "ontology_id": ontology_id,
         "ontology": ontology,
         "mapping": mapping,
-        "note": "Schema is registry/mapping-backed. Use GET /api/metadata/values for paginated attribute discovery.",
+        "mapping_path": mapping_path,
+        "mapping_present": mapping is not None,
+        "note": "Upload mapping via POST /api/sources/{id}/mapping. Use GET /api/metadata/values for value discovery.",
     }
-
-
-def _load_mapping(source_id: str) -> dict[str, Any] | None:
-    candidates = {
-        "ecom_products": DATA_ROOT / "schemas" / "ecom_master_products_mapping.json",
-        "own_products": DATA_ROOT / "schemas" / "product-knowledge-ontology.json",
-    }
-    path = candidates.get(source_id)
-    if path is None or not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {"path": str(path), "error": "invalid_json"}

@@ -2,10 +2,12 @@ import pytest
 
 from knowledge_graph.errors import RelationshipValidationError
 from knowledge_graph.graph.memory import MemoryGraphRepository
+from knowledge_graph.graph.neo4j_repo import Neo4jGraphRepository
 from knowledge_graph.ids import primary_id, source_entity_id
 from knowledge_graph.models import GraphEdge, GraphNode, ReviewDecision
-from knowledge_graph.ontology import load_ontology
+from knowledge_graph.ontology import CanonicalEntity, Ontology, combine_ontologies, load_ontology
 from knowledge_graph.resolution.matcher import match_entity
+from knowledge_graph.resolution.shared import build_shared_graph
 from tests.conftest import ROOT
 
 
@@ -166,6 +168,96 @@ def test_relationship_allowlist_and_unique_ids(ontology):
     assert source_entity_id("own_products", "Company", "威海倍佳贸易有限公司") == "plmex:company:威海倍佳贸易有限公司"
     with pytest.raises(ValueError):
         source_entity_id("own_products", "Company", "---")
+
+
+def test_combined_ontologies_keep_canonical_entities_for_shared_resolution():
+    product = Ontology(
+        name="product",
+        version="1",
+        entity_types=["Brand"],
+        relationship_allowlist={},
+        canonical_entities=[
+            CanonicalEntity(id="ecom:brand:example", type="Brand", name="Example"),
+        ],
+    )
+    plmex = Ontology(
+        name="plmex",
+        version="1",
+        entity_types=["Brand"],
+        relationship_allowlist={},
+        canonical_entities=[
+            CanonicalEntity(id="plmex:brand:papaya", type="Brand", name="Papaya"),
+        ],
+    )
+    combined = combine_ontologies(product, plmex)
+    repo = MemoryGraphRepository(combined)
+    repo.upsert_node(
+        GraphNode(
+            id="plmex_products:brand:papaya",
+            labels=["Entity", "SourceEntity", "Brand"],
+            graph="plmex_products",
+            properties={"name": "Papaya", "entity_type": "Brand", "lifecycle": "active"},
+        )
+    )
+
+    counts = build_shared_graph(repo, combined, [])
+
+    assert {entity.id for entity in combined.canonical_entities} == {
+        "ecom:brand:example",
+        "plmex:brand:papaya",
+    }
+    assert repo.get_node("plmex:brand:papaya") is not None
+    assert repo.find_edges(rel_type="RESOLVES_TO")[0].end_id == "plmex:brand:papaya"
+    assert counts["verified"] == 1
+
+
+def test_neo4j_edge_lookup_anchors_on_indexed_endpoint_ids():
+    class Session:
+        query = ""
+        params = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def run(self, query, params):
+            self.query = query
+            self.params = params
+            return []
+
+    class Driver:
+        def __init__(self):
+            self.current_session = Session()
+
+        def session(self, *, database):
+            return self.current_session
+
+    ontology = Ontology(
+        name="test",
+        version="1",
+        entity_types=["Brand"],
+        relationship_allowlist={},
+        canonical_entities=[],
+    )
+    driver = Driver()
+    repo = Neo4jGraphRepository(driver, ontology)
+
+    assert repo.find_edges(
+        graph="shared",
+        rel_type="RESOLVES_TO",
+        start_id="source:1",
+        end_id="canonical:1",
+    ) == []
+
+    assert "MATCH (a:Entity {id: $start_id})-[r:RESOLVES_TO]->(b:Entity {id: $end_id})" in driver.current_session.query
+    assert "IS NULL OR" not in driver.current_session.query
+    assert driver.current_session.params == {
+        "graph": "shared",
+        "start_id": "source:1",
+        "end_id": "canonical:1",
+    }
 
 
 def test_new_source_registration_does_not_require_engine_edits():

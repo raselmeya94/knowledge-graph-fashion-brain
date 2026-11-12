@@ -20,14 +20,17 @@ cd frontend
 npm start
 ```
 
-Open http://127.0.0.1:5173/login.html
+Open http://127.0.0.1:5173/ (redirects to login) or http://127.0.0.1:5173/login.html
+On the LAN: `http://<this-pc-ip>:5173/` (e.g. http://192.168.20.110:5173/)
 
-- User → `/user/`
+- User → `/user/`; conversations use `/user/<username>/<chat-id>` and can be reopened directly.
 - Admin → `/admin/`
 
-Admin **Scraping wizard** walks extract → chunk → propose → queue → approve → commit. Each step shows input and output; use **Next** after a successful run. Commit can target an existing ontology/graph or create new ones linked to master.
+Conversation links are resolved by the UI and loaded through the authenticated API, which continues to enforce conversation ownership. Deep-link refreshes are supported by the `serve.json` rewrite when using `npm start`; Python's built-in static server does not read that rewrite configuration.
 
-API base URL is set in [`shared/config.js`](shared/config.js) (`http://127.0.0.1:8000`). Change it if Fashion Brain listens elsewhere.
+The admin sidebar follows the KG Postman **“0 UI wizard (empty → live)”** flow: **KG setup wizard** handles inspect → ontology → mapping → database connection → source → graph → checklist → build/status → query; **Graph overview** shows registered resources and sync/rebuild actions. Legacy PLM-ingest and standalone query panels are not part of this admin UI. The wizard calls the authenticated Fashion Brain admin API, which proxies the required Knowledge Graph endpoints server-to-server; the browser does not need direct access to the KG service or its credentials. Configure the KG URL and any `FASHIONGPT_API_TOKEN` on the backend. Database passwords are not collected by the UI; configure the password environment variable on the KG server.
+
+The Fashion Brain API base URL is set in [`shared/config.js`](shared/config.js) (`http://127.0.0.1:8000`). Change it if Fashion Brain listens elsewhere.
 
 Without npm:
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from knowledge_graph.construction.ollama import OllamaTool
 from knowledge_graph.construction.tools.extract_html import ExtractHtmlTool
 from knowledge_graph.construction.tools.extract_text import ExtractTextTool
 from knowledge_graph.construction.tools.ingest import IngestGraphTool
@@ -19,6 +18,7 @@ from knowledge_graph.construction.tools.understand_image import UnderstandImageT
 
 
 def tool_registry() -> dict:
+    # No OllamaTool — LLM removed from KG.
     tools = [
         ExtractTextTool(),
         ExtractHtmlTool(),
@@ -32,6 +32,5 @@ def tool_registry() -> dict:
         UpdateReviewTool(),
         RemoveReviewRelationshipTool(),
         IngestGraphTool(),
-        OllamaTool(),
     ]
     return {tool.name: tool for tool in tools}

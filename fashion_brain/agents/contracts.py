@@ -24,6 +24,12 @@ class Intention:
     available_attributes: list[str] = field(default_factory=list)
     # Distinct facet-node count ("how many brands") — not a product group_by.
     count_entity: str | None = None
+    # Structured query plan (optional; filled by QueryPlanner / Intention).
+    metrics: list[str] = field(default_factory=list)
+    operations: list[str] = field(default_factory=list)
+    response_type: str | None = None  # concise|stats|comparison|trend|analysis_report|…
+    retrieve_mode: str | None = None  # text2cypher|analytical_tool|template
+    time_range: str | None = None
 
 
 @dataclass
@@ -45,6 +51,13 @@ class Retrieved:
     unavailable: list[str]
     synthetic_data: bool = False
     result_id: str | None = None
+    # Last working graph query — reused/adapted on contextual follow-ups.
+    cypher: str | None = None
+    cypher_params: dict = field(default_factory=dict)
+    resolved: dict = field(default_factory=dict)
+    extracted: dict = field(default_factory=dict)
+    response_type: str | None = None
+    retrieve_mode: str | None = None
 
 
 @dataclass
@@ -57,6 +70,7 @@ class IntentSummary:
     group_by: str | None = None
     clarification_required: bool = False
     references_prior_chat: bool = False
+    resolved_terms: list[str] = field(default_factory=list)
 
 
 @dataclass

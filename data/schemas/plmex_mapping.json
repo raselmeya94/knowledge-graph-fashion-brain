@@ -1,0 +1,436 @@
+{
+  "source_id": "plmex_products",
+  "source_table": "plmex_products",
+  "primary_key": [
+    "code"
+  ],
+  "product_id_template": "plmex:product:{code}",
+  "graph_id": "plmex_products",
+  "ontology": "plmex-products-ontology",
+  "ontology_version": "4.1.0",
+  "ontology_id": "plmex",
+  "connection_id": "plmex_postgres",
+  "database": "plmex_live",
+  "watermark_columns": [
+    "updated_at"
+  ],
+  "description": "Column map from Postgres plmex_live.public.plmex_products \u2192 Neo4j plmex_products, aligned with plmex ontology v4.1.0. Exact DB column names. AI tag columns are comma-separated text \u2192 one edge per token.",
+  "product_properties": {
+    "code": {
+      "column": "code",
+      "required": true
+    },
+    "composition": {
+      "column": "composition"
+    },
+    "category": {
+      "column": "category"
+    },
+    "plm_main_category": {
+      "column": "plm_main_category"
+    },
+    "plm_sub_category": {
+      "column": "plm_sub_category"
+    },
+    "plm_sub_sub_category": {
+      "column": "plm_sub_sub_category"
+    },
+    "brand": {
+      "column": "brand"
+    },
+    "unit": {
+      "column": "unit"
+    },
+    "gauge": {
+      "column": "gauge"
+    },
+    "gender": {
+      "column": "gender"
+    },
+    "sample_collection_type": {
+      "column": "sample_collection_type"
+    },
+    "shipment_quantity": {
+      "column": "shipment_quantity"
+    },
+    "shipment_date": {
+      "column": "shipment_date"
+    },
+    "garment_type": {
+      "column": "garment_type"
+    },
+    "design_for": {
+      "column": "design_for"
+    },
+    "knit_machine_type": {
+      "column": "knit_machine_type"
+    },
+    "knitting_time": {
+      "column": "knitting_time"
+    },
+    "design_feature": {
+      "column": "design_feature"
+    },
+    "merchandiser": {
+      "column": "merchandiser"
+    },
+    "department": {
+      "column": "department"
+    },
+    "shopping_department": {
+      "column": "shopping_department"
+    },
+    "season_year": {
+      "column": "season_year"
+    },
+    "designer": {
+      "column": "designer"
+    },
+    "style_reference": {
+      "column": "style_reference"
+    },
+    "customer_style_reference": {
+      "column": "customer_style_reference"
+    },
+    "style_feature": {
+      "column": "style_feature"
+    },
+    "color": {
+      "column": "color"
+    },
+    "weight": {
+      "column": "weight"
+    },
+    "gsm": {
+      "column": "gsm"
+    },
+    "cuttable_width": {
+      "column": "cuttable_width"
+    },
+    "sample_making_date": {
+      "column": "sample_making_date"
+    },
+    "current_stock": {
+      "column": "current_stock",
+      "type": "integer"
+    },
+    "current_location": {
+      "column": "current_location"
+    },
+    "purchased_by": {
+      "column": "purchased_by"
+    },
+    "created_by": {
+      "column": "created_by"
+    },
+    "created_at": {
+      "column": "created_at"
+    },
+    "updated_at": {
+      "column": "updated_at"
+    },
+    "buyer": {
+      "column": "buyer"
+    },
+    "ai_event_tags": {
+      "column": "ai_event_tags"
+    },
+    "ai_construction_tags": {
+      "column": "ai_construction_tags"
+    },
+    "ai_material_tags": {
+      "column": "ai_material_tags"
+    },
+    "ai_finish_tags": {
+      "column": "ai_finish_tags"
+    },
+    "ai_special_tags": {
+      "column": "ai_special_tags"
+    }
+  },
+  "neo4j_product_properties": [
+    "code",
+    "composition",
+    "unit",
+    "knitting_time",
+    "weight",
+    "gsm",
+    "cuttable_width",
+    "sample_making_date",
+    "shipment_quantity",
+    "shipment_date",
+    "current_stock",
+    "current_location",
+    "style_reference",
+    "customer_style_reference",
+    "created_at",
+    "updated_at",
+    "source"
+  ],
+  "relationships": [
+    {
+      "rel_type": "HAS_BRAND",
+      "end_type": "Brand",
+      "from_column": "brand",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_BUYER",
+      "end_type": "Buyer",
+      "from_column": "buyer",
+      "required": false
+    },
+    {
+      "rel_type": "USES_MATERIAL",
+      "end_type": "Material",
+      "from_column": "composition",
+      "required": false,
+      "notes": "Parse composition percent tokens (e.g. 50%Viscose 28%Polyester); percentage on edge"
+    },
+    {
+      "rel_type": "PRIMARY_MATERIAL",
+      "end_type": "Material",
+      "from_column": "composition",
+      "required": false,
+      "notes": "Highest percentage fiber when parseable"
+    },
+    {
+      "rel_type": "BELONGS_TO_CATEGORY",
+      "end_type": "GarmentCategory",
+      "from_column": "category",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_PLM_MAIN_CATEGORY",
+      "end_type": "PlmMainCategory",
+      "from_column": "plm_main_category",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_PLM_SUB_CATEGORY",
+      "end_type": "PlmSubCategory",
+      "from_column": "plm_sub_category",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_PLM_SUB_SUB_CATEGORY",
+      "end_type": "PlmSubSubCategory",
+      "from_column": "plm_sub_sub_category",
+      "required": false
+    },
+    {
+      "rel_type": "PARENT_CATEGORY",
+      "start_from_column": "plm_sub_category",
+      "end_from_column": "plm_main_category",
+      "start_type": "PlmSubCategory",
+      "end_type": "PlmMainCategory",
+      "required": false,
+      "notes": "PlmSubCategory \u2192 PlmMainCategory when both present"
+    },
+    {
+      "rel_type": "PARENT_CATEGORY",
+      "start_from_column": "plm_sub_sub_category",
+      "end_from_column": "plm_sub_category",
+      "start_type": "PlmSubSubCategory",
+      "end_type": "PlmSubCategory",
+      "required": false,
+      "notes": "PlmSubSubCategory \u2192 PlmSubCategory when both present"
+    },
+    {
+      "rel_type": "PARENT_CATEGORY",
+      "start_from_column": "category",
+      "end_from_column": "plm_main_category",
+      "start_type": "GarmentCategory",
+      "end_type": "PlmMainCategory",
+      "required": false,
+      "notes": "GarmentCategory \u2192 PlmMainCategory when both present"
+    },
+    {
+      "rel_type": "HAS_GARMENT_TYPE",
+      "end_type": "GarmentType",
+      "from_column": "garment_type",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_GENDER",
+      "end_type": "Gender",
+      "from_column": "gender",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_COLOR",
+      "end_type": "Color",
+      "from_column": "color",
+      "required": false
+    },
+    {
+      "rel_type": "PRIMARY_COLOR",
+      "end_type": "Color",
+      "from_column": "color",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_GAUGE",
+      "end_type": "Gauge",
+      "from_column": "gauge",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_SAMPLE_TYPE",
+      "end_type": "SampleType",
+      "from_column": "sample_collection_type",
+      "required": false
+    },
+    {
+      "rel_type": "DESIGNED_FOR",
+      "end_type": "DesignPurpose",
+      "from_column": "design_for",
+      "required": false
+    },
+    {
+      "rel_type": "USES_KNIT_MACHINE",
+      "end_type": "MachineType",
+      "from_column": "knit_machine_type",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_DESIGN_FEATURE",
+      "end_type": "DesignFeature",
+      "from_column": "design_feature",
+      "required": false,
+      "notes": "Single text value when present"
+    },
+    {
+      "rel_type": "HAS_STYLE_FEATURE",
+      "end_type": "StyleFeature",
+      "from_column": "style_feature",
+      "required": false
+    },
+    {
+      "rel_type": "BELONGS_TO_DEPARTMENT",
+      "end_type": "Department",
+      "from_column": "department",
+      "required": false
+    },
+    {
+      "rel_type": "BELONGS_TO_SHOPPING_DEPARTMENT",
+      "end_type": "ShoppingDepartment",
+      "from_column": "shopping_department",
+      "required": false
+    },
+    {
+      "rel_type": "IN_SEASON_YEAR",
+      "end_type": "SeasonYear",
+      "from_column": "season_year",
+      "required": false
+    },
+    {
+      "rel_type": "CREATED_BY",
+      "end_type": "Person",
+      "from_column": "created_by",
+      "required": false
+    },
+    {
+      "rel_type": "DESIGNED_BY",
+      "end_type": "Person",
+      "from_column": "designer",
+      "required": false
+    },
+    {
+      "rel_type": "MANAGED_BY",
+      "end_type": "Person",
+      "from_column": "merchandiser",
+      "required": false
+    },
+    {
+      "rel_type": "PURCHASED_BY",
+      "end_type": "Person",
+      "from_column": "purchased_by",
+      "required": false,
+      "notes": "Person when value looks like a person name; else treat as free text on Product"
+    },
+    {
+      "rel_type": "HAS_STYLE_REFERENCE",
+      "end_type": "StyleReference",
+      "from_column": "style_reference",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_CUSTOMER_STYLE_REFERENCE",
+      "end_type": "CustomerStyleReference",
+      "from_column": "customer_style_reference",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_UNIT",
+      "end_type": "Unit",
+      "from_column": "unit",
+      "required": false
+    },
+    {
+      "rel_type": "STORED_AT",
+      "end_type": "Location",
+      "from_column": "current_location",
+      "required": false,
+      "notes": "Location text may contain multi-line warehouse lines"
+    },
+    {
+      "rel_type": "HAS_INVENTORY_RECORD",
+      "end_type": "InventoryRecord",
+      "from_column": "current_stock",
+      "fallback_column": "current_location",
+      "required": false,
+      "notes": "Create InventoryRecord when stock and/or location present; also STORED_AT Location"
+    },
+    {
+      "rel_type": "HAS_SHIPMENT",
+      "end_type": "Shipment",
+      "from_column": "shipment_date",
+      "fallback_column": "shipment_quantity",
+      "required": false,
+      "notes": "Create Shipment when date and/or quantity present"
+    },
+    {
+      "rel_type": "HAS_EVENT_TAG",
+      "end_type": "EventTag",
+      "from_column": "ai_event_tags",
+      "required": false,
+      "notes": "Split on comma"
+    },
+    {
+      "rel_type": "HAS_CONSTRUCTION_TAG",
+      "end_type": "ConstructionTag",
+      "from_column": "ai_construction_tags",
+      "required": false,
+      "notes": "Split on comma"
+    },
+    {
+      "rel_type": "HAS_AI_MATERIAL_TAG",
+      "end_type": "AiMaterialTag",
+      "from_column": "ai_material_tags",
+      "required": false,
+      "notes": "Split on comma"
+    },
+    {
+      "rel_type": "HAS_FINISH_TAG",
+      "end_type": "FinishTag",
+      "from_column": "ai_finish_tags",
+      "required": false,
+      "notes": "Split on comma"
+    },
+    {
+      "rel_type": "HAS_SPECIAL_TAG",
+      "end_type": "SpecialTag",
+      "from_column": "ai_special_tags",
+      "required": false,
+      "notes": "Split on comma"
+    }
+  ],
+  "envelope_only_columns": [],
+  "deferred_to_v2": [
+    "RELATED_TO_TAG co-occurrence edges between AI tag types",
+    "SAME_STYLE_AS / VARIANT_OF / SIMILAR_TO product linking",
+    "RESOLVES_TO links toward ecom_products via style_reference",
+    "Parse multi-line current_location into multiple Location nodes"
+  ]
+}

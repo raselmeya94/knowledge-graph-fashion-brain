@@ -80,7 +80,10 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
 
         from fashion_brain.api.app import create_app
+        from fashion_brain.llm import format_active_model
 
+        line = format_active_model(settings)
+        print(f"Fashion Brain active model: {line}", flush=True)
         uvicorn.run(
             create_app(),
             host=args.host or settings.api_host,

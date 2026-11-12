@@ -21,12 +21,24 @@ def sync_source(platform, source_id: str, *, brand: str | None = None) -> dict[s
         from knowledge_graph.pipeline.ecom_sync import sync_ecom_to_neo4j
 
         # sync_ecom_to_neo4j persists ecom_sync_state.json during the run and
-        # refreshes snapshots + kg_system_meta when finished.
+        # refreshes kg_stats (mid + end) + snapshots + kg_system_meta when finished.
         result = sync_ecom_to_neo4j(platform, brand=brand, refresh_generated=True)
         return {
             "source_id": source_id,
             "graph_id": graph_id,
             "action": "ecom_sync",
+            "result": result if isinstance(result, dict) else {"detail": result},
+        }
+
+    # Any other authorized_sql source: mapping JSON + named DB connection → Neo4j.
+    if source.connector == "authorized_sql":
+        from knowledge_graph.pipeline.mapping_sql_sync import sync_mapped_sql_to_neo4j
+
+        result = sync_mapped_sql_to_neo4j(platform, source_id, refresh_generated=True)
+        return {
+            "source_id": source_id,
+            "graph_id": graph_id,
+            "action": "mapped_sql_sync",
             "result": result if isinstance(result, dict) else {"detail": result},
         }
 

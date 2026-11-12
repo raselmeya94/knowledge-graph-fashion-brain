@@ -1,4 +1,4 @@
-"""Sync e-comm Postgres master_products → Neo4j (no envelope dump in the project).
+"""Sync e-comm Postgres master_products (+ change events) → Neo4j.
 
 Pipeline: Postgres → normalize/schema → relationships → Neo4j upsert.
 Requires FASHIONGPT_ECOM_DSN in .env.
@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from knowledge_graph.adapters.ecom_events import build_event_graph
 from knowledge_graph.adapters.ecom_master import build_relationships, graph_sketch, normalize_master_row
 from knowledge_graph.config import Settings
 from knowledge_graph.errors import ValidationFailed
@@ -38,6 +39,16 @@ WHERE (%(brand)s::text IS NULL OR brand = %(brand)s)
   AND (%(since)s::timestamptz IS NULL OR updated_at > %(since)s)
 ORDER BY updated_at ASC NULLS LAST, brand ASC, master_id ASC
 """
+_EVENTS_SELECT = """
+SELECT
+  id, brand, master_id, product_url, scrape_job_id, catalog_id,
+  detected_at, scraped_at, change_type, fields_changed,
+  before_json, after_json, content_hash_before, content_hash_after
+FROM product_change_events
+WHERE id > %(after_id)s
+  AND (%(brand)s::text IS NULL OR brand = %(brand)s)
+ORDER BY id ASC
+"""
 
 
 def register_ecom_identity() -> None:
@@ -46,6 +57,10 @@ def register_ecom_identity() -> None:
 
 def sync_state_path(settings: Settings) -> Path:
     return settings.generated / "ecom_sync_state.json"
+
+
+def events_sync_state_path(settings: Settings) -> Path:
+    return settings.generated / "ecom_events_sync_state.json"
 
 
 def load_sync_state(settings: Settings) -> dict:
@@ -60,6 +75,22 @@ def load_sync_state(settings: Settings) -> dict:
 
 def save_sync_state(settings: Settings, state: dict) -> None:
     path = sync_state_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def load_events_sync_state(settings: Settings) -> dict:
+    path = events_sync_state_path(settings)
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_events_sync_state(settings: Settings, state: dict) -> None:
+    path = events_sync_state_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
@@ -120,6 +151,124 @@ def iter_master_products(
                     produced += 1
                     if limit is not None and produced >= limit:
                         return
+
+
+def iter_change_events(
+    dsn: str,
+    *,
+    after_id: int = 0,
+    brand: str | None = None,
+    limit: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:
+        raise ValidationFailed("psycopg is not installed. Run: pip install 'psycopg[binary]'") from exc
+
+    produced = 0
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(_EVENTS_SELECT, {"after_id": after_id, "brand": brand})
+            while True:
+                batch = cur.fetchmany(200)
+                if not batch:
+                    break
+                for row in batch:
+                    yield dict(row)
+                    produced += 1
+                    if limit is not None and produced >= limit:
+                        return
+
+
+def upsert_event_graph(graph, sketch: dict[str, Any]) -> dict[str, int]:
+    """Write PriceChangeEvent / PriceSnapshot / AvailabilitySnapshot nodes for one PG event."""
+
+    pid = sketch["product_id"]
+    product = graph.get_node(pid, include_deleted=False)
+    stub = 0
+    if product is None:
+        # Keep temporal facts even when master sync has not created the Product yet.
+        graph.upsert_node(
+            GraphNode(
+                id=pid,
+                labels=["Entity", "Record", "Product"],
+                graph=GRAPH_ID,
+                properties={
+                    "id": pid,
+                    "name": sketch.get("master_id") or pid,
+                    "normalized_name": normalize_name(str(sketch.get("master_id") or pid)),
+                    "brand": sketch.get("brand"),
+                    "master_id": sketch.get("master_id"),
+                    "lifecycle": "active",
+                    "stub": True,
+                    "classification": "internal",
+                    "prov_source_id": GRAPH_ID,
+                    "prov_source_type": SOURCE_TYPE,
+                    "prov_record_id": f"{sketch.get('brand')}:{sketch.get('master_id')}",
+                },
+            )
+        )
+        product = graph.get_node(pid, include_deleted=False)
+        stub = 1
+
+    nodes = 0
+    edges = 0
+    for item in sketch.get("nodes") or []:
+        props = {
+            **(item.get("properties") or {}),
+            "id": item["id"],
+            "graph": GRAPH_ID,
+            "lifecycle": "active",
+            "prov_source_id": GRAPH_ID,
+            "prov_source_type": SOURCE_TYPE,
+            "classification": "internal",
+        }
+        graph.upsert_node(
+            GraphNode(
+                id=item["id"],
+                labels=list(item.get("labels") or ["Entity"]),
+                graph=GRAPH_ID,
+                properties=props,
+            )
+        )
+        nodes += 1
+
+    for rel in sketch.get("edges") or []:
+        start_id = rel["start_id"]
+        end_id = rel["end_id"]
+        graph.upsert_edge(
+            GraphEdge(
+                id=edge_id(rel["rel_type"], start_id, end_id, str(sketch.get("pg_event_id")), rel.get("field_ref")),
+                type=rel["rel_type"],
+                start_id=start_id,
+                end_id=end_id,
+                graph=GRAPH_ID,
+                properties={
+                    "lifecycle": "active",
+                    "prov_field_ref": rel.get("field_ref"),
+                    "prov_source_id": GRAPH_ID,
+                    "pg_event_id": sketch.get("pg_event_id"),
+                },
+            )
+        )
+        edges += 1
+
+    patch = sketch.get("product_patch") or {}
+    if patch:
+        merged = dict(product.properties or {})
+        merged.update(patch)
+        merged["id"] = pid
+        graph.upsert_node(
+            GraphNode(
+                id=pid,
+                labels=list(product.labels or ["Entity", "Record", "Product"]),
+                graph=product.graph or GRAPH_ID,
+                properties=merged,
+            )
+        )
+
+    return {"nodes": nodes, "edges": edges, "orphan": 0, "stub": stub}
 
 
 def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dict[str, Any]]) -> dict[str, int]:
@@ -309,6 +458,12 @@ def refresh_generated_after_ecom_sync(platform, *, heavy: bool = True) -> dict[s
     from knowledge_graph.retrieval.system_meta import build_system_meta
 
     try:
+        refreshed["shared"] = platform.build_shared()
+    except Exception as exc:
+        LOGGER.exception("ecom sync: shared graph refresh failed")
+        refreshed["shared_error"] = str(exc)
+        return refreshed
+    try:
         paths = save_source_snapshots(platform.graph, settings.generated, [GRAPH_ID])
         refreshed["source_snapshot"] = [str(path) for path in paths]
     except Exception as exc:
@@ -339,6 +494,160 @@ def refresh_generated_after_ecom_sync(platform, *, heavy: bool = True) -> dict[s
     return refreshed
 
 
+def _apply_ecom_ontology(platform) -> None:
+    """Allowlist ecom labels/rels on the live graph backend."""
+
+    ecom_ontology = _load_ecom_ontology(platform)
+    if not hasattr(platform.graph, "ontology"):
+        return
+    from knowledge_graph.ontology import combine_ontologies
+
+    platform.graph.ontology = combine_ontologies(platform.graph.ontology, ecom_ontology)
+    if hasattr(platform.graph, "_allowed_rel_types"):
+        platform.graph._allowed_rel_types = set(platform.graph.ontology.relationship_allowlist) | {"RESOLVES_TO"}
+    if hasattr(platform.graph, "_allowed_labels"):
+        platform.graph._allowed_labels = set(platform.graph.ontology.entity_types) | {
+            "Entity",
+            "SourceEntity",
+            "Canonical",
+            "Record",
+        }
+
+
+def sync_ecom_events_to_neo4j(
+    platform,
+    *,
+    brand: str | None = None,
+    full: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Incremental sync of product_change_events → price/availability temporal nodes."""
+
+    register_ecom_identity()
+    settings: Settings = platform.settings
+    dsn = require_ecom_dsn(settings)
+    _apply_ecom_ontology(platform)
+
+    state = load_events_sync_state(settings)
+    after_id = 0 if full else int(state.get("last_event_id") or 0)
+    rows = 0
+    applied = 0
+    skipped = 0
+    stubs = 0
+    node_writes = 0
+    edge_writes = 0
+    errors: list[str] = []
+    last_event_id = after_id
+    by_type: dict[str, int] = {}
+
+    save_events_sync_state(
+        settings,
+        {
+            "status": "running",
+            "last_run_at": _utc_now(),
+            "last_event_id": after_id,
+            "brand_filter": brand,
+            "full": full,
+            "limit": limit,
+        },
+    )
+    LOGGER.info("ecom events sync start after_id=%s brand=%s limit=%s", after_id, brand, limit)
+
+    for row in iter_change_events(dsn, after_id=after_id, brand=brand, limit=limit):
+        rows += 1
+        event_pk = row.get("id")
+        try:
+            if event_pk is not None:
+                last_event_id = max(last_event_id, int(event_pk))
+            change_type = str(row.get("change_type") or "")
+            by_type[change_type] = by_type.get(change_type, 0) + 1
+            sketch = build_event_graph(row)
+            if sketch is None:
+                skipped += 1
+                continue
+            tallies = upsert_event_graph(platform.graph, sketch)
+            if tallies.get("orphan"):
+                skipped += 1
+                continue
+            applied += 1
+            stubs += int(tallies.get("stub") or 0)
+            node_writes += tallies["nodes"]
+            edge_writes += tallies["edges"]
+            if applied % 500 == 0:
+                save_events_sync_state(
+                    settings,
+                    {
+                        "status": "running",
+                        "last_run_at": _utc_now(),
+                        "last_event_id": last_event_id,
+                        "rows": rows,
+                        "applied": applied,
+                        "skipped": skipped,
+                        "stubs": stubs,
+                        "by_type": by_type,
+                        "node_writes": node_writes,
+                        "edge_writes": edge_writes,
+                        "errors": len(errors),
+                        "brand_filter": brand,
+                        "full": full,
+                    },
+                )
+                LOGGER.info("ecom events sync progress applied=%s last_id=%s", applied, last_event_id)
+        except Exception as exc:
+            key = f"{row.get('brand')}:{row.get('master_id')}:{event_pk}"
+            errors.append(f"{key}: {exc}")
+            LOGGER.warning("ecom events sync row failed %s: %s", key, exc, exc_info=True)
+            if len(errors) >= 50:
+                errors.append("… further errors truncated")
+                break
+
+    finished = _utc_now()
+    report = {
+        "ok": not errors,
+        "graph": GRAPH_ID,
+        "source_table": "product_change_events",
+        "after_id": after_id,
+        "last_event_id": last_event_id,
+        "rows": rows,
+        "applied": applied,
+        "skipped": skipped,
+        "stubs": stubs,
+        "by_type": by_type,
+        "node_writes": node_writes,
+        "edge_writes": edge_writes,
+        "errors": errors,
+        "finished_at": finished,
+    }
+    save_events_sync_state(
+        settings,
+        {
+            "status": "failed" if errors else "ok",
+            "last_run_at": finished,
+            "last_event_id": last_event_id,
+            "rows": rows,
+            "applied": applied,
+            "skipped": skipped,
+            "stubs": stubs,
+            "by_type": by_type,
+            "node_writes": node_writes,
+            "edge_writes": edge_writes,
+            "errors": len(errors),
+            "brand_filter": brand,
+            "full": full,
+            "finished_at": finished,
+        },
+    )
+    LOGGER.info(
+        "ecom events sync done rows=%s applied=%s stubs=%s errors=%s last_id=%s",
+        rows,
+        applied,
+        stubs,
+        len(errors),
+        last_event_id,
+    )
+    return report
+
+
 def sync_ecom_to_neo4j(
     platform,
     *,
@@ -346,28 +655,14 @@ def sync_ecom_to_neo4j(
     full: bool = False,
     limit: int | None = None,
     refresh_generated: bool = True,
+    sync_events: bool = True,
 ) -> dict[str, Any]:
     """Read master_products and upsert into the live graph backend."""
 
     register_ecom_identity()
     settings: Settings = platform.settings
     dsn = require_ecom_dsn(settings)
-
-    # Allowlist ecom types from the registry ontology (POST /ontologies → schemas/ontologies/ecom.json).
-    ecom_ontology = _load_ecom_ontology(platform)
-    if hasattr(platform.graph, "ontology"):
-        from knowledge_graph.ontology import combine_ontologies
-
-        platform.graph.ontology = combine_ontologies(platform.graph.ontology, ecom_ontology)
-        if hasattr(platform.graph, "_allowed_rel_types"):
-            platform.graph._allowed_rel_types = set(platform.graph.ontology.relationship_allowlist) | {"RESOLVES_TO"}
-        if hasattr(platform.graph, "_allowed_labels"):
-            platform.graph._allowed_labels = set(platform.graph.ontology.entity_types) | {
-                "Entity",
-                "SourceEntity",
-                "Canonical",
-                "Record",
-            }
+    _apply_ecom_ontology(platform)
 
     state = load_sync_state(settings)
     since = None if full else state.get("last_updated_at")
@@ -433,7 +728,8 @@ def sync_ecom_to_neo4j(
         except Exception as exc:
             key = f"{row.get('brand')}:{row.get('master_id')}"
             errors.append(f"{key}: {exc}")
-            LOGGER.warning("ecom sync row failed %s", key, exc_info=True)
+            # Include the exception text — JSON logs only keep error_type from exc_info.
+            LOGGER.warning("ecom sync row failed %s: %s", key, exc, exc_info=True)
             if len(errors) >= 50:
                 errors.append("… further errors truncated")
                 break
@@ -463,15 +759,34 @@ def sync_ecom_to_neo4j(
         "finished_at": finished,
         "sync_state": new_state,
     }
-    if refresh_generated and not errors:
+    if sync_events:
+        # Events attach to existing Product nodes; run after product upsert.
+        # Never inherit product `limit` — watermark is independent and must not skip ids.
+        try:
+            report["events"] = sync_ecom_events_to_neo4j(
+                platform,
+                brand=brand,
+                full=full,
+                limit=None,
+            )
+            if not report["events"].get("ok"):
+                report["ok"] = False
+        except Exception as exc:
+            LOGGER.warning("ecom events sync failed: %s", exc, exc_info=True)
+            report["events_error"] = str(exc)
+            report["ok"] = False
+    if refresh_generated and report.get("ok"):
         report["generated"] = refresh_generated_after_ecom_sync(platform)
+        if report["generated"].get("shared_error"):
+            report["shared_error"] = report["generated"]["shared_error"]
+            report["ok"] = False
         # Re-stamp state after generated refresh so mtime/content stay latest.
         new_state = _write_sync_state(
             settings,
-            status="ok",
+            status="ok" if report["ok"] else "failed",
             products=products,
             brands=brands,
-            errors=0,
+            errors=0 if report["ok"] else 1,
             last_updated_at=latest_updated,
             since=since,
             full=full,
@@ -480,6 +795,7 @@ def sync_ecom_to_neo4j(
                 "edge_writes": edge_writes,
                 "finished_at": finished,
                 "generated": report.get("generated"),
+                "events": report.get("events"),
             },
         )
         report["sync_state"] = new_state

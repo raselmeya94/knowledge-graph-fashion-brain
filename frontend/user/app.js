@@ -26,6 +26,10 @@ function selectedGraphId() {
 }
 
 const email = user.email || user.id || "user";
+const usernameSlug = String(user.username || String(email).split("@")[0] || user.id || "user")
+  .toLowerCase()
+  .replace(/[^a-z0-9-]+/g, "-")
+  .replace(/^-+|-+$/g, "") || "user";
 document.getElementById("user-email").textContent = email;
 document.getElementById("user-role").textContent = user.role || "user";
 document.getElementById("user-avatar").textContent = String(email).trim().charAt(0).toUpperCase() || "U";
@@ -34,8 +38,19 @@ if (user.clearance) clearance.value = user.clearance;
 document.getElementById("logout").addEventListener("click", () => FB.logout());
 document.getElementById("new-chat").addEventListener("click", () => {
   activeId = null;
+  history.pushState({}, "", "/user/");
   resetThread();
   closeMobileSidebar();
+});
+window.addEventListener("popstate", () => {
+  const route = conversationIdFromPath();
+  if (route) {
+    openConversation(route).catch((error) => setStatus(error.message, false));
+  } else {
+    activeId = null;
+    resetThread();
+    renderSessions();
+  }
 });
 document.getElementById("open-memory").addEventListener("click", openMemory);
 document.getElementById("close-memory").addEventListener("click", closeMemory);
@@ -143,6 +158,7 @@ function renderSessions() {
       });
       if (activeId === item.id) {
         activeId = null;
+        history.pushState({}, "", "/user/");
         resetThread();
       }
       await loadConversations();
@@ -168,6 +184,26 @@ function resetThread() {
   thread.replaceChildren(empty);
   empty.hidden = false;
   chatTitle.textContent = "New chat";
+}
+
+function conversationIdFromPath() {
+  const match = location.pathname.match(/^\/user\/([^/]+)\/([^/]+)\/?$/);
+  if (!match) return null;
+  try {
+    if (decodeURIComponent(match[1]) !== usernameSlug) return null;
+    return decodeURIComponent(match[2]);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function setConversationPath(id, replace = false) {
+  const path = id
+    ? "/user/" + encodeURIComponent(usernameSlug) + "/" + encodeURIComponent(id)
+    : "/user/";
+  if (location.pathname === path) return;
+  const method = replace ? "replaceState" : "pushState";
+  history[method]({}, "", path);
 }
 
 function ensureThreadReady() {
@@ -211,12 +247,26 @@ function addMessage(role, content, meta) {
     return { row, body, bubble };
   }
 
-  // Assistant stack order: Thinking → Reasoning → Response → Sources
+  // Keep the live progress line separate from the optional interpretation details.
   const stack = document.createElement("div");
   stack.className = "answer-stack";
 
-  const thinkingPanel = makeTrace("thinking", "Thinking", { open: true });
-  const reasoningPanel = makeTrace("reasoning", "Reasoning", { open: true });
+  const progress = document.createElement("div");
+  progress.className = "assistant-progress";
+  progress.hidden = true;
+  progress.setAttribute("role", "status");
+  progress.setAttribute("aria-live", "polite");
+  const spinner = document.createElement("span");
+  spinner.className = "assistant-progress-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const progressLabel = document.createElement("span");
+  progressLabel.className = "assistant-progress-label";
+  const progressElapsed = document.createElement("span");
+  progressElapsed.className = "assistant-progress-elapsed";
+  progress.append(spinner, progressLabel, progressElapsed);
+
+  const thinkingPanel = makeTrace("thinking", "Thinking", { open: false });
+  const reasoningPanel = makeTrace("reasoning", "Reasoning", { open: false });
 
   const bubble = document.createElement("div");
   bubble.className = "bubble assistant";
@@ -230,7 +280,7 @@ function addMessage(role, content, meta) {
 
   const sources = makeSourcesPanel();
 
-  stack.append(thinkingPanel, reasoningPanel, bubble, sources);
+  stack.append(progress, thinkingPanel, reasoningPanel, bubble, sources);
   row.appendChild(stack);
   thread.appendChild(row);
 
@@ -243,7 +293,20 @@ function addMessage(role, content, meta) {
   }
 
   thread.scrollTop = thread.scrollHeight;
-  return { row, body, bubble, stack, thinkingPanel, reasoningPanel, sources };
+  return {
+    row,
+    body,
+    bubble,
+    stack,
+    thinkingPanel,
+    reasoningPanel,
+    sources,
+    progress,
+    progressLabel,
+    progressElapsed,
+    progressStartedAt: 0,
+    progressTimer: null,
+  };
 }
 
 function makeTrace(kind, label, { open = true } = {}) {
@@ -433,9 +496,7 @@ function paintSources(panel, meta, { open = true } = {}) {
     if (routes.length) {
       const p = document.createElement("p");
       p.className = "caveat";
-      p.textContent =
-        "Routes: " +
-        routes.map((route) => (route === "catalog" ? "plm" : route)).join(" · ");
+      p.textContent = "Routes: " + routes.join(" · ");
       details.appendChild(p);
     }
     caveats.forEach((text) => {
@@ -486,35 +547,28 @@ function normalizeReferences(meta) {
 
 function showThinkingPlaceholder(ui) {
   if (!ui) return;
-  ensureTrace(ui.row, "thinking", "Thinking", { open: true });
-  const panel = ui.row.querySelector(".trace[data-kind='thinking']");
-  if (!panel) return;
-  panel.classList.add("streaming");
-  const body = panel.querySelector(".trace-body");
-  if (body && !body.textContent) {
-    const el = document.createElement("span");
-    el.className = "thinking";
-    el.innerHTML = '<span class="thinking-word">Thinking</span><span class="thinking-dots"></span>';
-    body.appendChild(el);
-  }
-  if (ui.body) {
-    ui.body.classList.remove("md");
-    ui.body.innerHTML =
-      '<span class="response-placeholder">Waiting for response…</span>';
+  updateProgress(ui, "Reading your request…");
+}
+
+function updateProgress(ui, text) {
+  if (!ui || !ui.progress) return;
+  ui.progress.hidden = false;
+  ui.progressLabel.textContent = text || "Working…";
+  if (!ui.progressStartedAt) {
+    ui.progressStartedAt = Date.now();
+    ui.progressTimer = window.setInterval(() => {
+      if (!ui.progress || ui.progress.hidden) return;
+      const seconds = Math.floor((Date.now() - ui.progressStartedAt) / 1000);
+      ui.progressElapsed.textContent = seconds >= 3 ? ` · ${seconds}s` : "";
+    }, 1000);
   }
 }
 
-function clearThinkingPlaceholder(row) {
-  const panel = row.querySelector(".trace[data-kind='thinking']");
-  if (!panel) return;
-  const body = panel.querySelector(".trace-body");
-  if (!body) return;
-  const placeholder = body.querySelector(".thinking");
-  if (placeholder && !body.textContent.replace(/\s/g, "").replace("Thinking", "")) {
-    body.replaceChildren();
-  } else if (placeholder) {
-    placeholder.remove();
-  }
+function stopProgress(ui) {
+  if (!ui || !ui.progress) return;
+  if (ui.progressTimer) window.clearInterval(ui.progressTimer);
+  ui.progressTimer = null;
+  ui.progress.hidden = true;
 }
 
 function wsAskUrl() {
@@ -578,25 +632,27 @@ function askOverSocket(payload) {
       }
       const type = data.type;
       const text = data.text || "";
-      if (type === "thinking") {
-        clearThinkingPlaceholder(ui && ui.row);
+      if (type === "status") {
+        if (ui) {
+          updateProgress(ui, text);
+          setStatus(text.replace(/[.…\s]+$/g, "") || "Working…", true);
+        }
+      } else if (type === "thinking") {
         result.thinking += text;
         if (ui) {
-          setStatus("Thinking…", true);
-          appendTrace(ui.row, "thinking", "Thinking", text, { open: true });
+          setStatus("Working…", true);
+          appendTrace(ui.row, "thinking", "Thinking", text, { open: false });
         }
       } else if (type === "reasoning") {
         result.reasoning += text;
         if (ui) {
-          setStatus("Reasoning…", true);
-          appendTrace(ui.row, "reasoning", "Reasoning", text, { open: true });
+          appendTrace(ui.row, "reasoning", "Reasoning", text, { open: false });
         }
       } else if (type === "answer") {
-        result.answer += text;
+        result.answer = data.replace ? text : result.answer + text;
         if (ui) {
-          setStatus("Responding…", true);
-          const placeholder = ui.body.querySelector(".response-placeholder");
-          if (placeholder) ui.body.replaceChildren();
+          updateProgress(ui, "Writing the answer…");
+          setStatus("Writing answer…", true);
           setAnswerContent(ui.body, result.answer, { streaming: true });
           thread.scrollTop = thread.scrollHeight;
         }
@@ -604,17 +660,25 @@ function askOverSocket(payload) {
         const item = data.item || {};
         result.evidence.push(item);
         if (ui) {
-          setStatus("Sources…", true);
+          updateProgress(ui, "Adding references…");
+          setStatus("Adding references…", true);
           const panel = ensureSourcesPanel(ui.row);
           appendSourceCard(panel, item);
         }
       } else if (type === "done") {
+        stopProgress(ui);
         result.answerObj = data.answer || {};
         const doneAnswer = result.answerObj.answer || "";
         if (doneAnswer) {
           const streamed = result.answer || "";
-          const doneHasChart = doneAnswer.includes("```chart") || doneAnswer.includes("```fbchart");
-          const streamHasChart = streamed.includes("```chart") || streamed.includes("```fbchart");
+          const doneHasChart =
+            doneAnswer.includes("```chart") ||
+            doneAnswer.includes("```fbchart") ||
+            doneAnswer.includes("```sampleboard");
+          const streamHasChart =
+            streamed.includes("```chart") ||
+            streamed.includes("```fbchart") ||
+            streamed.includes("```sampleboard");
           if (
             !streamed ||
             (doneHasChart && !streamHasChart) ||
@@ -682,8 +746,8 @@ async function loadGraphs() {
   }
 }
 
-async function createConversation(title) {
-  const body = { title: title || "New chat" };
+async function createConversation() {
+  const body = { title: "New chat" };
   const graphId = selectedGraphId();
   if (graphId) body.graph_id = graphId;
   const item = await FB.request("/v1/conversations", {
@@ -692,6 +756,7 @@ async function createConversation(title) {
     clearance: clearance.value,
   });
   activeId = item.id;
+  setConversationPath(item.id);
   if (graphScope && item.graph_id) graphScope.value = item.graph_id;
   await loadConversations();
   resetThread();
@@ -702,6 +767,7 @@ async function createConversation(title) {
 async function openConversation(id) {
   const data = await FB.request("/v1/conversations/" + id, { clearance: clearance.value });
   activeId = id;
+  setConversationPath(id);
   chatTitle.textContent = data.title || "Chat";
   if (graphScope) graphScope.value = data.graph_id || "";
   thread.replaceChildren();
@@ -728,12 +794,14 @@ async function ask(question) {
   send.disabled = true;
   input.value = "";
   input.style.height = "auto";
+  let activeAssistant = null;
   try {
-    if (!activeId) await createConversation(question.slice(0, 48));
+    if (!activeId) await createConversation();
     addMessage("user", question);
     const assistant = addMessage("assistant", "");
+    activeAssistant = assistant;
     showThinkingPlaceholder(assistant);
-    setStatus("Thinking…", true);
+    setStatus("Reading your request…", true);
 
     const payload = {
       question,
@@ -747,6 +815,8 @@ async function ask(question) {
     try {
       streamed = await askOverSocket(payload);
     } catch (streamError) {
+      updateProgress(assistant, "Reconnecting to finish your answer…");
+      setStatus("Reconnecting…", true);
       const data = await FB.request("/v1/conversations/" + activeId + "/messages", {
         method: "POST",
         body: JSON.stringify({ question, graph_id: graphId || null }),
@@ -762,7 +832,6 @@ async function ask(question) {
         thinking: (data.message && data.message.meta && data.message.meta.thinking) || "",
         reasoning: (data.message && data.message.meta && data.message.meta.reasoning) || "",
       });
-      clearThinkingPlaceholder(assistant.row);
       if (meta.thinking) appendTrace(assistant.row, "thinking", "Thinking", meta.thinking, { open: false });
       if (meta.reasoning) appendTrace(assistant.row, "reasoning", "Reasoning", meta.reasoning, { open: false });
       setAnswerContent(assistant.body, fallback);
@@ -773,6 +842,7 @@ async function ask(question) {
 
     const finalAnswer = streamed.answer || streamed.answerObj.answer || "(No answer)";
     setAnswerContent(assistant.body, finalAnswer);
+    stopProgress(assistant);
 
     const meta = Object.assign({}, streamed.meta || {}, {
       routes: (streamed.answerObj && streamed.answerObj.routes) || streamed.meta.routes || [],
@@ -809,6 +879,7 @@ async function ask(question) {
     const active = conversations.find((item) => item.id === activeId);
     if (active && active.title) chatTitle.textContent = active.title;
   } catch (error) {
+    stopProgress(activeAssistant);
     addMessage("assistant", "Error: " + error.message);
     setStatus("Error", false);
   } finally {
@@ -860,6 +931,12 @@ function closeMemory() {
     await FB.request("/health", { noAuth: true });
     setStatus("Online", true);
     await Promise.all([loadConversations(), loadGraphs()]);
+    const routeId = conversationIdFromPath();
+    if (routeId) {
+      await openConversation(routeId);
+    } else if (location.pathname !== "/user/") {
+      setConversationPath(null, true);
+    }
   } catch (error) {
     setStatus("Offline", false);
   }

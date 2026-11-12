@@ -80,8 +80,10 @@ def default_graph_for_kind(kind: str) -> str:
 
     if kind in {"ecom", "ecom_products"}:
         return "ecom_products"
-    if kind in {"product", "own_products", "catalog", "plmex", "plmex_products"}:
+    if kind in {"product", "own_products", "catalog"}:
         return "own_products"
+    if kind in {"plmex", "plmex_products"}:
+        return "plmex_products"
     # Email/HTML/JSON/PDF all land on news unless admin selects another graph.
     return "news"
 
@@ -408,11 +410,10 @@ class KgRegistryStore:
         registry = self.load()
         if any(item.id == graph_id and item.status == "active" for item in registry.graphs):
             raise ValidationFailed(f"Graph '{graph_id}' already exists.")
-        if body.kind == "product" and graph_id not in {"own_products", "ecom_products"}:
-            raise ValidationFailed(
-                "kind=product is only allowed for graph id 'own_products' or 'ecom_products' "
-                f"(got '{graph_id}'). Send body.id exactly as ecom_products or own_products."
-            )
+        # Product graphs are dynamic: any id is allowed. Built-in adapters still
+        # special-case ecom_products / own_products; others use mapping SQL sync.
+        if body.kind == "product" and not graph_id:
+            raise ValidationFailed("kind=product requires a non-empty graph id.")
         record = GraphRecord(
             id=graph_id,
             name=body.name,
@@ -493,9 +494,15 @@ class KgRegistryStore:
 def ensure_graph_identity(graph: GraphRecord) -> None:
     """Register id prefix + envelope builder for a construction or product graph."""
 
-    if graph.kind == "product" or graph.id in {"own_products", "ecom_products"}:
+    if graph.kind == "product" or graph.id in {"own_products", "ecom_products", "plmex", "plmex_products"}:
         if graph.id == "ecom_products":
             register_source_identity("ecom_products", "ecom", "product", "Product")
+        elif graph.id == "own_products":
+            register_source_identity("own_products", "plmex", "product", "Product")
+        else:
+            # Dynamic product KG — prefix from graph id (plmex_products → plmex).
+            prefix = graph.id.split("_", 1)[0] if "_" in graph.id else graph.id
+            register_source_identity(graph.id, prefix[:32] or "product", "product", "Product")
         return
     if graph.id in {"news", "documents"}:
         return

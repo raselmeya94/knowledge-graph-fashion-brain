@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/user/*/*",
+      "destination": "/user/index.html"
+    }
+  ]
+}

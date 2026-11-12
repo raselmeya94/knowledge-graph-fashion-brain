@@ -167,7 +167,7 @@ def run_case(platform, case: Case, *, run_cypher: bool, graph_id: str) -> dict[s
             analysis=extracted.intent == "breakdown",
             count_entity=extracted.count_entity,
         )
-        plan = Text2CypherAgent().generate(
+        plans = Text2CypherAgent().generate(
             platform,
             case.question,
             intention,
@@ -176,6 +176,7 @@ def run_case(platform, case: Case, *, run_cypher: bool, graph_id: str) -> dict[s
             extracted=extracted.to_dict(),
             brands=brands,
         )
+        plan = plans[0] if plans else None
         if plan is not None:
             payload["cypher"] = plan.cypher
             payload["params"] = plan.params

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from knowledge_graph.construction.detect import detect_kind
 from knowledge_graph.construction.identity import NEWS_KINDS
 from knowledge_graph.construction.news_facts import segment_articles
-from knowledge_graph.construction.ollama import OllamaClient
 from knowledge_graph.construction.store import ReviewStore
 from knowledge_graph.construction.tools import tool_registry
 from knowledge_graph.errors import NotFoundError, ValidationFailed
@@ -21,6 +20,19 @@ _EXTRACTORS = {
 }
 
 
+class _NoLLM:
+    """Construction tools that still expect ctx.ollama get a hard disable."""
+
+    def health(self) -> dict:
+        return {"status": "removed", "detail": "Ollama module deleted from KG."}
+
+    def complete(self, *args, **kwargs) -> str:
+        raise ValidationFailed("LLM/Ollama was removed from Knowledge Graph.")
+
+    def describe_image(self, *args, **kwargs) -> str:
+        raise ValidationFailed("Vision/Ollama was removed from Knowledge Graph.")
+
+
 @dataclass
 class ToolContext:
     platform: Platform
@@ -29,7 +41,7 @@ class ToolContext:
     news_ontology: object
     graph: object
     store: ReviewStore
-    ollama: OllamaClient
+    ollama: _NoLLM
 
     def ontology_for(self, graph_id: str):
         return self.platform.ontology_for(graph_id)
@@ -42,7 +54,7 @@ class ConstructionPipeline:
     def __init__(self, platform: Platform):
         self.platform = platform
         self.store = ReviewStore(platform.settings.generated / "construction" / "reviews.json")
-        self.ollama = OllamaClient(platform.settings)
+        self.ollama = _NoLLM()
         self.tools = tool_registry()
 
     def context(self) -> ToolContext:

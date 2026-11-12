@@ -48,15 +48,15 @@ python -m knowledge_graph.cli serve
 
 Check: http://127.0.0.1:8001/health · Swagger http://127.0.0.1:8001/docs
 
-## Empty → e-com data (Postman)
+## Empty → e-com data (API shortcuts)
 
-1. Import `postman/knowledge_graph.postman_collection.json`
-2. Run folder **`0 Ecom pipeline (empty → live)`**
-3. Bodies live in `postman/bodies/` (ontology + graph + source already filled)
-4. Before sync: ensure `data/schemas/ecom_master_products_mapping.json` exists (committed)
-5. Set Postgres in `.env`, then `POST /api/sources/ecom_products/sync`
+With Postgres set in `.env` and the API running:
 
-Full guide: [POSTMAN.md](POSTMAN.md)
+1. `GET /api/db/connection?table=master_products` — confirm DB name, table, columns, row counts
+2. `POST /api/kg/build` with body `{ "profile": "ecom_products", "sync": true }` — creates ontology + graph + source, restores mapping if missing, then syncs
+3. Poll `GET /jobs/{id}` until done
+
+Or use Postman folder **`0 Ecom pipeline (empty → live)`** (step-by-step ontology/graph/source/sync). Full guide: [POSTMAN.md](POSTMAN.md)
 
 ## What is / is not committed
 

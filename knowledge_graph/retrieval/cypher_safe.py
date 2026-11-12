@@ -164,10 +164,21 @@ def rows_to_findings(rows: list[dict], *, explanation: str = "", cypher: str = "
         seen.add(marker)
         unique.append(row)
 
-    lines.append(f"Rows ({len(unique)}):")
+    # Product-name dumps: keep a short sample so ResponseAgent does not paste 40 SKUs.
+    key_fold = {str(k).casefold() for k in keys}
+    looks_like_product_list = bool(
+        key_fold & {"name", "product", "product_name", "title"}
+    ) and not (key_fold & {"n", "c", "count", "total", "product_count"})
+    row_cap = 5 if looks_like_product_list else 40
+    shown = unique[:row_cap]
+    lines.append(f"Rows ({len(shown)} of {len(unique)}):")
+    if looks_like_product_list and len(unique) > row_cap:
+        lines.append(
+            "Sample only — prefer total count and brand/category mix over listing every product."
+        )
     lines.append("| " + " | ".join(str(k) for k in keys) + " |")
     lines.append("| " + " | ".join("---" for _ in keys) + " |")
-    for row in unique[:40]:
+    for row in shown:
         cells = []
         for key in keys:
             value = row.get(key)

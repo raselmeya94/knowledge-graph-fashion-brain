@@ -57,6 +57,38 @@ def test_openrouter_posts_to_chat_completions(monkeypatch):
     assert captured["body"]["temperature"] == 0
 
 
+def test_openrouter_accepts_a_scoped_response_temperature(monkeypatch):
+    captured = {}
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return Response(json.dumps({"choices": [{"message": {"content": "A polished comparison."}}]}).encode())
+
+    monkeypatch.setattr("fashion_brain.llm.request.urlopen", fake_urlopen)
+    settings = Settings(
+        model_provider="openrouter",
+        model_api_key="test-key",
+        model_name="openai/gpt-4o-mini",
+        model_base_url="https://openrouter.ai/api/v1",
+        answer_mode="llm",
+    )
+    answer = build_model_provider(settings).complete(
+        "Question: compare materials",
+        timeout=5,
+        temperature=0.25,
+    )
+
+    assert answer == "A polished comparison."
+    assert captured["body"]["temperature"] == 0.25
+
+
 def test_stream_splits_thinking_reasoning_and_answer(monkeypatch):
     captured = {}
     sse = "\n".join(

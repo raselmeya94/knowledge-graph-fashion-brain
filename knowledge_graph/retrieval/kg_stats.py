@@ -8,6 +8,7 @@ loading every Neo4j Product node or probing metadata live.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,90 @@ def value_count(graph_id: str, attribute: str, value: str, generated: Path | Non
         if normalize_name(str(key)) == want:
             return int(count)
     return None
+
+
+_EMPTY_KEYS = {"", "(empty)", "(unspecified)", "n/a", "na", "none", "null", "-", "—"}
+
+
+def _rel_types_for_attr(attr: str) -> tuple[str, ...]:
+    """Relationship types for a facet — from the shared ecom/_REL_FIELDS map (full system)."""
+
+    try:
+        from knowledge_graph.retrieval.ecom import _REL_FIELDS
+
+        rels = _REL_FIELDS.get(str(attr or "").strip().casefold()) or ()
+        return tuple(str(r) for r in rels if r)
+    except Exception:
+        return ()
+
+
+def _discover_stats_attributes(platform, graph_id: str) -> list[str]:
+    """Facet keys for this graph from live schema / mapping — never a fixed short list."""
+
+    try:
+        from knowledge_graph.retrieval.ecom import resolve_analysis_fields
+
+        keys = list(resolve_analysis_fields(platform, graph_id) or [])
+    except Exception:
+        keys = []
+    try:
+        from knowledge_graph.sources.mapping_store import get_mapping, mapping_exists
+
+        if mapping_exists(graph_id):
+            mapping = get_mapping(graph_id).get("mapping") or {}
+            from knowledge_graph.pipeline.mapping_sql_sync import _stats_attributes_from_mapping
+
+            for name in _stats_attributes_from_mapping(mapping):
+                if name not in keys:
+                    keys.append(name)
+    except Exception:
+        pass
+    # Include every relationship-backed facet key known to the retrieve layer.
+    try:
+        from knowledge_graph.retrieval.ecom import _REL_FIELDS
+
+        for name in _REL_FIELDS:
+            if name not in keys:
+                keys.append(name)
+    except Exception:
+        pass
+    return keys
+
+
+def unique_count(graph_id: str, attribute: str, generated: Path | None = None) -> int | None:
+    """Distinct non-empty values for one facet from ``kg_stats`` (None if unknown/empty-only)."""
+
+    stats = load_graph_stats(graph_id, generated)
+    if not stats:
+        return None
+    key = str(attribute or "").strip().casefold().replace(" ", "_")
+    bucket = (stats.get("value_counts") or {}).get(key) or {}
+    if not bucket:
+        n = (stats.get("unique_counts") or {}).get(key)
+        return int(n) if n is not None else None
+    usable = [name for name in bucket if str(name).strip().casefold() not in _EMPTY_KEYS]
+    if not usable:
+        return None
+    return len(usable)
+
+
+def facet_inventory(graph_id: str, generated: Path | None = None) -> dict[str, int]:
+    """Compact field → distinct-value map for LLM/schema grounding."""
+
+    stats = load_graph_stats(graph_id, generated)
+    if not stats:
+        return {}
+    out: dict[str, int] = {}
+    uniques = dict(stats.get("unique_counts") or {})
+    buckets = dict(stats.get("value_counts") or {})
+    for attr in sorted(set(uniques) | set(buckets)):
+        n = unique_count(graph_id, attr, generated)
+        if n is not None and n > 0:
+            out[str(attr)] = n
+    products = (stats.get("totals") or {}).get("products")
+    if products is not None:
+        out["products"] = int(products)
+    return out
 
 
 def save_graph_stats(graph_id: str, payload: dict[str, Any], generated: Path | None = None) -> Path:
@@ -188,11 +273,15 @@ def build_product_graph_stats_from_neo4j(
     attributes: list[str] | None = None,
     generated: Path | None = None,
 ) -> dict[str, Any]:
-    """Fallback Neo4j aggregation for non-SQL product graphs."""
+    """Aggregate distinct facet values for one product graph from Neo4j.
+
+    Attribute set comes from that graph's mapping/schema (or an explicit override) —
+    never a fixed short fashion list.
+    """
 
     settings: Settings = platform.settings
     out_dir = generated or settings.generated
-    attrs = list(attributes or ("brand", "buyer", "category", "material", "color", "season", "gender"))
+    attrs = list(attributes) if attributes else _discover_stats_attributes(platform, graph_id)
     products = 0
     value_counts: dict[str, dict[str, int]] = {}
     unique_counts: dict[str, int] = {}
@@ -208,33 +297,41 @@ def build_product_graph_stats_from_neo4j(
             ).single()
             products = int(row["c"]) if row else 0
             for attr in attrs:
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(attr)):
+                    continue
                 rows = list(
                     session.run(
                         f"MATCH (n:Entity:Product {{graph: $g}}) "
                         f"WHERE coalesce(n.lifecycle,'active') <> 'deleted' "
-                        f"WITH coalesce(toString(n.{attr}), '(empty)') AS value "
+                        f"WITH coalesce(toString(n.`{attr}`), '(empty)') AS value "
                         f"RETURN value, count(*) AS n ORDER BY n DESC, value ASC",
                         {"g": graph_id},
                     )
                 )
-                # Property may not exist — skip empty-only noise when products>0 and all empty.
+                # Property may be blank when the facet lives on a relationship (e.g. HAS_BUYER).
                 bucket = {str(r["value"]): int(r["n"]) for r in rows}
-                if not bucket or (len(bucket) == 1 and "(empty)" in bucket and products > 0):
-                    # Try related Brand nodes for brand attr.
-                    if attr == "brand":
-                        brand_rows = list(
+                empty_only = not bucket or (
+                    len(bucket) == 1 and "(empty)" in bucket and products > 0
+                )
+                if empty_only:
+                    for rel in _rel_types_for_attr(str(attr)):
+                        rel_rows = list(
                             session.run(
-                                "MATCH (p:Entity:Product {graph: $g})-[:HAS_BRAND]->(b:Entity) "
+                                f"MATCH (p:Entity:Product {{graph: $g}})-[:{rel}]->(b:Entity) "
                                 "WHERE coalesce(p.lifecycle,'active') <> 'deleted' "
                                 "RETURN coalesce(b.name, '(empty)') AS value, count(*) AS n "
                                 "ORDER BY n DESC, value ASC",
                                 {"g": graph_id},
                             )
                         )
-                        bucket = {str(r["value"]): int(r["n"]) for r in brand_rows}
+                        if rel_rows:
+                            bucket = {str(r["value"]): int(r["n"]) for r in rel_rows}
+                            break
                 if bucket:
                     value_counts[attr] = bucket
-                    unique_counts[attr] = len(bucket)
+                    unique_counts[attr] = len(
+                        [k for k in bucket if str(k).strip().casefold() not in _EMPTY_KEYS]
+                    ) or len(bucket)
     else:
         nodes = platform.graph.find_nodes(graph=graph_id, label="Product", include_deleted=False)
         products = len(nodes)
@@ -255,9 +352,13 @@ def build_product_graph_stats_from_neo4j(
         "updated_at": _utc_now(),
         "totals": {
             "products": products,
-            "brands": unique_counts.get("brand", 0),
-            "buyers": unique_counts.get("buyer", 0),
             "columns_indexed": len(value_counts),
+            # Keep common shortcuts when present; full map is unique_counts.
+            **{
+                f"{key}s" if not key.endswith("s") else key: int(n)
+                for key, n in unique_counts.items()
+                if key in {"brand", "buyer"} and n
+            },
         },
         "unique_counts": unique_counts,
         "value_counts": value_counts,
@@ -278,3 +379,25 @@ def refresh_ecom_stats(platform) -> dict[str, Any]:
         except Exception as exc:
             LOGGER.warning("postgres ecom stats failed, falling back to neo4j: %s", exc)
     return build_product_graph_stats_from_neo4j(platform, "ecom_products", generated=settings.generated)
+
+
+def refresh_product_graph_stats(
+    platform,
+    graph_id: str,
+    *,
+    attributes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Write ``kg_stats/{graph_id}.json`` from the live Neo4j product graph.
+
+    Used by mapped SQL syncs (PLMEX and any other authorized_sql product KG).
+    E-commerce prefers Postgres via ``refresh_ecom_stats``; this is the
+    graph-agnostic path for every other product graph.
+    """
+
+    settings: Settings = platform.settings
+    return build_product_graph_stats_from_neo4j(
+        platform,
+        graph_id,
+        attributes=attributes,
+        generated=settings.generated,
+    )

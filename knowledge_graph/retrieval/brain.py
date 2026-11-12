@@ -17,7 +17,7 @@ from knowledge_graph.ontology import normalize_name
 from knowledge_graph.pipeline.service import Platform
 from knowledge_graph.retrieval.news import search_document_graphs
 from knowledge_graph.retrieval.products import CATALOG_FIELDS, field_text
-from knowledge_graph.retrieval.queries import product_materials, products_sharing_material
+from knowledge_graph.retrieval.queries import product_materials
 
 LOGGER = get_logger("knowledge_graph.retrieval.brain")
 DEMO_CAVEAT = "These figures describe the synthetic demo products, not a live PLMEX database."
@@ -25,39 +25,16 @@ CATALOG_CAVEAT = ""
 
 
 def _analysis_fields_for_graph(platform, graph_id: str) -> list[str] | None:
-    """Unique analysis columns for the selected product KG (from metadata schema)."""
+    """Unique analysis columns for the selected product KG (live schema — no preferred list)."""
 
     if not graph_id:
         return None
     try:
-        from knowledge_graph.retrieval.metadata import metadata_overview
+        from knowledge_graph.retrieval.ecom import resolve_analysis_fields
 
-        overview = metadata_overview(platform, graph_id)
+        chosen = resolve_analysis_fields(platform, graph_id)
     except Exception:
         return None
-    schema = (overview or {}).get("schema") or {}
-    product = schema.get("Product") if isinstance(schema, dict) else None
-    attrs = list((product or {}).get("attributes") or {})
-    preferred = [
-        "brand",
-        "buyer",
-        "category",
-        "family",
-        "subfamily",
-        "garment_type",
-        "material",
-        "color",
-        "gender",
-        "season",
-        "department",
-        "availability",
-        "section",
-        "price",
-        "gauge",
-        "gsm",
-    ]
-    present = {str(item).casefold() for item in attrs}
-    chosen = [key for key in preferred if key in present]
     return chosen or None
 
 
@@ -89,26 +66,25 @@ _SPEC_FIELDS = (
     "ai_finish_tags",
     "ai_special_tags",
 )
-# Fields shown in a buyer / product analysis (top values per type).
-_ANALYSIS_FIELDS = (
-    "garment_type",
-    "category",
-    "subcategory",
-    "plm_main_category",
-    "material",
-    "color",
-    "gender",
-    "season",
-    "brand",
-    "department",
-    "gauge",
-    "gsm",
-    "ai_event_tags",
-    "ai_construction_tags",
-    "ai_material_tags",
-    "ai_finish_tags",
-    "ai_special_tags",
-)
+def _sql_analysis_fields() -> tuple[str, ...]:
+    """Facet keys from the live catalog field registry (SQL/PLM path) — not a hand list."""
+
+    skip = {
+        "name",
+        "product_id",
+        "id",
+        "description",
+        "url",
+        "image",
+        "price",
+        "original_price",
+        "currency",
+    }
+    return tuple(
+        str(field.key)
+        for field in CATALOG_FIELDS
+        if str(getattr(field, "key", "") or "") and str(field.key) not in skip
+    )
 _SEASON_WORDS = {
     "winter": "winter",
     "winer": "winter",
@@ -163,6 +139,8 @@ class BrainRetrieveRequest(BaseModel):
     season_name: str | None = None
     upcoming: bool = False
     corrections: list[str] = Field(default_factory=list)
+    # Distinct facet count ("how many buyers") — not a product total.
+    count_entity: str | None = None
     # Optional scope: one individual KG, or several. Empty = all active registry graphs.
     graph_id: str | None = None
     graph_ids: list[str] | None = None
@@ -280,54 +258,259 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
             caveats,
             question=request.question or "",
         )
-    elif intent in {"product_count", "specification"}:
+    elif intent in {"product_count", "specification", "breakdown", "list", "count", "product_details"}:
         from knowledge_graph.retrieval.ecom import (
             append_neo4j_analysis_answer,
+            append_neo4j_availability_history_answer,
             append_neo4j_count_answer,
+            append_neo4j_price_history_answer,
+            cypher_avg_price_by_brand,
+            cypher_count_nodes,
             default_product_graph,
             neo4j_product_count,
+            price_history_mode,
         )
 
-        target = default_product_graph(platform, request.graph_id)
+        from knowledge_graph.retrieval.ecom import pick_product_graph_for_ask
+
+        # Analysis/counts: honor graph_ids / filters — never assume the first registry graph is ecom.
+        if request.graph_ids:
+            scoped_targets = [g for g in request.graph_ids if g in (product_ids or [])]
+        else:
+            scoped_targets = []
+        target = (
+            scoped_targets[0]
+            if scoped_targets
+            else pick_product_graph_for_ask(
+                platform,
+                preferred=request.graph_id,
+                graph_ids=product_ids,
+                filters=dict(request.filters or {}),
+            )
+        )
+        if not scoped_targets and target:
+            scoped_targets = [target]
         neo_count = neo4j_product_count(platform, target) if target else 0
         has_neo4j = bool(target and neo_count > 0)
-        trace_debug("Neo4j product target", target=target, neo_count=neo_count, has_neo4j=has_neo4j)
+        special_done = False
+        trace_debug(
+            "Neo4j product target",
+            target=target,
+            targets=scoped_targets,
+            neo_count=neo_count,
+            has_neo4j=has_neo4j,
+        )
         if request.graph_id and request.graph_id not in product_ids and target is None:
             lines.append(f"Graph '{request.graph_id}' is not a registered product graph; no product count was estimated.")
             trace_step("brain", "Unknown product graph", graph_id=request.graph_id)
-        elif has_neo4j and intent == "product_count" and request.analysis and not request.suggest:
-            # Field-wise ask ("material wise") with analysis flag → only that dimension.
-            if request.group_by:
-                analysis_fields = [str(request.group_by)]
-            else:
-                analysis_fields = _analysis_fields_for_graph(platform, target)
-            trace_step(
-                "brain",
-                "Neo4j analysis answer",
-                graph_id=target,
-                fields=analysis_fields,
-                filters=request.filters,
-            )
-            append_neo4j_analysis_answer(
+            special_done = True
+        elif has_neo4j and intent == "product_details" and not request.suggest:
+            from knowledge_graph.retrieval.ecom import append_neo4j_product_details_answer
+
+            append_neo4j_product_details_answer(
                 platform,
                 principal,
                 target,
                 dict(request.filters or {}),
-                request.limit,
                 lines,
                 evidence,
-                caveats,
-                analysis_fields=analysis_fields,
             )
             if not request.graph_id:
                 request.graph_id = target
-        elif has_neo4j and intent == "product_count" and not request.suggest and not request.analysis:
+            special_done = True
+        elif has_neo4j and intent in {"product_count", "breakdown", "list", "count"} and not request.suggest:
+            try:
+                from fashion_brain.ask import (
+                    _is_average_price_question,
+                    availability_history_mode,
+                    split_multi_party_filter,
+                    temporal_count_entity,
+                )
+
+                tlabel = temporal_count_entity(request.question or "")
+                avg_price_ask = _is_average_price_question(request.question or "")
+                avail_mode = availability_history_mode(request.question or "")
+            except Exception:
+                tlabel = None
+                avg_price_ask = False
+                avail_mode = None
+                split_multi_party_filter = None  # type: ignore
+
+            if tlabel == "AvailabilitySnapshot" or avail_mode:
+                handled = append_neo4j_availability_history_answer(
+                    platform,
+                    principal,
+                    target,
+                    request.question or "",
+                    request.limit,
+                    lines,
+                    evidence,
+                    caveats,
+                    filters=dict(request.filters or {}),
+                )
+                if handled:
+                    if not request.graph_id:
+                        request.graph_id = target
+                    special_done = True
+            elif tlabel == "PriceChangeEvent" or price_history_mode(request.question or ""):
+                trace_step(
+                    "brain",
+                    "Neo4j price history answer",
+                    graph_id=target,
+                    mode=price_history_mode(request.question or ""),
+                    filters=request.filters,
+                )
+                handled = append_neo4j_price_history_answer(
+                    platform,
+                    principal,
+                    target,
+                    dict(request.filters or {}),
+                    request.question or "",
+                    request.limit,
+                    lines,
+                    evidence,
+                    caveats,
+                )
+                if handled and not request.graph_id:
+                    request.graph_id = target
+                if handled:
+                    special_done = True
+            elif avg_price_ask:
+                filt = dict(request.filters or {})
+                parties = []
+                if callable(split_multi_party_filter):
+                    parties = split_multi_party_filter(str(filt.get("brand") or filt.get("buyer") or ""))
+                rows: list[dict] = []
+                if len(parties) >= 2:
+                    for party in parties:
+                        part_rows = cypher_avg_price_by_brand(
+                            platform, target, {**filt, "brand": party}, limit=1
+                        ) or []
+                        rows.extend(part_rows or [{"brand": party, "avg_price": None, "products": 0}])
+                else:
+                    rows = cypher_avg_price_by_brand(platform, target, filt, limit=int(request.limit or 10)) or []
+                lines.append("Current-state average price by brand:")
+                lines.append("| Brand | Avg price | Products |")
+                lines.append("| --- | ---: | ---: |")
+                if not rows:
+                    lines.append("| — | — | 0 |")
+                else:
+                    for row in rows:
+                        avg = row.get("avg_price")
+                        avg_s = f"{avg:.2f}" if isinstance(avg, float) else "—"
+                        lines.append(
+                            f"| {row.get('brand') or '—'} | {avg_s} | {int(row.get('products') or 0)} |"
+                        )
+                    evidence.append(
+                        EvidenceItem(
+                            source_id=target,
+                            record_id="avg_price_by_brand",
+                            title="Average price by brand",
+                            excerpt="; ".join(f"{r.get('brand')}={r.get('avg_price')}" for r in rows[:5]),
+                            source_path=target,
+                            verification_status="observed",
+                            graph=target,
+                            node_id=None,
+                            synthetic=False,
+                        )
+                    )
+                caveats.append(
+                    "Average price uses current product.price_num — not historical PriceChangeEvent deltas."
+                )
+                if not request.graph_id:
+                    request.graph_id = target
+                special_done = True
+            else:
+                try:
+                    from fashion_brain.ask import _is_unsupported_ecom_facet_question
+
+                    closed = _is_unsupported_ecom_facet_question(request.question or "")
+                except Exception:
+                    closed = None
+                if closed:
+                    lines.append(closed)
+                    caveats.append(closed)
+                    if not request.graph_id:
+                        request.graph_id = target
+                    special_done = True
+
+        # Count / breakdown / list / analysis on the selected product graph(s) — any KG.
+        # (Intention may label a group_by ask as "breakdown" — never fall through to
+        # the empty Postgres/PLM catalog path for that.)
+        _neo_count_intents = {"product_count", "breakdown", "list", "count"}
+        if special_done:
+            pass
+        elif has_neo4j and intent in _neo_count_intents and request.analysis and not request.suggest:
+            analysis_targets = scoped_targets or ([target] if target else [])
+            for gid in analysis_targets:
+                if request.group_by:
+                    analysis_fields = [str(request.group_by)]
+                else:
+                    analysis_fields = _analysis_fields_for_graph(platform, gid)
+                if len(analysis_targets) > 1:
+                    lines.append(f"## Analysis — `{gid}`")
+                trace_step(
+                    "brain",
+                    "Neo4j analysis answer",
+                    graph_id=gid,
+                    fields=analysis_fields,
+                    filters=request.filters,
+                )
+                append_neo4j_analysis_answer(
+                    platform,
+                    principal,
+                    gid,
+                    dict(request.filters or {}),
+                    request.limit,
+                    lines,
+                    evidence,
+                    caveats,
+                    analysis_fields=analysis_fields,
+                )
+            if len(analysis_targets) > 1:
+                caveats.append(
+                    "Attribute analysis ran per selected product graph (not limited to e-commerce)."
+                )
+            if not request.graph_id and analysis_targets:
+                request.graph_id = analysis_targets[0]
+            special_done = True
+        elif has_neo4j and (intent == "specification" or request.suggest) and not request.analysis:
+            from knowledge_graph.retrieval.ecom import append_neo4j_specification_answer
+
+            spec_targets = scoped_targets if len(scoped_targets) > 1 else [target] if target else []
+            trace_step(
+                "brain",
+                "Neo4j specification answer",
+                graph_id=target,
+                graphs=spec_targets,
+                filters=request.filters,
+                season_name=request.season_name,
+            )
+            append_neo4j_specification_answer(
+                platform,
+                principal,
+                target or (spec_targets[0] if spec_targets else ""),
+                dict(request.filters or {}),
+                lines,
+                evidence,
+                caveats,
+                season_name=request.season_name,
+                graph_ids=spec_targets,
+            )
+            if not request.graph_id and target:
+                request.graph_id = target
+            if len(spec_targets) > 1 and not request.graph_ids:
+                request.graph_ids = list(spec_targets)
+            special_done = True
+        elif has_neo4j and intent in _neo_count_intents and not request.suggest and not request.analysis:
             trace_step(
                 "brain",
                 "Neo4j count/group answer",
                 graph_id=target,
                 group_by=request.group_by,
                 filters=request.filters,
+                intent=intent,
+                count_entity=getattr(request, "count_entity", None),
             )
             append_neo4j_count_answer(
                 platform,
@@ -339,9 +522,13 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                 lines,
                 evidence,
                 caveats,
+                question=request.question or "",
+                count_entity=getattr(request, "count_entity", None),
             )
             if not request.graph_id:
                 request.graph_id = target
+        elif intent == "product_details":
+            lines.append("The selected product catalog has no available product records to retrieve specifications from.")
         else:
             trace_step("brain", "Catalog/Postgres answer path", intent=intent, suggest=request.suggest)
             _append_catalog_answer(
@@ -364,47 +551,79 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                 unavailable,
             )
     elif intent == "shared_products":
-        # Shared Material nodes across product graphs (ecom / own_products).
-        # Prefer verified RESOLVES_TO when present; else group by Material node id.
-        groups = products_sharing_material(platform, principal)
-        if not groups:
-            from knowledge_graph.retrieval.ecom import registry_product_graphs
+        # Agent-chosen attribute + per-graph facet totals. Never question-specific Cypher
+        # and never scrape product ids across million-row catalogs.
+        from knowledge_graph.retrieval.ecom import (
+            analysis_value_limit,
+            facet_overlap_across_graphs,
+            overlap_facet_from_question,
+        )
 
-            product_graphs = registry_product_graphs(platform) or ["own_products"]
-            any_visible = False
-            any_products = False
-            for graph_id in product_graphs:
-                nodes = platform.graph.find_nodes(graph=graph_id, label="Product", include_deleted=False)
-                if nodes:
-                    any_products = True
-                if any(allows(principal, node.properties.get("classification") or "internal") for node in nodes):
-                    any_visible = True
-                    break
-            if any_products and not any_visible:
-                unavailable.append("Product records are not visible at the current clearance.")
-            lines.append("No material is shared by more than one visible product.")
+        graph_ids = [str(item) for item in (product_ids or []) if item]
+        if len(set(graph_ids)) < 2:
+            lines.append("Name at least two product catalogs to compare shared attribute values.")
+            caveats.append("Cross-catalog overlap needs two or more product graphs.")
         else:
-            verified = [group for group in groups if group.get("verified")]
-            observed = [group for group in groups if not group.get("verified")]
-            if verified:
-                lines.append("Materials shared by more than one product (verified canonical link):")
-                for group in verified[:25]:
-                    sample = ", ".join(group["products"][:8])
-                    more = f" (+{len(group['products']) - 8} more)" if len(group["products"]) > 8 else ""
+            field = str(request.group_by or "").strip() or overlap_facet_from_question(
+                request.question or "", platform, graph_ids
+            )
+            if not field:
+                lines.append(
+                    "Say which product attribute to compare across those catalogs "
+                    "(any schema facet such as material, color, or brand)."
+                )
+            else:
+                # Always aggregate fully (cheap distinct values). Cap only for explicit top-N.
+                row_limit = analysis_value_limit(request.question or "", request.limit)
+                groups = facet_overlap_across_graphs(
+                    platform,
+                    graph_ids,
+                    field,
+                    filters=dict(request.filters or {}),
+                    limit=row_limit,
+                )
+                label = field.replace("_", " ")
+                if not groups:
                     lines.append(
-                        f"- {group['material']} ({group['canonical_id']}): {len(group['products'])} products — {sample}{more}."
+                        f"No {label} values were found in every selected product catalog."
                     )
-            if observed:
-                lines.append("Materials shared by more than one product (same Material node in the product graph):")
-                for group in observed[:25]:
-                    sample = ", ".join(group["products"][:8])
-                    more = f" (+{len(group['products']) - 8} more)" if len(group["products"]) > 8 else ""
+                else:
+                    from knowledge_graph.retrieval.system_meta import _graph_name
+
+                    graph_labels = {}
+                    for graph_id in graph_ids:
+                        name = _graph_name(platform, graph_id) or graph_id
+                        name = name.removesuffix(" Knowledge Graph").strip()
+                        graph_labels[graph_id] = f"{name} Products"
                     lines.append(
-                        f"- {group['material']} ({group['canonical_id']}): {len(group['products'])} products — {sample}{more}."
+                        f"Shared {label} values present in every selected product catalog "
+                        f"(product counts by catalog):"
                     )
-            if len(groups) > 25:
-                lines.append(f"…and {len(groups) - 25} more shared materials.")
-            caveats.append("Product ids are from the active product knowledge graph(s).")
+                    lines.append(
+                        "| "
+                        + " | ".join([label.title(), *(graph_labels[gid] for gid in graph_ids)])
+                        + " |"
+                    )
+                    lines.append(
+                        "| " + " | ".join(["---", *("---:" for _ in graph_ids)]) + " |"
+                    )
+                    for group in groups:
+                        value = str(group.get("value") or "").replace("|", "\\|")
+                        counts = group.get("graph_counts") or {}
+                        lines.append("| " + " | ".join(
+                            [value, *(str(int(counts.get(gid) or 0)) for gid in graph_ids)]
+                        ) + " |")
+                    if row_limit is not None:
+                        lines.append(
+                            f"Showing top {len(groups)} shared {label} values "
+                            f"(ask for the full list for every value)."
+                        )
+                    else:
+                        lines.append(f"{len(groups)} shared {label} values in total.")
+                    caveats.append(
+                        f"Counts are products with each {label} value in each catalog; "
+                        "this is an attribute comparison, not a product listing."
+                    )
     elif intent == "products":
         rows = product_materials(platform, principal)
         if not rows:
@@ -627,7 +846,7 @@ def _append_catalog_answer(platform, principal, plan, lines, evidence, caveats, 
     elif filters or group_by:
         matched, total = platform.products.search(principal, limit=5, **filters)
         phrase = _filter_phrase(filters)
-        lines.append(f"There are {total} products" + (f" {phrase}." if phrase else "."))
+        lines.append(f"There are {total:,} products" + (f" {phrase}." if phrase else "."))
         if group_by:
             groups = platform.products.count_by(principal, group_by, **filters)
             if plan.get("limit"):
@@ -637,7 +856,7 @@ def _append_catalog_answer(platform, principal, plan, lines, evidence, caveats, 
         for envelope in matched:
             evidence.append(_evidence_from_product(envelope))
     else:
-        lines.append(f"There are {visible} products.")
+        lines.append(f"There are {visible:,} products.")
     if CATALOG_CAVEAT:
         caveats.append(CATALOG_CAVEAT)
     if hidden:
@@ -695,7 +914,8 @@ def _append_analysis(platform, principal, plan, lines, evidence, caveats, unavai
         lines.append(note)
     buyer = filters.get("buyer")
     top_n = int(plan.get("limit") or 5)
-    total, ranked = platform.products.profile(principal, _ANALYSIS_FIELDS, **filters)
+    analysis_fields = _sql_analysis_fields()
+    total, ranked = platform.products.profile(principal, analysis_fields, **filters)
     if not total:
         who = buyer or "this selection"
         lines.append(f"There are no products for {who} to analyse.")
@@ -705,33 +925,26 @@ def _append_analysis(platform, principal, plan, lines, evidence, caveats, unavai
     who = buyer or "all buyers"
     lines.append(f"Product analysis for {who}: {total} products.")
     lines.append(f"Top {top_n} values by type (highest count first).")
-    chart_fields = {"material", "color", "gender", "availability"}
-    for field in _ANALYSIS_FIELDS:
+    for field in analysis_fields:
         choices = [item for item in (ranked.get(field) or []) if _usable_spec_value(item[0])][:top_n]
         if not choices:
             continue
         label = _GROUP_LABELS.get(field, field.replace("_", " "))
+        lines.append(f"<!--fb:viz:{field}-->")
         lines.append(f"### {label}")
-        if field in chart_fields:
-            chart_type = "pie" if field in {"gender", "material", "color"} else "bar"
-            payload = {
-                "type": chart_type,
-                "title": f"{who} — {label}",
-                "labels": [name for name, _count in choices],
-                "values": [count for _name, count in choices],
-            }
-            lines.append("```chart")
-            lines.append(json.dumps(payload, ensure_ascii=False))
-            lines.append("```")
-            top_name, top_count = choices[0]
-            share = round(100.0 * top_count / total, 1) if total else 0.0
-            lines.append(f"Leading value: {top_name} ({top_count}, {share}%).")
-        else:
-            lines.append("| Name | Count | Share % |")
-            lines.append("| --- | ---: | ---: |")
-            for name, count in choices:
-                share = round(100.0 * count / total, 1) if total else 0.0
-                lines.append(f"| {name} | {count} | {share} |")
+        top_name, top_count = choices[0]
+        share = round(100.0 * top_count / total, 1) if total else 0.0
+        lines.append(f"Leading value: {top_name} ({top_count}, {share}%).")
+        # Emit ```chart so the chat UI can render attribute rankings.
+        payload = {
+            "type": "bar",
+            "title": label,
+            "labels": [str(name) for name, _ in choices],
+            "values": [int(count) for _, count in choices],
+        }
+        lines.append("```chart")
+        lines.append(json.dumps(payload, ensure_ascii=False))
+        lines.append("```")
     matched, _total = platform.products.search(principal, limit=5, **filters)
     for envelope in matched:
         evidence.append(_evidence_from_product(envelope))

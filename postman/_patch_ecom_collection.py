@@ -80,36 +80,48 @@ def main() -> None:
         else:
             col.setdefault("variable", []).append({"key": key, "value": value})
 
+    mapping = json.loads((BODIES / "ecom_master_products_mapping.json").read_text(encoding="utf-8"))
+    db_conn = json.loads((BODIES / "POST_api_db_connections.json").read_text(encoding="utf-8"))
+    graph_build = json.loads((BODIES / "POST_api_graphs_build.json").read_text(encoding="utf-8"))
+    query_body = json.loads((BODIES / "POST_api_graphs_query_ecom.json").read_text(encoding="utf-8"))
+    retrieve_brand = json.loads((BODIES / "POST_brain_retrieve_ecom_brand.json").read_text(encoding="utf-8"))
+
     col["info"]["description"] = (
         "Knowledge graph API on port 8001.\n\n"
-        "**E-com empty→live order (folder 0):**\n"
-        "1. GET health / empty checks\n"
-        "2. POST /ontologies (ecom — full schema + Zara/Primark/Matalan/C&A/Walmart)\n"
-        "3. POST /graphs (ecom_products, kind=product)\n"
-        "4. POST /api/sources (ecom_products, authorized_sql)\n"
-        "5. POST sync → poll job → metadata/values → query/retrieve\n\n"
-        "Bodies also in `postman/bodies/`. Guide: `knowledge_graph/POSTMAN.md`.\n\n"
+        "**UI wizard (folder 0) — all API, no file copy:**\n"
+        "1. Health + inspect (ontologies / sources / graphs / checklist)\n"
+        "2. POST ontology → GET ontology\n"
+        "3. PUT mapping → POST db connection → GET db inspect → POST source → POST graph\n"
+        "4. Checklist ready → POST build → poll job + build/status\n"
+        "5. Metadata / query / brain\n\n"
+        "Guide: `knowledge_graph/UI_CONTROL_PLAN.md` · `knowledge_graph/POSTMAN.md`.\n\n"
         "Auth: Bearer `{{apiToken}}` only if set. Always `X-Clearance: {{clearance}}` (internal)."
     )
 
     ecom_folder = {
-        "name": "0 Ecom pipeline (empty → live)",
+        "name": "0 UI wizard (empty → live)",
         "description": (
-            "Run top→bottom after a wipe. Uses the real ecom ontology "
-            "(Product/Brand/Material/… + HAS_BRAND/USES_MATERIAL/…). "
-            "Copy postman/bodies/ecom_master_products_mapping.json → data/schemas/ before sync. "
-            "Postgres DSN must be set in .env."
+            "Full UI-control path. Inspect first, then register ontology/mapping/DB/source/graph, "
+            "then build and poll status. No manual file copies. Postgres password stays in .env."
         ),
         "item": [
-            req("01 GET health", "GET", "{{baseUrl}}/health", description="Expect status ok."),
-            req("02 GET /ontologies (should be empty or only prior POSTs)", "GET", "{{baseUrl}}/ontologies"),
-            req("03 GET /api/sources (should be empty)", "GET", "{{baseUrl}}/api/sources"),
+            req("01 GET /health", "GET", "{{baseUrl}}/health", description="Expect status ok."),
+            req("02 GET /ontologies (schemas present?)", "GET", "{{baseUrl}}/ontologies"),
+            req("03 GET /api/sources (sources present?)", "GET", "{{baseUrl}}/api/sources"),
+            req("04 GET /api/graphs (KGs present?)", "GET", "{{baseUrl}}/api/graphs"),
             req(
-                "04 POST /ontologies — ecom (full body)",
+                "05 GET /api/setup/checklist",
+                "GET",
+                "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+                description="ready_to_build + missing[]. Expect false until register steps done.",
+            ),
+            req("06 GET /api/bootstrap", "GET", "{{baseUrl}}/api/bootstrap", description="UI home: counts + lists + checklist."),
+            req(
+                "07 POST /ontologies — ecom",
                 "POST",
                 "{{baseUrl}}/ontologies",
                 body=ontology,
-                description="Creates ontology id=ecom with entity_types + relationship_allowlist + brand canonicals.",
+                description="Push full ecom ontology from Postman body.",
                 event=[
                     {
                         "listen": "test",
@@ -117,39 +129,44 @@ def main() -> None:
                             "type": "text/javascript",
                             "exec": [
                                 "pm.collectionVariables.set('ontologyId', 'ecom');",
-                                "pm.test('ontology created or already exists', function () {",
-                                "  pm.expect([200, 400]).to.include(pm.response.code);",
+                                "pm.test('ontology ok or already exists', function () {",
+                                "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
                                 "});",
                             ],
                         },
                     }
                 ],
             ),
+            req("08 GET /ontologies/ecom", "GET", "{{baseUrl}}/ontologies/ecom"),
             req(
-                "05 GET /ontologies/ecom",
-                "GET",
-                "{{baseUrl}}/ontologies/ecom",
-                description="Must return definition with Brand + HAS_BRAND, not 500.",
+                "09 PUT /api/sources/ecom_products/mapping",
+                "PUT",
+                "{{baseUrl}}/api/sources/ecom_products/mapping",
+                body=mapping,
+                description="Upload column mapping via API (idempotent replace). No disk copy.",
             ),
             req(
-                "06 POST /graphs — ecom_products",
+                "10 POST /api/db/connections",
                 "POST",
-                "{{baseUrl}}/graphs",
-                body=graph,
-                description="kind=product only allowed for ecom_products / own_products.",
-                event=[
-                    {
-                        "listen": "test",
-                        "script": {
-                            "type": "text/javascript",
-                            "exec": ["pm.collectionVariables.set('graphId', 'ecom_products');"],
-                        },
-                    }
-                ],
+                "{{baseUrl}}/api/db/connections",
+                body=db_conn,
+                description="Named DB connection. Password via password_env / .env — never returned.",
             ),
-            req("07 GET /api/graphs/registry", "GET", "{{baseUrl}}/api/graphs/registry"),
             req(
-                "08 POST /api/sources — ecom_products",
+                "11 POST /api/db/connections/ecom_postgres/test",
+                "POST",
+                "{{baseUrl}}/api/db/connections/ecom_postgres/test?table=master_products",
+                body={},
+                description="Test named connection + table metadata.",
+            ),
+            req(
+                "12 GET /api/db/connection",
+                "GET",
+                "{{baseUrl}}/api/db/connection?table=master_products&schema=public",
+                description="Inspect default .env DSN table/columns/brands.",
+            ),
+            req(
+                "13 POST /api/sources — ecom_products",
                 "POST",
                 "{{baseUrl}}/api/sources",
                 body=source,
@@ -158,94 +175,84 @@ def main() -> None:
                         "listen": "test",
                         "script": {
                             "type": "text/javascript",
-                            "exec": ["pm.collectionVariables.set('sourceId', 'ecom_products');"],
+                            "exec": [
+                                "pm.collectionVariables.set('sourceId', 'ecom_products');",
+                                "pm.test('source ok or already exists', function () {",
+                                "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
+                                "});",
+                            ],
                         },
                     }
                 ],
             ),
-            req("09 GET /api/sources/ecom_products", "GET", "{{baseUrl}}/api/sources/ecom_products"),
             req(
-                "10 POST /api/sources/ecom_products/sync",
+                "14 POST /graphs — ecom_products",
                 "POST",
-                "{{baseUrl}}/api/sources/ecom_products/sync",
-                body={},
-                description="Needs FASHIONGPT_ECOM_DSN / POSTGRES_* and mapping file under data/schemas/.",
+                "{{baseUrl}}/graphs",
+                body=graph,
+                event=[
+                    {
+                        "listen": "test",
+                        "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                                "pm.collectionVariables.set('graphId', 'ecom_products');",
+                                "pm.test('graph ok or already exists', function () {",
+                                "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
+                                "});",
+                            ],
+                        },
+                    }
+                ],
+            ),
+            req(
+                "15 GET /api/setup/checklist (must be ready)",
+                "GET",
+                "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+                description="Expect ready_to_build=true before build.",
+            ),
+            req(
+                "16 POST /api/graphs/ecom_products/build",
+                "POST",
+                "{{baseUrl}}/api/graphs/ecom_products/build",
+                body=graph_build,
+                description="Start build from source_id + schema. Poll job + build/status.",
                 event=save_job_id_script(),
             ),
-            req("11 GET /jobs/{jobId}", "GET", "{{baseUrl}}/jobs/{{jobId}}", description="Poll until finished."),
-            req("12 GET /api/graphs", "GET", "{{baseUrl}}/api/graphs", description="ecom_products node_count > 0 after sync."),
+            req("17 GET /jobs/{jobId}", "GET", "{{baseUrl}}/jobs/{{jobId}}", description="Poll until done/failed."),
             req(
-                "13 GET /api/metadata/values?attribute=brand",
+                "18 GET /api/graphs/ecom_products/build/status",
+                "GET",
+                "{{baseUrl}}/api/graphs/ecom_products/build/status?job_id={{jobId}}",
+                description="products / node_count / edge_count / errors / progress_percent.",
+            ),
+            req("19 GET /api/graphs", "GET", "{{baseUrl}}/api/graphs", description="node_count > 0 after build."),
+            req(
+                "20 GET /api/metadata/values?attribute=brand",
                 "GET",
                 "{{baseUrl}}/api/metadata/values?attribute=brand&graph_id=ecom_products&limit=25",
-                description="Expect primark, zara, matalan, c-and-a, walmart samples when data synced.",
             ),
             req(
-                "14 GET /api/metadata/values?attribute=material",
-                "GET",
-                "{{baseUrl}}/api/metadata/values?attribute=material&graph_id=ecom_products&limit=25",
-            ),
-            req(
-                "15 POST /api/graphs/query — list_products",
+                "21 POST /api/graphs/query",
                 "POST",
                 "{{baseUrl}}/api/graphs/query",
-                body={
-                    "graph_id": "ecom_products",
-                    "template": "list_products",
-                    "params": {},
-                    "limit": 10,
-                    "offset": 0,
-                },
+                body=query_body,
             ),
             req(
-                "16 POST /brain/retrieve — brand primark",
+                "22 POST /brain/retrieve",
                 "POST",
                 "{{baseUrl}}/brain/retrieve",
-                body={
-                    "question": "How many Primark products are in the e-commerce catalog?",
-                    "intent": "product_count",
-                    "filters": {"brand": "{{brand}}"},
-                    "group_by": None,
-                    "unsupported": False,
-                    "limit": None,
-                    "suggest": False,
-                    "analysis": False,
-                    "season_name": None,
-                    "upcoming": False,
-                    "corrections": [],
-                    "graph_id": "ecom_products",
-                    "graph_ids": ["ecom_products"],
-                    "use_global_kg": False,
-                },
-                description="Uses ontology Brand canonicals (primark/zara/matalan/c-and-a/walmart).",
-            ),
-            req(
-                "17 POST /brain/retrieve — material cotton",
-                "POST",
-                "{{baseUrl}}/brain/retrieve",
-                body={
-                    "question": "Which e-com products use cotton?",
-                    "intent": "product_count",
-                    "filters": {"material": "{{material}}"},
-                    "graph_id": "ecom_products",
-                    "graph_ids": ["ecom_products"],
-                    "analysis": False,
-                    "suggest": False,
-                    "corrections": [],
-                },
-            ),
-            req(
-                "18 POST ontology pair — HAS_BRAND (idempotent check)",
-                "POST",
-                "{{baseUrl}}/ontologies/ecom/pairs",
-                body={"type": "HAS_BRAND", "start_type": "Product", "end_type": "Brand"},
-                description="Relationship already in allowlist; useful to verify pairs API.",
+                body=retrieve_brand,
             ),
         ],
     }
-
-    # Drop previous "0 Ecom…" folder if re-run
-    items = [f for f in col.get("item", []) if not str(f.get("name", "")).startswith("0 Ecom")]
+    # Drop previous wizard / ecom folder if re-run
+    items = [
+        f
+        for f in col.get("item", [])
+        if not str(f.get("name", "")).startswith("0 Ecom")
+        and not str(f.get("name", "")).startswith("0 UI wizard")
+    ]
     col["item"] = [ecom_folder, *items]
 
     # Fix Registry folder requests that still use buyer-scraping / wrong pairs
@@ -267,10 +274,58 @@ def main() -> None:
                 item["name"] = "POST graph — ecom_products"
                 item["request"]["body"] = raw_body(graph)
 
-    # Fix Plan API register source + retrieve filters
+    # Fix Plan API register source + retrieve filters; prepend new endpoints
     for folder in col["item"]:
         if folder.get("name") != "Plan API aliases":
             continue
+        folder["description"] = (
+            "Plan API aliases for admin UI. Prefer folder 0 UI wizard for empty→live. "
+            "Includes bootstrap, checklist, mapping, db connections, graph build/status."
+        )
+        plan_items = folder.get("item", [])
+        drop_names = {
+            "0 GET /api/db/connection",
+            "0b POST /api/kg/build",
+            "0c GET /api/bootstrap",
+            "0d GET /api/setup/checklist",
+            "0e PUT /api/sources/ecom_products/mapping",
+            "0f POST /api/graphs/ecom_products/build",
+            "0g GET /api/graphs/ecom_products/build/status",
+        }
+        plan_items = [item for item in plan_items if item.get("name") not in drop_names]
+        plan_items = [
+            req("0c GET /api/bootstrap", "GET", "{{baseUrl}}/api/bootstrap"),
+            req(
+                "0d GET /api/setup/checklist",
+                "GET",
+                "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+            ),
+            req(
+                "0 GET /api/db/connection",
+                "GET",
+                "{{baseUrl}}/api/db/connection?table=master_products&schema=public",
+            ),
+            req(
+                "0e PUT /api/sources/ecom_products/mapping",
+                "PUT",
+                "{{baseUrl}}/api/sources/ecom_products/mapping",
+                body=mapping,
+            ),
+            req(
+                "0f POST /api/graphs/ecom_products/build",
+                "POST",
+                "{{baseUrl}}/api/graphs/ecom_products/build",
+                body=graph_build,
+                event=save_job_id_script(),
+            ),
+            req(
+                "0g GET /api/graphs/ecom_products/build/status",
+                "GET",
+                "{{baseUrl}}/api/graphs/ecom_products/build/status?job_id={{jobId}}",
+            ),
+            *plan_items,
+        ]
+        folder["item"] = plan_items
         for item in folder.get("item", []):
             name = item.get("name", "")
             if "POST /api/sources (register)" in name:
@@ -286,7 +341,6 @@ def main() -> None:
                         "use_global_kg": True,
                     }
                 )
-
     for folder in col["item"]:
         if folder.get("name") != "Brain retrieve (for Fashion Brain)":
             continue

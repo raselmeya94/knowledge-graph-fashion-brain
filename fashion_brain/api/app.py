@@ -31,6 +31,27 @@ from knowledge_graph.pipeline.service import Platform
 LOGGER = get_logger("fashion_brain.api")
 CHAT_PAGE = Path(__file__).with_name("chat.html")
 _SAMPLE_FILE = re.compile(r"^[a-f0-9]{32}\.(png|jpe?g|webp)$", re.IGNORECASE)
+_KG_BUILDER_PROXY_ROUTES = (
+    ("GET", r"health"),
+    ("GET", r"ontologies"),
+    ("GET", r"ontologies/[A-Za-z0-9_-][A-Za-z0-9._-]*"),
+    ("POST", r"ontologies"),
+    ("PUT", r"ontologies/[A-Za-z0-9_-][A-Za-z0-9._-]*"),
+    ("GET", r"api/sources"),
+    ("POST", r"api/sources"),
+    ("GET", r"api/sources/[A-Za-z0-9_-][A-Za-z0-9._-]*/mapping"),
+    ("PUT", r"api/sources/[A-Za-z0-9_-][A-Za-z0-9._-]*/mapping"),
+    ("POST", r"api/db/connections"),
+    ("POST", r"api/db/connections/[A-Za-z0-9_-][A-Za-z0-9._-]*/test"),
+    ("GET", r"api/graphs"),
+    ("POST", r"graphs"),
+    ("GET", r"api/setup/checklist"),
+    ("GET", r"api/bootstrap"),
+    ("POST", r"api/graphs/[A-Za-z0-9_-][A-Za-z0-9._-]*/build"),
+    ("GET", r"jobs/[A-Za-z0-9_-][A-Za-z0-9._-]*"),
+    ("GET", r"api/graphs/[A-Za-z0-9_-][A-Za-z0-9._-]*/build/status"),
+    ("POST", r"api/graphs/query"),
+)
 
 
 class ChatTurn(BaseModel):
@@ -222,6 +243,11 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
             app.state.store = FashionBrainStore(settings.fashion_brain_db_file)
         if getattr(app.state, "auth", None) is None:
             app.state.auth = AuthService(app.state.store, settings)
+        from fashion_brain.llm import format_active_model
+
+        model_line = format_active_model(settings)
+        LOGGER.info("active model %s", model_line)
+        print(f"Fashion Brain active model: {model_line}", flush=True)
         if uses_kg_api(settings):
             status = ping_kg(settings)
             LOGGER.info("knowledge graph api status=%s", status)
@@ -373,12 +399,18 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
                 platform.graph.ping()
             except FashionGPTError as exc:
                 graph_status = exc.message
-        if platform.settings.model_provider in {"", "none", "null"}:
+        provider = str(platform.settings.model_provider or "").strip().casefold()
+        if provider in {"", "none", "null"}:
             model_status = "disabled"
+        elif provider == "ollama":
+            model_status = "configured"
         elif not resolve_model_api_key(platform.settings):
             model_status = "missing_api_key"
         else:
             model_status = "configured"
+        model_name = platform.settings.model_name
+        if provider == "ollama":
+            model_name = getattr(platform.settings, "ollama_model", None) or model_name
         store = getattr(request.app.state, "store", None)
         chat_db = "ok" if store and store.path.exists() else "missing"
         degraded = kg_status == "unreachable" or (graph_status not in {"ok", "remote"})
@@ -389,8 +421,9 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
             "graph_backend": platform.settings.graph_backend,
             "graph": graph_status,
             "model_provider": platform.settings.model_provider,
-            "model_name": platform.settings.model_name,
+            "model_name": model_name,
             "model": model_status,
+            "model_active": f"provider={provider or 'none'} model={model_name}",
             "extraction_mode": platform.settings.extraction_mode,
             "sql_enabled": platform.settings.sql_enabled,
             "chat_db": chat_db,
@@ -562,8 +595,6 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
             raise NotFoundError("Conversation was not found.")
         history = store.history_for_ask(conversation_id)
         history = _with_memory(history, store, user_id)
-        if conversation["title"] in {"", "New chat"}:
-            store.touch_conversation(conversation_id, title=_title_from(body.question))
         store.add_message(conversation_id, "user", body.question)
         graph_id = body.graph_id or conversation.get("graph_id") or None
         if body.graph_id is not None and body.graph_id != conversation.get("graph_id"):
@@ -573,7 +604,22 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
                 graph_id=body.graph_id or None,
                 clear_graph_id=body.graph_id == "",
             )
-        answer = await _run(platform, answer_question, platform, body.question, principal, history, graph_id)
+        session_state = _hydrate_session_from_messages(
+            store, conversation_id, store.get_session_state(conversation_id)
+        )
+        if graph_id and not session_state.get("last_graph_id"):
+            session_state["last_graph_id"] = graph_id
+        answer = await _run(
+            platform,
+            answer_question,
+            platform,
+            body.question,
+            principal,
+            history,
+            graph_id,
+            session_state,
+        )
+        _persist_session_memory(store, conversation_id, user_id, session_state, answer, pinned=body.graph_id)
         evidence = [item.model_dump() for item in (answer.evidence or [])]
         assistant = store.add_message(
             conversation_id,
@@ -594,6 +640,7 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
                 ],
             },
         )
+        _set_answer_title(store, conversation_id, user_id, answer.answer)
         store.touch_conversation(conversation_id)
         return {
             "conversation_id": conversation_id,
@@ -626,7 +673,7 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
         else:
             conversation = store.create_conversation(
                 user_id,
-                title=_title_from(body.message),
+                title="New chat",
                 clearance=principal.clearance,
                 graph_id=body.graph_id,
             )
@@ -697,6 +744,7 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
         if conversation_id:
             store.add_message(conversation_id, "user", body.question)
             store.add_message(conversation_id, "assistant", answer.answer)
+            _set_answer_title(store, conversation_id, _user_id(principal), answer.answer)
             store.touch_conversation(conversation_id)
         return answer
 
@@ -721,6 +769,7 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
             await websocket.close(code=1008)
             return
         session: list[dict[str, str]] = []
+        session_state: dict = {}
         try:
             while True:
                 started = time.perf_counter()
@@ -735,11 +784,28 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
                     body = AskRequest.model_validate(raw)
                     history, conversation_id = _resolve_history(body, principal, store, fallback=session)
                     graph_id = body.graph_id
-                    if graph_id is None and conversation_id:
-                        conv = store.get_conversation(conversation_id, _user_id(principal))
-                        graph_id = (conv or {}).get("graph_id")
+                    user_id = _user_id(principal)
+                    if conversation_id:
+                        conv = store.get_conversation(conversation_id, user_id)
+                        if graph_id is None:
+                            graph_id = (conv or {}).get("graph_id")
+                        # Reload sticky memory for this conversation id (survives reconnect).
+                        loaded = _hydrate_session_from_messages(
+                            store, conversation_id, store.get_session_state(conversation_id)
+                        )
+                        if loaded:
+                            session_state.clear()
+                            session_state.update(loaded)
+                        if graph_id and not session_state.get("last_graph_id"):
+                            session_state["last_graph_id"] = graph_id
                     streamed = await _stream_ask(
-                        websocket, platform, body.question, principal, history, graph_id=graph_id
+                        websocket,
+                        platform,
+                        body.question,
+                        principal,
+                        history,
+                        graph_id=graph_id,
+                        conversation_state=session_state,
                     )
                     answer_text = streamed.get("answer_text") or ""
                     answer_payload = streamed.get("answer") or {}
@@ -775,6 +841,15 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
                                     ],
                                 },
                             )
+                            _persist_session_memory(
+                                store,
+                                conversation_id,
+                                user_id,
+                                session_state,
+                                answer_payload,
+                                pinned=body.graph_id,
+                            )
+                            _set_answer_title(store, conversation_id, user_id, answer_text)
                             store.touch_conversation(conversation_id)
                 except ValidationError:
                     await websocket.send_json(
@@ -796,6 +871,34 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
     @app.get("/v1/admin/kg/health")
     def admin_kg_health(platform: Platform = Depends(current_platform), _admin: Principal = Depends(current_admin)):
         return kg_request(platform.settings, "GET", "/health", clearance=_admin.clearance)
+
+    @app.api_route("/v1/admin/kg-api/{kg_path:path}", methods=["GET", "POST", "PUT"])
+    async def admin_kg_builder_proxy(
+        kg_path: str,
+        request: Request,
+        platform: Platform = Depends(current_platform),
+        _admin: Principal = Depends(current_admin),
+    ):
+        if not any(
+            request.method == method and re.fullmatch(pattern, kg_path)
+            for method, pattern in _KG_BUILDER_PROXY_ROUTES
+        ):
+            raise NotFoundError("This Knowledge Graph endpoint is not available through the admin builder.")
+
+        body = await request.body()
+        try:
+            json_body = json.loads(body) if body else None
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValidationFailed("The Knowledge Graph request body must be valid JSON.") from exc
+
+        return kg_request(
+            platform.settings,
+            request.method,
+            f"/{kg_path}",
+            clearance=_admin.clearance,
+            json_body=json_body,
+            params=dict(request.query_params),
+        )
 
     @app.get("/v1/admin/sources")
     def admin_sources(platform: Platform = Depends(current_platform), _admin: Principal = Depends(current_admin)):
@@ -1210,9 +1313,34 @@ def _conversation_public(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _title_from(text: str) -> str:
-    clean = " ".join((text or "").split())
-    return clean[:48] + ("…" if len(clean) > 48 else "")
+def _title_from_answer(text: str) -> str:
+    lines = (text or "").splitlines()
+    first_line = next(
+        (
+            line.strip()
+            for line in lines
+            if line.strip()
+            and not line.lstrip().startswith("|")
+            and not re.fullmatch(r"[\s|:-]+", line)
+            and not line.lstrip().startswith("```")
+        ),
+        "",
+    )
+    clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)", lambda match: match.group(1) or match.group(2), first_line)
+    clean = re.sub(r"^[#>*\-\s]+|[*_`~]", "", clean).strip()
+    if not clean:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s+", clean, maxsplit=1)[0].strip()
+    if len(sentence) > 64:
+        sentence = sentence[:64].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return sentence
+
+
+def _set_answer_title(store: FashionBrainStore, conversation_id: str, user_id: str, answer: str) -> None:
+    conversation = store.get_conversation(conversation_id, user_id)
+    title = _title_from_answer(answer)
+    if conversation and conversation["title"] in {"", "New chat"} and title:
+        store.touch_conversation(conversation_id, title=title)
 
 
 def _with_memory(history: list[dict[str, str]], store: FashionBrainStore, user_id: str) -> list[dict[str, str]]:
@@ -1221,6 +1349,69 @@ def _with_memory(history: list[dict[str, str]], store: FashionBrainStore, user_i
         return history
     block = "Saved user notes:\n- " + "\n- ".join(notes)
     return [{"role": "user", "content": block}, {"role": "assistant", "content": "I will use those notes when relevant."}, *history]
+
+
+def _graph_from_routes(routes: list | None) -> str | None:
+    skip = {"shared", "master", "kg_system", "analytical_tool", "reuse", "insufficient_coverage", "system_meta"}
+    for item in reversed(list(routes or [])):
+        text = str(item or "").strip()
+        if not text or text in skip:
+            continue
+        if text in {
+            "product_count",
+            "products",
+            "specification",
+            "product_details",
+            "parent_category",
+            "shared_products",
+            "news",
+            "catalog",
+            "live_sql",
+        }:
+            continue
+        return text
+    return None
+
+
+def _persist_session_memory(
+    store: FashionBrainStore,
+    conversation_id: str,
+    user_id: str,
+    session_state: dict,
+    answer,
+    *,
+    pinned: str | None = None,
+) -> None:
+    """Save sticky catalog memory on the conversation id for the next turn."""
+
+    routes = []
+    if isinstance(answer, dict):
+        routes = list(answer.get("routes") or [])
+    elif hasattr(answer, "routes"):
+        routes = list(answer.routes or [])
+    chosen = session_state.get("last_graph_id") or _graph_from_routes(routes)
+    if chosen:
+        session_state["last_graph_id"] = chosen
+    store.set_session_state(conversation_id, session_state)
+    # Pin conversation graph when the user did not override it this turn.
+    if pinned is None and chosen:
+        store.update_conversation(conversation_id, user_id, graph_id=chosen)
+
+
+def _hydrate_session_from_messages(store: FashionBrainStore, conversation_id: str, session_state: dict) -> dict:
+    """If session_json is empty, recover last_graph_id from prior assistant message routes."""
+
+    if session_state.get("last_graph_id"):
+        return session_state
+    for message in reversed(store.list_messages(conversation_id, limit=40)):
+        if str(message.get("role") or "") != "assistant":
+            continue
+        meta = message.get("meta") or {}
+        gid = _graph_from_routes(meta.get("routes") or [])
+        if gid:
+            session_state["last_graph_id"] = gid
+            break
+    return session_state
 
 
 def _resolve_history(
@@ -1236,8 +1427,6 @@ def _resolve_history(
             raise NotFoundError("Conversation was not found.")
         history = store.history_for_ask(body.conversation_id)
         history = _with_memory(history, store, user_id)
-        if conversation["title"] in {"", "New chat"}:
-            store.touch_conversation(body.conversation_id, title=_title_from(body.question))
         return history, body.conversation_id
     history = [turn.model_dump() for turn in body.history] or list(fallback or [])
     if principal.subject not in {"api", "anonymous"}:
@@ -1267,6 +1456,9 @@ def _visible_pieces(event: dict) -> list[dict]:
     kind = event.get("type")
     if kind == "source":
         return [event]
+    # Sample-board collage updates replace the whole answer — do not chunk them.
+    if kind == "answer" and event.get("replace"):
+        return [event]
     if kind != "answer" or len(text) <= 12:
         return [event]
     return [{"type": "answer", "text": text[index : index + 12]} for index in range(0, len(text), 12)]
@@ -1280,6 +1472,21 @@ def _emit(send_stream, event: dict) -> bool:
     return True
 
 
+def _is_client_disconnect(exc: BaseException) -> bool:
+    """True when the browser closed the socket (including ExceptionGroup wrappers)."""
+
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+    if isinstance(exc, (anyio.BrokenResourceError, anyio.ClosedResourceError)):
+        return True
+    name = type(exc).__name__
+    if name in {"ClientDisconnected", "ConnectionClosed", "ConnectionClosedError", "ConnectionClosedOK"}:
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(_is_client_disconnect(item) for item in exc.exceptions)
+    return False
+
+
 async def _stream_ask(
     websocket: WebSocket,
     platform: Platform,
@@ -1287,13 +1494,21 @@ async def _stream_ask(
     principal: Principal,
     history: list | None = None,
     graph_id: str | None = None,
+    conversation_state: dict | None = None,
 ) -> dict:
     send_stream, receive_stream = anyio.create_memory_object_stream(64)
     result = {"answer_text": "", "answer": {}, "thinking": "", "reasoning": ""}
 
     def produce() -> None:
         try:
-            for event in iter_ask_events(platform, question, principal, history, graph_id=graph_id):
+            for event in iter_ask_events(
+                platform,
+                question,
+                principal,
+                history,
+                graph_id=graph_id,
+                conversation_state=conversation_state,
+            ):
                 pieces = _visible_pieces(event)
                 for piece in pieces:
                     if not _emit(send_stream, piece):
@@ -1330,11 +1545,28 @@ async def _stream_ask(
                             answer = event.get("answer") or {}
                             result["answer"] = answer if isinstance(answer, dict) else {}
                             result["answer_text"] = str(result["answer"].get("answer") or "")
-                        await websocket.send_json(event)
-    except (WebSocketDisconnect, anyio.BrokenResourceError, anyio.ClosedResourceError):
-        return result
+                        try:
+                            await websocket.send_json(event)
+                        except Exception as exc:
+                            if _is_client_disconnect(exc):
+                                group.cancel_scope.cancel()
+                                LOGGER.info("ws /ws/ask client disconnected during stream")
+                                return result
+                            raise
     except TimeoutError as exc:
         raise RequestTimeout("The request exceeded the configured timeout.") from exc
+    except Exception as exc:
+        # Plain disconnects (not wrapped by a task group).
+        if _is_client_disconnect(exc):
+            LOGGER.info("ws /ws/ask client disconnected during stream")
+            return result
+        raise
+    except BaseExceptionGroup as exc:
+        # anyio TaskGroup wraps disconnects as ExceptionGroup — do not log as ASGI ERROR.
+        if _is_client_disconnect(exc):
+            LOGGER.info("ws /ws/ask client disconnected during stream")
+            return result
+        raise
     return result
 
 

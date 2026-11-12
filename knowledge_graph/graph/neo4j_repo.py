@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from knowledge_graph.access import CLEARANCE_RANK
 from knowledge_graph.config import Settings
 from knowledge_graph.errors import GraphBackendUnavailable, RelationshipValidationError
 from knowledge_graph.graph.constraints import SCHEMA_STATEMENTS
@@ -141,17 +142,24 @@ class Neo4jGraphRepository:
         if rel_type is not None and rel_type not in self._allowed_rel_types:
             raise RelationshipValidationError(f"Relationship type {rel_type} is not allowlisted.")
         rel = f":{rel_type}" if rel_type else ""
+        start = "(a:Entity)" if start_id is None else "(a:Entity {id: $start_id})"
+        end = "(b:Entity)" if end_id is None else "(b:Entity {id: $end_id})"
+        filters = []
+        params = {}
+        if graph is not None:
+            filters.append("r.graph = $graph")
+            params["graph"] = graph
+        if start_id is not None:
+            params["start_id"] = start_id
+        if end_id is not None:
+            params["end_id"] = end_id
         query = (
-            f"MATCH (a:Entity)-[r{rel}]->(b:Entity) "
-            "WHERE ($graph IS NULL OR r.graph = $graph) "
-            "AND ($start_id IS NULL OR a.id = $start_id) "
-            "AND ($end_id IS NULL OR b.id = $end_id) "
-            "RETURN a.id AS start_id, b.id AS end_id, type(r) AS rel_type, properties(r) AS props"
+            f"MATCH {start}-[r{rel}]->{end} "
+            + (f"WHERE {' AND '.join(filters)} " if filters else "")
+            + "RETURN a.id AS start_id, b.id AS end_id, type(r) AS rel_type, properties(r) AS props"
         )
         with self._session() as session:
-            rows = list(
-                session.run(query, {"graph": graph, "start_id": start_id, "end_id": end_id})
-            )
+            rows = list(session.run(query, params))
         edges: list[GraphEdge] = []
         for row in rows:
             props = dict(row["props"])
@@ -168,6 +176,236 @@ class Neo4jGraphRepository:
                 )
             )
         return sorted(edges, key=lambda item: item.id)
+
+    def product_material_rows(self, graph_ids: list[str]) -> list[dict]:
+        """Fetch product-to-material edges and their resolutions in one query."""
+
+        if not graph_ids:
+            return []
+        query = (
+            "MATCH (p:Entity:Product)-[u:USES_MATERIAL]->(m:Entity) "
+            "WHERE p.graph IN $graph_ids "
+            "AND u.graph = p.graph "
+            "AND coalesce(p.lifecycle, 'active') <> 'deleted' "
+            "AND coalesce(u.lifecycle, 'active') <> 'deleted' "
+            "AND coalesce(m.lifecycle, 'active') <> 'deleted' "
+            "OPTIONAL MATCH (m)-[r:RESOLVES_TO]->(c:Entity) "
+            "WHERE coalesce(r.lifecycle, 'active') <> 'deleted' "
+            "AND coalesce(c.lifecycle, 'active') <> 'deleted' "
+            "WITH p, u, m, collect(CASE WHEN r IS NULL THEN null "
+            "ELSE {id: c.id, status: r.prov_verification_status} END) AS resolutions "
+            "RETURN p.id AS product_id, p.graph AS graph_id, properties(p) AS product_props, "
+            "labels(p) AS product_labels, properties(u) AS edge_props, m.id AS material_id, "
+            "labels(m) AS material_labels, properties(m) AS material_props, "
+            "resolutions ORDER BY product_id, material_id"
+        )
+        with self._session() as session:
+            rows = list(session.run(query, {"graph_ids": graph_ids}))
+
+        result = []
+        for row in rows:
+            resolutions = [item for item in row["resolutions"] if item and item.get("id")]
+            verified = next((item for item in resolutions if item.get("status") == "verified"), None)
+            review = any(item.get("status") == "review" for item in resolutions)
+            product_props = dict(row["product_props"])
+            material_props = dict(row["material_props"])
+            edge_props = dict(row["edge_props"])
+            product_id = str(row["product_id"])
+            material_id = str(row["material_id"])
+            graph_id = str(row["graph_id"] or "")
+            result.append(
+                {
+                    "product": GraphNode(
+                        id=product_id,
+                        labels=list(row["product_labels"]),
+                        graph=graph_id,
+                        properties=product_props,
+                    ),
+                    "edge": GraphEdge(
+                        id=str(edge_props.get("id") or f"{product_id}:{material_id}"),
+                        type="USES_MATERIAL",
+                        start_id=product_id,
+                        end_id=material_id,
+                        graph=str(edge_props.get("graph") or graph_id),
+                        properties=edge_props,
+                    ),
+                    "material": GraphNode(
+                        id=material_id,
+                        labels=list(row["material_labels"]),
+                        graph=str(material_props.get("graph") or ""),
+                        properties=material_props,
+                    ),
+                    "graph_id": graph_id,
+                    "canonical_id": str(verified["id"]) if verified else None,
+                    "material_key": str(verified["id"]) if verified else material_id,
+                    "review": review and verified is None,
+                }
+            )
+        return result
+
+    def shared_material_groups(
+        self,
+        graph_ids: list[str],
+        *,
+        clearance: str,
+        across_graphs: bool = False,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Aggregate shared materials in Neo4j instead of transferring every product edge.
+
+        ``limit`` caps returned groups for top-N asks only. None returns the full
+        aggregated set (analysis). Do not use this as a product-detail page size.
+        """
+
+        if not graph_ids:
+            return []
+        rank = CLEARANCE_RANK.get(clearance)
+        if rank is None:
+            raise ValueError(f"Unknown clearance '{clearance}'.")
+        allowed_classifications = [
+            level for level, level_rank in CLEARANCE_RANK.items() if level_rank <= rank
+        ]
+        # Across-graph asks: start from verified RESOLVES_TO canonicals (shared layer).
+        # Same-graph asks: count products per material key without collecting every product id.
+        limit_clause = " LIMIT $limit" if limit is not None else ""
+        if across_graphs:
+            query = (
+                "MATCH (src:Entity)-[r:RESOLVES_TO]->(c:Entity) "
+                "WHERE r.prov_verification_status = 'verified' "
+                "AND coalesce(r.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(c.lifecycle, 'active') <> 'deleted' "
+                "AND (c.graph = 'shared' OR 'Canonical' IN labels(c) OR 'Material' IN labels(c)) "
+                "MATCH (p:Entity:Product)-[u:USES_MATERIAL]->(src) "
+                "WHERE p.graph IN $graph_ids AND u.graph = p.graph "
+                "AND coalesce(p.classification, p.prov_classification, 'internal') IN $allowed_classifications "
+                "AND coalesce(p.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(u.lifecycle, 'active') <> 'deleted' "
+                "WITH c, p.graph AS graph_id, count(DISTINCT p.id) AS per_graph "
+                "WITH c, collect(DISTINCT graph_id) AS graph_ids, sum(per_graph) AS product_count "
+                "WHERE size(graph_ids) > 1 AND product_count > 1 "
+                "RETURN c.id AS canonical_id, c.id AS material_key, "
+                "coalesce(c.name, c.id) AS material, graph_ids, product_count "
+                "ORDER BY product_count DESC, material"
+                + limit_clause
+            )
+        else:
+            query = (
+                "MATCH (p:Entity:Product)-[u:USES_MATERIAL]->(m:Entity) "
+                "WHERE p.graph IN $graph_ids AND u.graph = p.graph "
+                "AND coalesce(p.classification, p.prov_classification, 'internal') IN $allowed_classifications "
+                "AND coalesce(p.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(u.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(m.lifecycle, 'active') <> 'deleted' "
+                "OPTIONAL MATCH (m)-[r:RESOLVES_TO]->(c:Entity) "
+                "WHERE coalesce(r.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(c.lifecycle, 'active') <> 'deleted' "
+                "AND r.prov_verification_status = 'verified' "
+                "WITH p, m, head(collect(DISTINCT c)) AS canonical "
+                "WITH coalesce(canonical.id, m.id) AS material_key, "
+                "coalesce(canonical.name, m.name, m.id) AS material_name, "
+                "canonical.id AS canonical_id, "
+                "p.graph AS graph_id "
+                "WITH material_key, "
+                "head(collect(DISTINCT material_name)) AS material, "
+                "head(collect(DISTINCT canonical_id)) AS canonical_id, "
+                "collect(DISTINCT graph_id) AS graph_ids, "
+                "count(*) AS product_count "
+                "WHERE product_count > 1 "
+                "RETURN canonical_id, material_key, material, graph_ids, product_count "
+                "ORDER BY product_count DESC, material"
+                + limit_clause
+            )
+        params: dict = {
+            "graph_ids": graph_ids,
+            "allowed_classifications": allowed_classifications,
+        }
+        if limit is not None:
+            params["limit"] = max(1, int(limit))
+        with self._session() as session:
+            rows = list(session.run(query, params))
+            groups = []
+            for row in rows:
+                row_graph_ids = sorted(str(item) for item in (row["graph_ids"] or []))
+                canonical_id = row["canonical_id"] or row["material_key"]
+                material_key = str(row["material_key"] or canonical_id)
+                # Analysis answers use counts only — skip product-id samples unless top-N listing.
+                refs = []
+                if limit is not None:
+                    refs = self._sample_shared_material_products(
+                        session,
+                        graph_ids=graph_ids,
+                        material_key=material_key,
+                        across_graphs=across_graphs,
+                        allowed_classifications=allowed_classifications,
+                        limit=8,
+                    )
+                groups.append(
+                    {
+                        "canonical_id": str(canonical_id),
+                        "material": str(row["material"] or canonical_id),
+                        "products": [str(item.get("product_id") or "") for item in refs],
+                        "product_refs": refs,
+                        "product_count": int(row["product_count"]),
+                        "verified": bool(row["canonical_id"]),
+                        "graph_id": row_graph_ids[0] if len(row_graph_ids) == 1 else None,
+                        "graph_ids": row_graph_ids,
+                    }
+                )
+        return groups
+
+    def _sample_shared_material_products(
+        self,
+        session,
+        *,
+        graph_ids: list[str],
+        material_key: str,
+        across_graphs: bool,
+        allowed_classifications: list[str],
+        limit: int = 8,
+    ) -> list[dict]:
+        """Fetch a few example products for one material without scanning the full catalog."""
+
+        if across_graphs:
+            query = (
+                "MATCH (src:Entity)-[r:RESOLVES_TO]->(c:Entity {id: $material_key}) "
+                "WHERE r.prov_verification_status = 'verified' "
+                "AND coalesce(r.lifecycle, 'active') <> 'deleted' "
+                "MATCH (p:Entity:Product)-[u:USES_MATERIAL]->(src) "
+                "WHERE p.graph IN $graph_ids AND u.graph = p.graph "
+                "AND coalesce(p.classification, p.prov_classification, 'internal') IN $allowed_classifications "
+                "AND coalesce(p.lifecycle, 'active') <> 'deleted' "
+                "RETURN p.graph AS graph_id, "
+                "coalesce(p.prov_record_id, p.product_id, p.id) AS product_id "
+                "LIMIT $limit"
+            )
+        else:
+            query = (
+                "MATCH (p:Entity:Product)-[u:USES_MATERIAL]->(m:Entity) "
+                "WHERE p.graph IN $graph_ids AND u.graph = p.graph "
+                "AND coalesce(p.classification, p.prov_classification, 'internal') IN $allowed_classifications "
+                "AND coalesce(p.lifecycle, 'active') <> 'deleted' "
+                "AND coalesce(u.lifecycle, 'active') <> 'deleted' "
+                "OPTIONAL MATCH (m)-[r:RESOLVES_TO]->(c:Entity) "
+                "WHERE coalesce(r.lifecycle, 'active') <> 'deleted' "
+                "AND r.prov_verification_status = 'verified' "
+                "WITH p, coalesce(c.id, m.id) AS material_key "
+                "WHERE material_key = $material_key "
+                "RETURN p.graph AS graph_id, "
+                "coalesce(p.prov_record_id, p.product_id, p.id) AS product_id "
+                "LIMIT $limit"
+            )
+        rows = list(
+            session.run(
+                query,
+                {
+                    "graph_ids": graph_ids,
+                    "material_key": material_key,
+                    "allowed_classifications": allowed_classifications,
+                    "limit": max(1, int(limit)),
+                },
+            )
+        )
+        return [{"graph_id": str(row["graph_id"]), "product_id": str(row["product_id"])} for row in rows]
 
     def retire_record(self, source_id: str, record_id: str) -> None:
         query = (
@@ -346,6 +584,9 @@ class UnavailableGraphRepository:
         raise GraphBackendUnavailable(self.reason)
 
     def find_edges(self, **kwargs) -> list[GraphEdge]:
+        raise GraphBackendUnavailable(self.reason)
+
+    def product_material_rows(self, graph_ids: list[str]) -> list[dict]:
         raise GraphBackendUnavailable(self.reason)
 
     def retire_record(self, source_id: str, record_id: str) -> None:

@@ -88,6 +88,61 @@ def test_brain_retrieve_accepts_graph_scope(copied_raw, tmp_path):
     assert "own_products" in result.routes_hint or "products" in result.text.lower()
 
 
+def test_brain_retrieve_cross_source_materials_scopes_and_labels_graphs(copied_raw, tmp_path, monkeypatch):
+    platform = make_platform(copied_raw, tmp_path / "generated", kg_url="")
+    platform.rebuild()
+    platform.kg_registry.list_graphs = lambda: [
+        type(
+            "Graph",
+            (),
+            {
+                "id": graph_id,
+                "kind": "product",
+                "name": name,
+            },
+        )()
+        for graph_id, name in (
+            ("ecom_products", "E-Commerce Knowledge Graph"),
+            ("plmex_products", "PLMEX Knowledge Graph"),
+        )
+    ]
+    seen = {}
+
+    def shared_facets(_platform, graph_ids, field, *, filters, limit):
+        seen["graph_ids"] = graph_ids
+        seen["field"] = field
+        return [
+            {
+                "value": "Cotton",
+                "field": "material",
+                "product_count": 2,
+                "graph_ids": ["ecom_products", "plmex_products"],
+                "graph_counts": {"ecom_products": 1, "plmex_products": 1},
+                "verified": False,
+            }
+        ]
+
+    monkeypatch.setattr("knowledge_graph.retrieval.ecom.facet_overlap_across_graphs", shared_facets)
+    result = retrieve(
+        platform,
+        Principal(subject="test", clearance="internal"),
+        BrainRetrieveRequest(
+            intent="shared_products",
+            question="Show materials shared across ecom and plmex.",
+            group_by="material",
+            graph_ids=["ecom_products", "plmex_products"],
+        ),
+    )
+
+    assert seen == {"graph_ids": ["ecom_products", "plmex_products"], "field": "material"}
+    assert "Cotton" in result.text
+    assert "E-Commerce Products" in result.text
+    assert "PLMEX Products" in result.text
+    assert "| Material | E-Commerce Products | PLMEX Products |" in result.text
+    assert "| Cotton | 1 | 1 |" in result.text
+    assert "Counts are products with each material value in each catalog" in result.caveats[0]
+
+
 def test_graphs_reload_endpoint(copied_raw, tmp_path):
     platform = make_platform(copied_raw, tmp_path / "generated", kg_url="")
     platform.rebuild()

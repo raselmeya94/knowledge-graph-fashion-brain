@@ -16,6 +16,20 @@
       "future_connectors": [
         "authorized_api"
       ]
+    },
+    {
+      "source_id": "plmex_products",
+      "source_type": "plmex_products",
+      "connector": "authorized_sql",
+      "supported_formats": [
+        "sql"
+      ],
+      "ingestion_mode": "incremental",
+      "update_strategy": "content_hash",
+      "permissions_model": "classification",
+      "enabled": true,
+      "description": "PLMEX Postgres plmex_products \u2192 plmex_products KG",
+      "future_connectors": []
     }
   ]
 }

@@ -1,4 +1,8 @@
-"""Knowledge-graph HTTP service. Construction routes only."""
+"""Knowledge-graph HTTP service — API data retriever (Neo4j, registry, brain query).
+
+No LLM / Ollama / document-construction pipeline here. Those belong in Fashion Brain
+or a separate ingest worker. KG serves graphs, schema, cypher, and link lookup.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +11,12 @@ from typing import Annotated, Any
 
 import anyio
 from fastapi import Depends, FastAPI, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from knowledge_graph.access import CLEARANCE_RANK, Principal
 from knowledge_graph.config import Settings, load_settings
-from knowledge_graph.construction.api import register_construction_routes
-from knowledge_graph.construction.ollama import OllamaClient
 from knowledge_graph.errors import FashionGPTError, PermissionDenied, RequestTimeout, Unauthorized, ValidationFailed
 from knowledge_graph.graph.templates import run_template
 from knowledge_graph.jobs import JobStore
@@ -120,6 +123,42 @@ def create_app(platform: Platform | None = None) -> FastAPI:
     app.state.platform = platform
     app.state.jobs = JobStore()
 
+    settings_for_cors = platform.settings if platform is not None else load_settings()
+    cors_origins = [origin.strip() for origin in str(settings_for_cors.cors_origins or "").split(",") if origin.strip()]
+    if not cors_origins:
+        cors_origins = [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://[::1]:5173",
+            "http://127.0.0.1:5500",
+            "http://localhost:5500",
+            "http://127.0.0.1:3000",
+            "http://localhost:3000",
+        ]
+    is_dev = str(getattr(settings_for_cors, "env", "development") or "").lower() in {
+        "development",
+        "dev",
+        "local",
+    }
+    cors_origin_regex = None
+    if is_dev:
+        cors_origin_regex = (
+            r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
+            r"|https?://("
+            r"192\.168(?:\.\d{1,3}){2}"
+            r"|10(?:\.\d{1,3}){3}"
+            r"|172\.(1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+            r")(:\d+)?"
+        )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_origin_regex=cors_origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.exception_handler(FashionGPTError)
     async def handle_error(_request: Request, exc: FashionGPTError):
         return JSONResponse(status_code=exc.status_code, content={"error": exc.code, "message": exc.message})
@@ -151,13 +190,12 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             platform.graph.ping()
         except FashionGPTError as exc:
             graph_status = exc.message
-        ollama = OllamaClient(platform.settings).health()
         return {
             "status": "degraded" if graph_status != "ok" else "ok",
             "service": "knowledge_graph",
+            "role": "api_data_retriever",
             "graph_backend": platform.settings.graph_backend,
             "graph": graph_status,
-            "ollama": ollama.get("status", "unchecked"),
         }
 
     @app.get("/sources")
@@ -252,6 +290,8 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         material: str | None = None,
         season: str | None = None,
         category: str | None = None,
+        brand: str | None = None,
+        graph_id: str | None = None,
         limit: int = 20,
         offset: int = 0,
         platform: Platform = Depends(current_platform),
@@ -261,25 +301,108 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             raise ValidationFailed("limit must be 1..100 and offset must be >= 0.")
 
         def _products():
-            rows, total = platform.products.search(
-                principal, limit=limit, offset=offset, q=q, material=material, season=season, category=category
-            )
-            return {
-                "items": [
-                    {
-                        "product_id": row.record_id,
-                        "title": row.title,
-                        "product": row.metadata.get("product"),
-                        "content_hash": row.content_hash,
-                        "source_path": row.source_path,
-                        "synthetic": row.synthetic,
+            # 1) File catalog (own_products envelopes). Empty when only e-com Neo4j is loaded.
+            prefer_own = (graph_id or "").strip() in {"", "own_products"}
+            if prefer_own:
+                rows, total = platform.products.search(
+                    principal,
+                    limit=limit,
+                    offset=offset,
+                    q=q,
+                    material=material,
+                    season=season,
+                    category=category,
+                    brand=brand,
+                )
+                if total > 0:
+                    return {
+                        "items": [
+                            {
+                                "product_id": row.record_id,
+                                "title": row.title,
+                                "product": row.metadata.get("product"),
+                                "content_hash": row.content_hash,
+                                "source_path": row.source_path,
+                                "synthetic": row.synthetic,
+                            }
+                            for row in rows
+                        ],
+                        "total": total,
+                        "limit": limit,
+                        "offset": offset,
+                        "graph_id": "own_products",
+                        "source": "file_catalog",
+                        "note": "Results from own_products file catalog envelopes.",
                     }
-                    for row in rows
-                ],
-                "total": total,
+
+            # 2) Neo4j product graph (ecom_products by default).
+            from knowledge_graph.retrieval.ecom import cypher_count_products, cypher_sample_products
+
+            gid = (graph_id or "ecom_products").strip() or "ecom_products"
+            filters: dict[str, str] = {}
+            if material:
+                filters["material"] = material
+            if category:
+                filters["category"] = category
+            if brand:
+                filters["brand"] = brand
+            # season is PLM-catalog-only today; ignore for Neo4j e-com rather than failing empty.
+            nodes = cypher_sample_products(platform, gid, filters, limit=limit, offset=offset)
+            total = cypher_count_products(platform, gid, filters)
+            if total is None:
+                total = len(nodes)
+            # Optional free-text filter on name when Cypher path has no `q` filter yet.
+            if q:
+                needle = q.casefold().strip()
+                nodes = [
+                    node
+                    for node in nodes
+                    if needle in str((node.properties or {}).get("name") or "").casefold()
+                    or needle in str(node.id).casefold()
+                ]
+                # When q is set we only filtered the page; recount via unscoped sample is approximate.
+            items = []
+            for node in nodes:
+                props = dict(node.properties or {})
+                items.append(
+                    {
+                        "product_id": node.id,
+                        "title": props.get("name") or node.id,
+                        "product": {
+                            "product_id": node.id,
+                            "product_name": props.get("name"),
+                            "brand": props.get("brand"),
+                            "master_id": props.get("master_id"),
+                            "price": props.get("price"),
+                            "price_num": props.get("price_num"),
+                            "currency": props.get("currency"),
+                            "availability": props.get("availability"),
+                            "image": props.get("image"),
+                            "product_url": props.get("product_url"),
+                            "category_path": props.get("category_path"),
+                            "composition": props.get("composition"),
+                            "material": props.get("material") or props.get("composition"),
+                            "content_hash": props.get("content_hash"),
+                        },
+                        "content_hash": props.get("content_hash"),
+                        "source_path": props.get("product_url") or props.get("prov_source_path"),
+                        "synthetic": props.get("synthetic"),
+                        "graph": node.graph,
+                    }
+                )
+            return {
+                "items": items,
+                "total": int(total),
                 "limit": limit,
                 "offset": offset,
-                "note": "Counts come from the synthetic file repository, not a live PLMEX database.",
+                "graph_id": gid,
+                "source": "neo4j",
+                "filters": filters,
+                "note": (
+                    "Results from Neo4j product graph. "
+                    "File catalog was empty (no own_products envelopes). "
+                    "Use POST /api/graphs/query template=get_product for full detail."
+                ),
             }
 
         return await _run(platform, _products)
@@ -372,7 +495,24 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         return await _run(platform, _schema)
 
     register_registry_routes(app, current_platform, current_principal, current_jobs)
-    register_construction_routes(app, current_platform, current_principal)
+
+    # Construction / Ollama / LLM extract routes are NOT registered.
+    # Legacy /kg/* callers get a clear disabled response.
+    @app.api_route("/kg/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def construction_disabled(path: str):
+        return JSONResponse(
+            status_code=410,
+            content={
+                "error": "construction_disabled",
+                "message": (
+                    "KG no longer hosts Ollama/LLM construction. "
+                    "This service is an API data retriever (registry, sync/build, brain cypher/link/schema). "
+                    "Document LLM ingest belongs outside this service (e.g. Fashion Brain or a dedicated worker)."
+                ),
+                "path": f"/kg/{path}",
+            },
+        )
+
     from knowledge_graph.api.plan_routes import register_plan_api_routes
 
     register_plan_api_routes(app, current_platform, current_principal, current_jobs)

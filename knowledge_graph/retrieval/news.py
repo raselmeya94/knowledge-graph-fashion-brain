@@ -9,12 +9,26 @@ from knowledge_graph.access import Principal, allows
 _CUES = {
     "EXPORTS_TO": ("export", "exports", "exported", "exporter"),
     "IMPORTS_FROM": ("import", "imports", "imported", "importer"),
-    "RANKED_IN": ("rank", "ranked", "ranking", "largest"),
+    # Avoid bare "largest" — it matches catalog asks like "largest price decreases".
+    "RANKED_IN": ("rank", "ranked", "ranking", "largest exporter", "largest importer", "largest supplier"),
     "HAS_MARKET_SHARE": ("market share",),
     "CITES_DATA_FROM": ("eurostat", "according to", "data source"),
 }
 _FACT_KEYS = ("product", "value", "share_pct", "previous_share", "yoy_pct", "period", "rank", "amount")
 _ALIAS = {"european union": "eu", "eu": "eu"}
+_CATALOG_PRICE = (
+    "price decrease",
+    "price increase",
+    "price drop",
+    "price rise",
+    "price change",
+    "price trend",
+    "price history",
+    "price fluctuation",
+    "largest price",
+    "highest price",
+    "lowest price",
+)
 
 
 def news_question(text: str) -> bool:
@@ -24,6 +38,13 @@ def news_question(text: str) -> bool:
     if any(phrase in low for phrase in ("how many", "catalog", "catalogue", "demo product", "our product")):
         return False
     if "share" in low and "material" in low:
+        return False
+    # Product catalog price / availability history is never a news-graph ask.
+    if any(phrase in low for phrase in _CATALOG_PRICE):
+        return False
+    if ("price" in low or "prices" in low) and any(
+        token in low for token in ("product", "products", "brand", "category", "decrease", "increase", "drop", "trend")
+    ):
         return False
     if any(cue in low for cues in _CUES.values() for cue in cues):
         return True

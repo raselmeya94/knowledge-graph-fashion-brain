@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "kg-knowledge-graph-8001",
     "name": "knowledge_graph",
-    "description": "Knowledge graph API on port 8001.\n\n**E-com empty\u2192live order (folder 0):**\n1. GET health / empty checks\n2. POST /ontologies (ecom \u2014 full schema + Zara/Primark/Matalan/C&A/Walmart)\n3. POST /graphs (ecom_products, kind=product)\n4. POST /api/sources (ecom_products, authorized_sql)\n5. POST sync \u2192 poll job \u2192 metadata/values \u2192 query/retrieve\n\nBodies also in `postman/bodies/`. Guide: `knowledge_graph/POSTMAN.md`.\n\nAuth: Bearer `{{apiToken}}` only if set. Always `X-Clearance: {{clearance}}` (internal).",
+    "description": "Knowledge graph API on port 8001.\n\n**UI wizard (folder 0) \u2014 all API, no file copy:**\n1. Health + inspect (ontologies / sources / graphs / checklist)\n2. POST ontology \u2192 GET ontology\n3. PUT mapping \u2192 POST db connection \u2192 GET db inspect \u2192 POST source \u2192 POST graph\n4. Checklist ready \u2192 POST build \u2192 poll job + build/status\n5. Metadata / query / brain\n\nGuide: `knowledge_graph/UI_CONTROL_PLAN.md` \u00b7 `knowledge_graph/POSTMAN.md`.\n\nAuth: Bearer `{{apiToken}}` only if set. Always `X-Clearance: {{clearance}}` (internal).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -28,7 +28,7 @@
     },
     {
       "key": "productId",
-      "value": ""
+      "value": "ecom:c-and-a:c-and-a:2053536"
     },
     {
       "key": "nodeId",
@@ -94,11 +94,11 @@
   ],
   "item": [
     {
-      "name": "0 Ecom pipeline (empty \u2192 live)",
-      "description": "Run top\u2192bottom after a wipe. Uses the real ecom ontology (Product/Brand/Material/\u2026 + HAS_BRAND/USES_MATERIAL/\u2026). Copy postman/bodies/ecom_master_products_mapping.json \u2192 data/schemas/ before sync. Postgres DSN must be set in .env.",
+      "name": "0 UI wizard (empty \u2192 live)",
+      "description": "Full UI-control path. Inspect first, then register ontology/mapping/DB/source/graph, then build and poll status. No manual file copies. Postgres password stays in .env.",
       "item": [
         {
-          "name": "01 GET health",
+          "name": "01 GET /health",
           "request": {
             "method": "GET",
             "header": [],
@@ -107,7 +107,7 @@
           }
         },
         {
-          "name": "02 GET /ontologies (should be empty or only prior POSTs)",
+          "name": "02 GET /ontologies (schemas present?)",
           "request": {
             "method": "GET",
             "header": [],
@@ -116,7 +116,7 @@
           }
         },
         {
-          "name": "03 GET /api/sources (should be empty)",
+          "name": "03 GET /api/sources (sources present?)",
           "request": {
             "method": "GET",
             "header": [],
@@ -125,7 +125,34 @@
           }
         },
         {
-          "name": "04 POST /ontologies \u2014 ecom (full body)",
+          "name": "04 GET /api/graphs (KGs present?)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs",
+            "description": ""
+          }
+        },
+        {
+          "name": "05 GET /api/setup/checklist",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+            "description": "ready_to_build + missing[]. Expect false until register steps done."
+          }
+        },
+        {
+          "name": "06 GET /api/bootstrap",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/bootstrap",
+            "description": "UI home: counts + lists + checklist."
+          }
+        },
+        {
+          "name": "07 POST /ontologies \u2014 ecom",
           "request": {
             "method": "POST",
             "header": [
@@ -135,10 +162,10 @@
               }
             ],
             "url": "{{baseUrl}}/ontologies",
-            "description": "Creates ontology id=ecom with entity_types + relationship_allowlist + brand canonicals.",
+            "description": "Push full ecom ontology from Postman body.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"ecom\",\n  \"name\": \"ecom-products-ontology\",\n  \"description\": \"E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category, material, color, and availability.\",\n  \"version\": \"1.0.0\",\n  \"entity_types\": [\n    \"Product\",\n    \"Brand\",\n    \"Material\",\n    \"GarmentCategory\",\n    \"Color\",\n    \"Availability\",\n    \"Section\",\n    \"Currency\",\n    \"Catalog\",\n    \"Domain\",\n    \"Construction\"\n  ],\n  \"relationship_allowlist\": {\n    \"HAS_BRAND\": [\n      [\n        \"Product\",\n        \"Brand\"\n      ]\n    ],\n    \"BELONGS_TO_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_SUB_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_FAMILY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"PARENT_CATEGORY\": [\n      [\n        \"GarmentCategory\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"USES_MATERIAL\": [\n      [\n        \"Product\",\n        \"Material\"\n      ]\n    ],\n    \"HAS_COLOR\": [\n      [\n        \"Product\",\n        \"Color\"\n      ]\n    ],\n    \"HAS_AVAILABILITY\": [\n      [\n        \"Product\",\n        \"Availability\"\n      ]\n    ],\n    \"HAS_SECTION\": [\n      [\n        \"Product\",\n        \"Section\"\n      ]\n    ],\n    \"PRICED_IN\": [\n      [\n        \"Product\",\n        \"Currency\"\n      ]\n    ],\n    \"IN_CATALOG\": [\n      [\n        \"Product\",\n        \"Catalog\"\n      ]\n    ],\n    \"SCRAPED_FROM\": [\n      [\n        \"Product\",\n        \"Domain\"\n      ]\n    ],\n    \"HAS_CONSTRUCTION\": [\n      [\n        \"Product\",\n        \"Construction\"\n      ]\n    ]\n  },\n  \"canonical_entities\": [\n    {\n      \"id\": \"brand:zara\",\n      \"type\": \"Brand\",\n      \"name\": \"zara\",\n      \"aliases\": [\n        \"Zara\",\n        \"ZARA\"\n      ]\n    },\n    {\n      \"id\": \"brand:primark\",\n      \"type\": \"Brand\",\n      \"name\": \"primark\",\n      \"aliases\": [\n        \"Primark\",\n        \"PRIMARK\"\n      ]\n    },\n    {\n      \"id\": \"brand:matalan\",\n      \"type\": \"Brand\",\n      \"name\": \"matalan\",\n      \"aliases\": [\n        \"Matalan\",\n        \"MATALAN\"\n      ]\n    },\n    {\n      \"id\": \"brand:c-and-a\",\n      \"type\": \"Brand\",\n      \"name\": \"c-and-a\",\n      \"aliases\": [\n        \"C&A\",\n        \"c&a\",\n        \"C and A\",\n        \"c-and-a\"\n      ]\n    },\n    {\n      \"id\": \"brand:walmart\",\n      \"type\": \"Brand\",\n      \"name\": \"walmart\",\n      \"aliases\": [\n        \"Walmart\",\n        \"WALMART\"\n      ]\n    }\n  ]\n}",
+              "raw": "{\n  \"id\": \"ecom\",\n  \"name\": \"ecom-products-ontology\",\n  \"description\": \"E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category hierarchy, target group, material composition, style attributes, color, size-level availability, price history, sustainability, origin, images, and cross-brand similarity. Edges carry provenance (column, rule, or llm) and confidence.\",\n  \"version\": \"1.2.0\",\n  \"entity_types\": [\n    \"Product\",\n    \"ProductListing\",\n    \"Reference\",\n    \"Brand\",\n    \"Domain\",\n    \"Catalog\",\n    \"ScrapeJob\",\n    \"Section\",\n    \"TargetGroup\",\n    \"GarmentCategory\",\n    \"Family\",\n    \"Subfamily\",\n    \"Material\",\n    \"MaterialGroup\",\n    \"Certification\",\n    \"Construction\",\n    \"Fit\",\n    \"Silhouette\",\n    \"Neckline\",\n    \"SleeveLength\",\n    \"GarmentLength\",\n    \"Closure\",\n    \"Pattern\",\n    \"Occasion\",\n    \"Season\",\n    \"StyleTag\",\n    \"Color\",\n    \"ColorFamily\",\n    \"Size\",\n    \"SizeAvailability\",\n    \"Availability\",\n    \"AvailabilitySnapshot\",\n    \"Currency\",\n    \"FxRate\",\n    \"PriceBand\",\n    \"PriceSnapshot\",\n    \"PriceChangeEvent\",\n    \"CareInstruction\",\n    \"Country\",\n    \"Image\",\n    \"ProductVersion\"\n  ],\n  \"relationship_allowlist\": {\n    \"HAS_BRAND\": [\n      [\n        \"Product\",\n        \"Brand\"\n      ]\n    ],\n    \"SOLD_BY\": [\n      [\n        \"Brand\",\n        \"Domain\"\n      ]\n    ],\n    \"SCRAPED_FROM\": [\n      [\n        \"Product\",\n        \"Domain\"\n      ]\n    ],\n    \"IN_CATALOG\": [\n      [\n        \"Product\",\n        \"Catalog\"\n      ]\n    ],\n    \"SCRAPED_IN_JOB\": [\n      [\n        \"Product\",\n        \"ScrapeJob\"\n      ],\n      [\n        \"PriceSnapshot\",\n        \"ScrapeJob\"\n      ],\n      [\n        \"AvailabilitySnapshot\",\n        \"ScrapeJob\"\n      ]\n    ],\n    \"HAS_LISTING\": [\n      [\n        \"Product\",\n        \"ProductListing\"\n      ]\n    ],\n    \"LISTING_IN_CATALOG\": [\n      [\n        \"ProductListing\",\n        \"Catalog\"\n      ]\n    ],\n    \"HAS_REFERENCE\": [\n      [\n        \"Product\",\n        \"Reference\"\n      ]\n    ],\n    \"HAS_SECTION\": [\n      [\n        \"Product\",\n        \"Section\"\n      ]\n    ],\n    \"FOR_TARGET_GROUP\": [\n      [\n        \"Product\",\n        \"TargetGroup\"\n      ],\n      [\n        \"Section\",\n        \"TargetGroup\"\n      ]\n    ],\n    \"BELONGS_TO_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"HAS_SUB_CATEGORY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ],\n      [\n        \"Product\",\n        \"Subfamily\"\n      ]\n    ],\n    \"HAS_FAMILY\": [\n      [\n        \"Product\",\n        \"GarmentCategory\"\n      ],\n      [\n        \"Product\",\n        \"Family\"\n      ]\n    ],\n    \"HAS_SUBFAMILY\": [\n      [\n        \"Product\",\n        \"Subfamily\"\n      ]\n    ],\n    \"PARENT_CATEGORY\": [\n      [\n        \"GarmentCategory\",\n        \"GarmentCategory\"\n      ],\n      [\n        \"Subfamily\",\n        \"Family\"\n      ],\n      [\n        \"Family\",\n        \"GarmentCategory\"\n      ]\n    ],\n    \"CATEGORY_IN_SECTION\": [\n      [\n        \"GarmentCategory\",\n        \"Section\"\n      ]\n    ],\n    \"USES_MATERIAL\": [\n      [\n        \"Product\",\n        \"Material\"\n      ]\n    ],\n    \"PRIMARY_MATERIAL\": [\n      [\n        \"Product\",\n        \"Material\"\n      ]\n    ],\n    \"IN_MATERIAL_GROUP\": [\n      [\n        \"Material\",\n        \"MaterialGroup\"\n      ]\n    ],\n    \"HAS_CERTIFICATION\": [\n      [\n        \"Product\",\n        \"Certification\"\n      ],\n      [\n        \"Material\",\n        \"Certification\"\n      ]\n    ],\n    \"HAS_CONSTRUCTION\": [\n      [\n        \"Product\",\n        \"Construction\"\n      ]\n    ],\n    \"HAS_FIT\": [\n      [\n        \"Product\",\n        \"Fit\"\n      ]\n    ],\n    \"HAS_CARE\": [\n      [\n        \"Product\",\n        \"CareInstruction\"\n      ]\n    ],\n    \"MADE_IN\": [\n      [\n        \"Product\",\n        \"Country\"\n      ]\n    ],\n    \"HAS_SILHOUETTE\": [\n      [\n        \"Product\",\n        \"Silhouette\"\n      ]\n    ],\n    \"HAS_NECKLINE\": [\n      [\n        \"Product\",\n        \"Neckline\"\n      ]\n    ],\n    \"HAS_SLEEVE_LENGTH\": [\n      [\n        \"Product\",\n        \"SleeveLength\"\n      ]\n    ],\n    \"HAS_LENGTH\": [\n      [\n        \"Product\",\n        \"GarmentLength\"\n      ]\n    ],\n    \"HAS_CLOSURE\": [\n      [\n        \"Product\",\n        \"Closure\"\n      ]\n    ],\n    \"HAS_PATTERN\": [\n      [\n        \"Product\",\n        \"Pattern\"\n      ]\n    ],\n    \"SUITED_FOR_OCCASION\": [\n      [\n        \"Product\",\n        \"Occasion\"\n      ]\n    ],\n    \"SUITED_FOR_SEASON\": [\n      [\n        \"Product\",\n        \"Season\"\n      ]\n    ],\n    \"HAS_STYLE_TAG\": [\n      [\n        \"Product\",\n        \"StyleTag\"\n      ]\n    ],\n    \"HAS_COLOR\": [\n      [\n        \"Product\",\n        \"Color\"\n      ]\n    ],\n    \"PRIMARY_COLOR\": [\n      [\n        \"Product\",\n        \"Color\"\n      ]\n    ],\n    \"IN_COLOR_FAMILY\": [\n      [\n        \"Color\",\n        \"ColorFamily\"\n      ]\n    ],\n    \"HAS_SIZE_AVAILABILITY\": [\n      [\n        \"Product\",\n        \"SizeAvailability\"\n      ]\n    ],\n    \"FOR_SIZE\": [\n      [\n        \"SizeAvailability\",\n        \"Size\"\n      ]\n    ],\n    \"OF_COLOR\": [\n      [\n        \"SizeAvailability\",\n        \"Color\"\n      ]\n    ],\n    \"HAS_AVAILABILITY\": [\n      [\n        \"Product\",\n        \"Availability\"\n      ]\n    ],\n    \"HAS_AVAILABILITY_SNAPSHOT\": [\n      [\n        \"Product\",\n        \"AvailabilitySnapshot\"\n      ]\n    ],\n    \"SNAPSHOT_STATUS\": [\n      [\n        \"AvailabilitySnapshot\",\n        \"Availability\"\n      ]\n    ],\n    \"PRICED_IN\": [\n      [\n        \"Product\",\n        \"Currency\"\n      ]\n    ],\n    \"IN_PRICE_BAND\": [\n      [\n        \"Product\",\n        \"PriceBand\"\n      ]\n    ],\n    \"PRICE_BAND_IN_CURRENCY\": [\n      [\n        \"PriceBand\",\n        \"Currency\"\n      ]\n    ],\n    \"HAS_PRICE_SNAPSHOT\": [\n      [\n        \"Product\",\n        \"PriceSnapshot\"\n      ]\n    ],\n    \"SNAPSHOT_IN_CURRENCY\": [\n      [\n        \"PriceSnapshot\",\n        \"Currency\"\n      ]\n    ],\n    \"HAS_PRICE_CHANGE\": [\n      [\n        \"Product\",\n        \"PriceChangeEvent\"\n      ]\n    ],\n    \"FX_FROM\": [\n      [\n        \"FxRate\",\n        \"Currency\"\n      ]\n    ],\n    \"FX_TO\": [\n      [\n        \"FxRate\",\n        \"Currency\"\n      ]\n    ],\n    \"HAS_IMAGE\": [\n      [\n        \"Product\",\n        \"Image\"\n      ]\n    ],\n    \"HAS_MAIN_IMAGE\": [\n      [\n        \"Product\",\n        \"Image\"\n      ]\n    ],\n    \"HAS_VERSION\": [\n      [\n        \"Product\",\n        \"ProductVersion\"\n      ]\n    ],\n    \"NEXT_VERSION\": [\n      [\n        \"ProductVersion\",\n        \"ProductVersion\"\n      ]\n    ],\n    \"VARIANT_OF\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"SIMILAR_TO\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"CROSS_BRAND_MATCH\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"SAME_REFERENCE_AS\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"SUBSTITUTE_FOR\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"PRICED_HIGHER_THAN\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"COMPLEMENTS\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ],\n    \"SAME_STYLE_AS\": [\n      [\n        \"Product\",\n        \"Product\"\n      ]\n    ]\n  },\n  \"canonical_entities\": [\n    {\n      \"id\": \"brand:zara\",\n      \"type\": \"Brand\",\n      \"name\": \"zara\",\n      \"aliases\": [\n        \"Zara\",\n        \"ZARA\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"brand:primark\",\n      \"type\": \"Brand\",\n      \"name\": \"primark\",\n      \"aliases\": [\n        \"Primark\",\n        \"PRIMARK\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"brand:matalan\",\n      \"type\": \"Brand\",\n      \"name\": \"matalan\",\n      \"aliases\": [\n        \"Matalan\",\n        \"MATALAN\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"brand:c-and-a\",\n      \"type\": \"Brand\",\n      \"name\": \"c-and-a\",\n      \"aliases\": [\n        \"C&A\",\n        \"c&a\",\n        \"C and A\",\n        \"c-and-a\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"brand:walmart\",\n      \"type\": \"Brand\",\n      \"name\": \"walmart\",\n      \"aliases\": [\n        \"Walmart\",\n        \"WALMART\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"materialgroup:natural\",\n      \"type\": \"MaterialGroup\",\n      \"name\": \"natural\",\n      \"aliases\": [\n        \"Natural\",\n        \"natural fibre\",\n        \"natural fiber\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"materialgroup:synthetic\",\n      \"type\": \"MaterialGroup\",\n      \"name\": \"synthetic\",\n      \"aliases\": [\n        \"Synthetic\",\n        \"man-made\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"materialgroup:semi-synthetic\",\n      \"type\": \"MaterialGroup\",\n      \"name\": \"semi-synthetic\",\n      \"aliases\": [\n        \"Semi-synthetic\",\n        \"regenerated cellulose\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"targetgroup:women\",\n      \"type\": \"TargetGroup\",\n      \"name\": \"women\",\n      \"aliases\": [\n        \"Women\",\n        \"WOMAN\",\n        \"ladies\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"targetgroup:men\",\n      \"type\": \"TargetGroup\",\n      \"name\": \"men\",\n      \"aliases\": [\n        \"Men\",\n        \"MAN\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"targetgroup:girls\",\n      \"type\": \"TargetGroup\",\n      \"name\": \"girls\",\n      \"aliases\": [\n        \"Girls\",\n        \"GIRL\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"targetgroup:boys\",\n      \"type\": \"TargetGroup\",\n      \"name\": \"boys\",\n      \"aliases\": [\n        \"Boys\",\n        \"BOY\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"targetgroup:baby\",\n      \"type\": \"TargetGroup\",\n      \"name\": \"baby\",\n      \"aliases\": [\n        \"Baby\",\n        \"BABY\",\n        \"newborn\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"currency:gbp\",\n      \"type\": \"Currency\",\n      \"name\": \"GBP\",\n      \"aliases\": [\n        \"gbp\",\n        \"pound\",\n        \"pounds\",\n        \"GBP\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"currency:eur\",\n      \"type\": \"Currency\",\n      \"name\": \"EUR\",\n      \"aliases\": [\n        \"eur\",\n        \"euro\",\n        \"euros\",\n        \"EUR\"\n      ],\n      \"external_ids\": []\n    },\n    {\n      \"id\": \"currency:usd\",\n      \"type\": \"Currency\",\n      \"name\": \"USD\",\n      \"aliases\": [\n        \"usd\",\n        \"dollar\",\n        \"dollars\",\n        \"USD\"\n      ],\n      \"external_ids\": []\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -153,8 +180,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.collectionVariables.set('ontologyId', 'ecom');",
-                  "pm.test('ontology created or already exists', function () {",
-                  "  pm.expect([200, 400]).to.include(pm.response.code);",
+                  "pm.test('ontology ok or already exists', function () {",
+                  "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
                   "});"
                 ]
               }
@@ -162,16 +189,39 @@
           ]
         },
         {
-          "name": "05 GET /ontologies/ecom",
+          "name": "08 GET /ontologies/ecom",
           "request": {
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/ontologies/ecom",
-            "description": "Must return definition with Brand + HAS_BRAND, not 500."
+            "description": ""
           }
         },
         {
-          "name": "06 POST /graphs \u2014 ecom_products",
+          "name": "09 PUT /api/sources/ecom_products/mapping",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sources/ecom_products/mapping",
+            "description": "Upload column mapping via API (idempotent replace). No disk copy.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"source_table\": \"master_products\",\n  \"primary_key\": [\n    \"brand\",\n    \"master_id\"\n  ],\n  \"product_id_template\": \"ecom:{brand}:{master_id}\",\n  \"graph_id\": \"ecom_products\",\n  \"ontology\": \"ecom-products-ontology\",\n  \"ontology_version\": \"1.2.0\",\n  \"watermark_columns\": [\n    \"updated_at\",\n    \"content_hash\"\n  ],\n  \"description\": \"Column map from Postgres master_products \\u2192 Neo4j, aligned with ecom ontology v1.2. Family/Subfamily are first-class types (not GarmentCategory). LLM-only style attrs stay deferred.\",\n  \"product_properties\": {\n    \"master_id\": {\n      \"column\": \"master_id\",\n      \"required\": true\n    },\n    \"brand\": {\n      \"column\": \"brand\",\n      \"required\": true\n    },\n    \"product_name\": {\n      \"column\": \"name\"\n    },\n    \"reference\": {\n      \"column\": \"reference\"\n    },\n    \"display_reference\": {\n      \"column\": \"display_reference\"\n    },\n    \"description\": {\n      \"column\": \"description\"\n    },\n    \"composition\": {\n      \"column\": \"composition\"\n    },\n    \"composition_detail\": {\n      \"column\": \"composition_detail\",\n      \"type\": \"jsonb\"\n    },\n    \"construction\": {\n      \"column\": \"construction\"\n    },\n    \"care\": {\n      \"column\": \"care\"\n    },\n    \"fit\": {\n      \"column\": \"fit\"\n    },\n    \"country_of_origin\": {\n      \"column\": \"country_of_origin\"\n    },\n    \"section\": {\n      \"column\": \"section\"\n    },\n    \"category\": {\n      \"column\": \"category\"\n    },\n    \"family\": {\n      \"column\": \"family\"\n    },\n    \"subfamily\": {\n      \"column\": \"subfamily\"\n    },\n    \"category_path\": {\n      \"column\": \"category_path\"\n    },\n    \"availability\": {\n      \"column\": \"availability\"\n    },\n    \"in_stock_count\": {\n      \"column\": \"in_stock_count\",\n      \"type\": \"integer\"\n    },\n    \"out_stock_count\": {\n      \"column\": \"out_stock_count\",\n      \"type\": \"integer\"\n    },\n    \"currency\": {\n      \"column\": \"currency\"\n    },\n    \"price\": {\n      \"column\": \"price\"\n    },\n    \"original_price\": {\n      \"column\": \"original_price\"\n    },\n    \"price_min\": {\n      \"column\": \"price_min\"\n    },\n    \"price_max\": {\n      \"column\": \"price_max\"\n    },\n    \"image\": {\n      \"column\": \"image\"\n    },\n    \"images\": {\n      \"column\": \"images\",\n      \"type\": \"jsonb\",\n      \"store\": \"envelope_only\"\n    },\n    \"colors\": {\n      \"column\": \"colors\",\n      \"type\": \"jsonb\"\n    },\n    \"color_count\": {\n      \"column\": \"color_count\",\n      \"type\": \"integer\"\n    },\n    \"product_url\": {\n      \"column\": \"product_url\"\n    },\n    \"product_url_with_variant\": {\n      \"column\": \"product_url_with_variant\"\n    },\n    \"source_url\": {\n      \"column\": \"source_url\"\n    },\n    \"domain\": {\n      \"column\": \"domain\"\n    },\n    \"catalog_id\": {\n      \"column\": \"catalog_id\"\n    },\n    \"scraped_at\": {\n      \"column\": \"scraped_at\"\n    },\n    \"content_hash\": {\n      \"column\": \"content_hash\"\n    },\n    \"pdp_enriched\": {\n      \"column\": \"pdp_enriched\",\n      \"type\": \"boolean\"\n    }\n  },\n  \"neo4j_product_properties\": [\n    \"name\",\n    \"reference\",\n    \"display_reference\",\n    \"price\",\n    \"price_num\",\n    \"original_price\",\n    \"original_price_num\",\n    \"currency\",\n    \"availability\",\n    \"in_stock_count\",\n    \"out_stock_count\",\n    \"product_url\",\n    \"image\",\n    \"category_path\",\n    \"country_of_origin\",\n    \"fit\",\n    \"source\",\n    \"scraped_at\",\n    \"content_hash\"\n  ],\n  \"relationships\": [\n    {\n      \"rel_type\": \"HAS_BRAND\",\n      \"end_type\": \"Brand\",\n      \"from_column\": \"brand\",\n      \"required\": true,\n      \"notes\": \"Always set from master_products.brand; facet name stored lowercase\"\n    },\n    {\n      \"rel_type\": \"BELONGS_TO_CATEGORY\",\n      \"end_type\": \"GarmentCategory\",\n      \"from_column\": \"category\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_FAMILY\",\n      \"end_type\": \"Family\",\n      \"from_column\": \"family\",\n      \"required\": false,\n      \"notes\": \"Ontology first-class Family (not GarmentCategory)\"\n    },\n    {\n      \"rel_type\": \"HAS_SUBFAMILY\",\n      \"end_type\": \"Subfamily\",\n      \"from_column\": \"subfamily\",\n      \"required\": false,\n      \"notes\": \"Ontology first-class Subfamily\"\n    },\n    {\n      \"rel_type\": \"PARENT_CATEGORY\",\n      \"start_from_column\": \"subfamily\",\n      \"end_from_column\": \"family\",\n      \"start_type\": \"Subfamily\",\n      \"end_type\": \"Family\",\n      \"required\": false,\n      \"notes\": \"Subfamily \\u2192 Family when both present\"\n    },\n    {\n      \"rel_type\": \"PARENT_CATEGORY\",\n      \"start_from_column\": \"family\",\n      \"end_from_column\": \"category\",\n      \"start_type\": \"Family\",\n      \"end_type\": \"GarmentCategory\",\n      \"required\": false,\n      \"notes\": \"Family \\u2192 GarmentCategory when both present\"\n    },\n    {\n      \"rel_type\": \"USES_MATERIAL\",\n      \"end_type\": \"Material\",\n      \"from_column\": \"composition_detail\",\n      \"fallback_column\": \"composition\",\n      \"required\": false,\n      \"notes\": \"Prefer composition_detail JSONB; else parse composition text; percentage on edge\"\n    },\n    {\n      \"rel_type\": \"PRIMARY_MATERIAL\",\n      \"end_type\": \"Material\",\n      \"from_column\": \"composition_detail\",\n      \"required\": false,\n      \"notes\": \"Material with highest percentage when available\"\n    },\n    {\n      \"rel_type\": \"HAS_COLOR\",\n      \"end_type\": \"Color\",\n      \"from_column\": \"colors\",\n      \"required\": false,\n      \"notes\": \"One edge per color name in colors JSONB\"\n    },\n    {\n      \"rel_type\": \"PRIMARY_COLOR\",\n      \"end_type\": \"Color\",\n      \"from_column\": \"colors\",\n      \"required\": false,\n      \"notes\": \"First color in colors array\"\n    },\n    {\n      \"rel_type\": \"HAS_AVAILABILITY\",\n      \"end_type\": \"Availability\",\n      \"from_column\": \"availability\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_SECTION\",\n      \"end_type\": \"Section\",\n      \"from_column\": \"section\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"PRICED_IN\",\n      \"end_type\": \"Currency\",\n      \"from_column\": \"currency\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"IN_CATALOG\",\n      \"end_type\": \"Catalog\",\n      \"from_column\": \"catalog_id\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"SCRAPED_FROM\",\n      \"end_type\": \"Domain\",\n      \"from_column\": \"domain\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_CONSTRUCTION\",\n      \"end_type\": \"Construction\",\n      \"from_column\": \"construction\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_FIT\",\n      \"end_type\": \"Fit\",\n      \"from_column\": \"fit\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_CARE\",\n      \"end_type\": \"CareInstruction\",\n      \"from_column\": \"care\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"MADE_IN\",\n      \"end_type\": \"Country\",\n      \"from_column\": \"country_of_origin\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_REFERENCE\",\n      \"end_type\": \"Reference\",\n      \"from_column\": \"reference\",\n      \"fallback_column\": \"display_reference\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_MAIN_IMAGE\",\n      \"end_type\": \"Image\",\n      \"from_column\": \"image\",\n      \"required\": false,\n      \"notes\": \"Single main image URL when present\"\n    }\n  ],\n  \"envelope_only_columns\": [\n    \"catalog_product_ids\",\n    \"product_ids\",\n    \"prices_seen\",\n    \"images\",\n    \"product_urls\",\n    \"seo_product_id\",\n    \"primary_product_id\",\n    \"enriched_from\",\n    \"scrape_job_id\",\n    \"colorway_hash\",\n    \"last_changed_at\"\n  ],\n  \"deferred_to_v2\": [\n    \"HAS_LISTING / ProductListing from catalog_product_ids\",\n    \"HAS_PRICE_SNAPSHOT / HAS_PRICE_CHANGE from prices_seen\",\n    \"HAS_IMAGE multi from images jsonb\",\n    \"FOR_TARGET_GROUP from section/category_path rules\",\n    \"IN_MATERIAL_GROUP / IN_COLOR_FAMILY derived maps\",\n    \"LLM style attrs (silhouette, neckline, sleeve, pattern, occasion, season, style_tag, certification)\",\n    \"SizeAvailability (needs per-size scraper export)\",\n    \"SIMILAR_TO / CROSS_BRAND_MATCH / SAME_STYLE_AS\",\n    \"colorways child tables (*_colorways)\",\n    \"brand dump tables (zara_products, primark_products, \\u2026)\",\n    \"product_change_events\",\n    \"RESOLVES_TO links toward PLM own_products\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "10 POST /api/db/connections",
           "request": {
             "method": "POST",
             "header": [
@@ -180,41 +230,53 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/graphs",
-            "description": "kind=product only allowed for ecom_products / own_products.",
+            "url": "{{baseUrl}}/api/db/connections",
+            "description": "Named DB connection. Password via password_env / .env \u2014 never returned.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"id\": \"ecom_products\",\n  \"name\": \"E-Commerce Knowledge Graph\",\n  \"ontology_id\": \"ecom\",\n  \"kind\": \"product\",\n  \"description\": \"Contains products and brand information from multiple e-commerce sources (Primark, Zara, Matalan, C&A, Walmart).\",\n  \"source_ids\": [\n    \"ecom_products\"\n  ]\n}",
+              "raw": "{\n  \"id\": \"ecom_postgres\",\n  \"host\": \"127.0.0.1\",\n  \"port\": 5432,\n  \"database\": \"fashion_brain_live\",\n  \"user\": \"postgres\",\n  \"password_env\": \"POSTGRES_PASSWORD\",\n  \"table_default\": \"master_products\",\n  \"schema_default\": \"public\",\n  \"driver\": \"postgresql\",\n  \"description\": \"E-comm scrape Postgres (password from POSTGRES_PASSWORD / .env)\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
                 }
               }
             }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set('graphId', 'ecom_products');"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "07 GET /api/graphs/registry",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/graphs/registry",
-            "description": ""
           }
         },
         {
-          "name": "08 POST /api/sources \u2014 ecom_products",
+          "name": "11 POST /api/db/connections/ecom_postgres/test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/db/connections/ecom_postgres/test?table=master_products",
+            "description": "Test named connection + table metadata.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "12 GET /api/db/connection",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/db/connection?table=master_products&schema=public",
+            "description": "Inspect default .env DSN table/columns/brands."
+          }
+        },
+        {
+          "name": "13 POST /api/sources \u2014 ecom_products",
           "request": {
             "method": "POST",
             "header": [
@@ -241,23 +303,17 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.collectionVariables.set('sourceId', 'ecom_products');"
+                  "pm.collectionVariables.set('sourceId', 'ecom_products');",
+                  "pm.test('source ok or already exists', function () {",
+                  "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
+                  "});"
                 ]
               }
             }
           ]
         },
         {
-          "name": "09 GET /api/sources/ecom_products",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/sources/ecom_products",
-            "description": ""
-          }
-        },
-        {
-          "name": "10 POST /api/sources/ecom_products/sync",
+          "name": "14 POST /graphs \u2014 ecom_products",
           "request": {
             "method": "POST",
             "header": [
@@ -266,11 +322,57 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/api/sources/ecom_products/sync",
-            "description": "Needs FASHIONGPT_ECOM_DSN / POSTGRES_* and mapping file under data/schemas/.",
+            "url": "{{baseUrl}}/graphs",
+            "description": "",
             "body": {
               "mode": "raw",
-              "raw": "{}",
+              "raw": "{\n  \"id\": \"ecom_products\",\n  \"name\": \"E-Commerce Knowledge Graph\",\n  \"ontology_id\": \"ecom\",\n  \"kind\": \"product\",\n  \"description\": \"Contains products and brand information from multiple e-commerce sources (Primark, Zara, Matalan, C&A, Walmart).\",\n  \"source_ids\": [\n    \"ecom_products\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('graphId', 'ecom_products');",
+                  "pm.test('graph ok or already exists', function () {",
+                  "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "15 GET /api/setup/checklist (must be ready)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+            "description": "Expect ready_to_build=true before build."
+          }
+        },
+        {
+          "name": "16 POST /api/graphs/ecom_products/build",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/ecom_products/build",
+            "description": "Start build from source_id + schema. Poll job + build/status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"brand\": null,\n  \"full\": false,\n  \"limit\": null\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -295,43 +397,43 @@
           ]
         },
         {
-          "name": "11 GET /jobs/{jobId}",
+          "name": "17 GET /jobs/{jobId}",
           "request": {
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/jobs/{{jobId}}",
-            "description": "Poll until finished."
+            "description": "Poll until done/failed."
           }
         },
         {
-          "name": "12 GET /api/graphs",
+          "name": "18 GET /api/graphs/ecom_products/build/status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/ecom_products/build/status?job_id={{jobId}}",
+            "description": "products / node_count / edge_count / errors / progress_percent."
+          }
+        },
+        {
+          "name": "19 GET /api/graphs",
           "request": {
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/graphs",
-            "description": "ecom_products node_count > 0 after sync."
+            "description": "node_count > 0 after build."
           }
         },
         {
-          "name": "13 GET /api/metadata/values?attribute=brand",
+          "name": "20 GET /api/metadata/values?attribute=brand",
           "request": {
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/metadata/values?attribute=brand&graph_id=ecom_products&limit=25",
-            "description": "Expect primark, zara, matalan, c-and-a, walmart samples when data synced."
-          }
-        },
-        {
-          "name": "14 GET /api/metadata/values?attribute=material",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/metadata/values?attribute=material&graph_id=ecom_products&limit=25",
             "description": ""
           }
         },
         {
-          "name": "15 POST /api/graphs/query \u2014 list_products",
+          "name": "21 POST /api/graphs/query",
           "request": {
             "method": "POST",
             "header": [
@@ -354,30 +456,7 @@
           }
         },
         {
-          "name": "16 POST /brain/retrieve \u2014 brand primark",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{baseUrl}}/brain/retrieve",
-            "description": "Uses ontology Brand canonicals (primark/zara/matalan/c-and-a/walmart).",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"question\": \"How many Primark products are in the e-commerce catalog?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"brand\": \"{{brand}}\"\n  },\n  \"group_by\": null,\n  \"unsupported\": false,\n  \"limit\": null,\n  \"suggest\": false,\n  \"analysis\": false,\n  \"season_name\": null,\n  \"upcoming\": false,\n  \"corrections\": [],\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"use_global_kg\": false\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          }
-        },
-        {
-          "name": "17 POST /brain/retrieve \u2014 material cotton",
+          "name": "22 POST /brain/retrieve",
           "request": {
             "method": "POST",
             "header": [
@@ -390,7 +469,172 @@
             "description": "",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"question\": \"Which e-com products use cotton?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"material\": \"{{material}}\"\n  },\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"analysis\": false,\n  \"suggest\": false,\n  \"corrections\": []\n}",
+              "raw": "{\n  \"question\": \"How many Primark products are in the e-commerce catalog?\",\n  \"intent\": \"product_count\",\n  \"filters\": {\n    \"brand\": \"primark\"\n  },\n  \"group_by\": null,\n  \"unsupported\": false,\n  \"limit\": null,\n  \"suggest\": false,\n  \"analysis\": false,\n  \"season_name\": null,\n  \"upcoming\": false,\n  \"corrections\": [],\n  \"graph_id\": \"ecom_products\",\n  \"graph_ids\": [\n    \"ecom_products\"\n  ],\n  \"use_global_kg\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Products (list \u2192 detail)",
+      "description": "1) GET /products?material=cotton \u2014 Neo4j product cards (saves productId).\n2) POST /api/graphs/query get_product \u2014 full properties + relationships.\nAlso: list_products template, then same get_product detail.",
+      "item": [
+        {
+          "name": "01 GET /products?material=cotton",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products?material=cotton&limit=5&offset=0",
+            "description": "Product cards from Neo4j when file catalog is empty. Saves collection var productId from items[0].product_id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('products returned', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.items || []).to.be.an('array');",
+                  "  if ((j.items || []).length) {",
+                  "    const id = j.items[0].product_id || (j.items[0].product && j.items[0].product.product_id);",
+                  "    if (id) pm.collectionVariables.set('productId', id);",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 GET /products?brand=primark",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products?brand={{brand}}&limit=5&offset=0",
+            "description": "Filter by brand. Also updates productId when items exist."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('products returned', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.items || []).to.be.an('array');",
+                  "  if ((j.items || []).length) {",
+                  "    const id = j.items[0].product_id || (j.items[0].product && j.items[0].product.product_id);",
+                  "    if (id) pm.collectionVariables.set('productId', id);",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03 POST /api/graphs/query \u2014 get_product (full detail)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "Full product detail: properties + relationships. Uses {{productId}} from step 01/02 (or set manually).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"ecom_products\",\n  \"template\": \"get_product\",\n  \"params\": {\n    \"node_id\": \"{{productId}}\"\n  },\n  \"limit\": 1,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('get_product has properties', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.properties || j.id).to.ok;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 POST /api/graphs/query \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "Template list (summary cards). Saves productId from items[0].id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"ecom_products\",\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 10,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('list_products returned', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  const items = j.items || [];",
+                  "  pm.expect(items).to.be.an('array');",
+                  "  if (items.length && items[0].id) {",
+                  "    pm.collectionVariables.set('productId', items[0].id);",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 POST /api/graphs/query \u2014 get_product after list",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "Same detail call using productId from step 04.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"ecom_products\",\n  \"template\": \"get_product\",\n  \"params\": {\n    \"node_id\": \"{{productId}}\"\n  },\n  \"limit\": 1,\n  \"offset\": 0\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -400,7 +644,7 @@
           }
         },
         {
-          "name": "18 POST ontology pair \u2014 HAS_BRAND (idempotent check)",
+          "name": "06 POST /graphs/ecom_products/query \u2014 get_product (legacy path)",
           "request": {
             "method": "POST",
             "header": [
@@ -409,11 +653,11 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{baseUrl}}/ontologies/ecom/pairs",
-            "description": "Relationship already in allowlist; useful to verify pairs API.",
+            "url": "{{baseUrl}}/graphs/ecom_products/query",
+            "description": "Legacy graph-scoped query path (same template).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"type\": \"HAS_BRAND\",\n  \"start_type\": \"Product\",\n  \"end_type\": \"Brand\"\n}",
+              "raw": "{\n  \"template\": \"get_product\",\n  \"params\": {\n    \"node_id\": \"{{productId}}\"\n  },\n  \"limit\": 1,\n  \"offset\": 0\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -458,8 +702,156 @@
     },
     {
       "name": "Plan API aliases",
-      "description": "Step 2\u20134 of POSTMAN_RUN.md Path A. Prefer these over legacy paths when integrating new admin UI.",
+      "description": "Plan API aliases for admin UI. Prefer folder 0 UI wizard for empty\u2192live. Includes bootstrap, checklist, mapping, db connections, graph build/status.",
       "item": [
+        {
+          "name": "P1 GET /products?material=cotton",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products?material=cotton&limit=5&offset=0",
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('products returned', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.items || []).to.be.an('array');",
+                  "  if ((j.items || []).length) {",
+                  "    const id = j.items[0].product_id || (j.items[0].product && j.items[0].product.product_id);",
+                  "    if (id) pm.collectionVariables.set('productId', id);",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P2 POST /api/graphs/query \u2014 get_product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/query",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"graph_id\": \"ecom_products\",\n  \"template\": \"get_product\",\n  \"params\": {\n    \"node_id\": \"{{productId}}\"\n  },\n  \"limit\": 1,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "0c GET /api/bootstrap",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/bootstrap",
+            "description": ""
+          }
+        },
+        {
+          "name": "0d GET /api/setup/checklist",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/setup/checklist?graph_id=ecom_products&source_id=ecom_products",
+            "description": ""
+          }
+        },
+        {
+          "name": "0 GET /api/db/connection",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/db/connection?table=master_products&schema=public",
+            "description": ""
+          }
+        },
+        {
+          "name": "0e PUT /api/sources/ecom_products/mapping",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sources/ecom_products/mapping",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"source_table\": \"master_products\",\n  \"primary_key\": [\n    \"brand\",\n    \"master_id\"\n  ],\n  \"product_id_template\": \"ecom:{brand}:{master_id}\",\n  \"graph_id\": \"ecom_products\",\n  \"ontology\": \"ecom-products-ontology\",\n  \"ontology_version\": \"1.2.0\",\n  \"watermark_columns\": [\n    \"updated_at\",\n    \"content_hash\"\n  ],\n  \"description\": \"Column map from Postgres master_products \\u2192 Neo4j, aligned with ecom ontology v1.2. Family/Subfamily are first-class types (not GarmentCategory). LLM-only style attrs stay deferred.\",\n  \"product_properties\": {\n    \"master_id\": {\n      \"column\": \"master_id\",\n      \"required\": true\n    },\n    \"brand\": {\n      \"column\": \"brand\",\n      \"required\": true\n    },\n    \"product_name\": {\n      \"column\": \"name\"\n    },\n    \"reference\": {\n      \"column\": \"reference\"\n    },\n    \"display_reference\": {\n      \"column\": \"display_reference\"\n    },\n    \"description\": {\n      \"column\": \"description\"\n    },\n    \"composition\": {\n      \"column\": \"composition\"\n    },\n    \"composition_detail\": {\n      \"column\": \"composition_detail\",\n      \"type\": \"jsonb\"\n    },\n    \"construction\": {\n      \"column\": \"construction\"\n    },\n    \"care\": {\n      \"column\": \"care\"\n    },\n    \"fit\": {\n      \"column\": \"fit\"\n    },\n    \"country_of_origin\": {\n      \"column\": \"country_of_origin\"\n    },\n    \"section\": {\n      \"column\": \"section\"\n    },\n    \"category\": {\n      \"column\": \"category\"\n    },\n    \"family\": {\n      \"column\": \"family\"\n    },\n    \"subfamily\": {\n      \"column\": \"subfamily\"\n    },\n    \"category_path\": {\n      \"column\": \"category_path\"\n    },\n    \"availability\": {\n      \"column\": \"availability\"\n    },\n    \"in_stock_count\": {\n      \"column\": \"in_stock_count\",\n      \"type\": \"integer\"\n    },\n    \"out_stock_count\": {\n      \"column\": \"out_stock_count\",\n      \"type\": \"integer\"\n    },\n    \"currency\": {\n      \"column\": \"currency\"\n    },\n    \"price\": {\n      \"column\": \"price\"\n    },\n    \"original_price\": {\n      \"column\": \"original_price\"\n    },\n    \"price_min\": {\n      \"column\": \"price_min\"\n    },\n    \"price_max\": {\n      \"column\": \"price_max\"\n    },\n    \"image\": {\n      \"column\": \"image\"\n    },\n    \"images\": {\n      \"column\": \"images\",\n      \"type\": \"jsonb\",\n      \"store\": \"envelope_only\"\n    },\n    \"colors\": {\n      \"column\": \"colors\",\n      \"type\": \"jsonb\"\n    },\n    \"color_count\": {\n      \"column\": \"color_count\",\n      \"type\": \"integer\"\n    },\n    \"product_url\": {\n      \"column\": \"product_url\"\n    },\n    \"product_url_with_variant\": {\n      \"column\": \"product_url_with_variant\"\n    },\n    \"source_url\": {\n      \"column\": \"source_url\"\n    },\n    \"domain\": {\n      \"column\": \"domain\"\n    },\n    \"catalog_id\": {\n      \"column\": \"catalog_id\"\n    },\n    \"scraped_at\": {\n      \"column\": \"scraped_at\"\n    },\n    \"content_hash\": {\n      \"column\": \"content_hash\"\n    },\n    \"pdp_enriched\": {\n      \"column\": \"pdp_enriched\",\n      \"type\": \"boolean\"\n    }\n  },\n  \"neo4j_product_properties\": [\n    \"name\",\n    \"reference\",\n    \"display_reference\",\n    \"price\",\n    \"price_num\",\n    \"original_price\",\n    \"original_price_num\",\n    \"currency\",\n    \"availability\",\n    \"in_stock_count\",\n    \"out_stock_count\",\n    \"product_url\",\n    \"image\",\n    \"category_path\",\n    \"country_of_origin\",\n    \"fit\",\n    \"source\",\n    \"scraped_at\",\n    \"content_hash\"\n  ],\n  \"relationships\": [\n    {\n      \"rel_type\": \"HAS_BRAND\",\n      \"end_type\": \"Brand\",\n      \"from_column\": \"brand\",\n      \"required\": true,\n      \"notes\": \"Always set from master_products.brand; facet name stored lowercase\"\n    },\n    {\n      \"rel_type\": \"BELONGS_TO_CATEGORY\",\n      \"end_type\": \"GarmentCategory\",\n      \"from_column\": \"category\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_FAMILY\",\n      \"end_type\": \"Family\",\n      \"from_column\": \"family\",\n      \"required\": false,\n      \"notes\": \"Ontology first-class Family (not GarmentCategory)\"\n    },\n    {\n      \"rel_type\": \"HAS_SUBFAMILY\",\n      \"end_type\": \"Subfamily\",\n      \"from_column\": \"subfamily\",\n      \"required\": false,\n      \"notes\": \"Ontology first-class Subfamily\"\n    },\n    {\n      \"rel_type\": \"PARENT_CATEGORY\",\n      \"start_from_column\": \"subfamily\",\n      \"end_from_column\": \"family\",\n      \"start_type\": \"Subfamily\",\n      \"end_type\": \"Family\",\n      \"required\": false,\n      \"notes\": \"Subfamily \\u2192 Family when both present\"\n    },\n    {\n      \"rel_type\": \"PARENT_CATEGORY\",\n      \"start_from_column\": \"family\",\n      \"end_from_column\": \"category\",\n      \"start_type\": \"Family\",\n      \"end_type\": \"GarmentCategory\",\n      \"required\": false,\n      \"notes\": \"Family \\u2192 GarmentCategory when both present\"\n    },\n    {\n      \"rel_type\": \"USES_MATERIAL\",\n      \"end_type\": \"Material\",\n      \"from_column\": \"composition_detail\",\n      \"fallback_column\": \"composition\",\n      \"required\": false,\n      \"notes\": \"Prefer composition_detail JSONB; else parse composition text; percentage on edge\"\n    },\n    {\n      \"rel_type\": \"PRIMARY_MATERIAL\",\n      \"end_type\": \"Material\",\n      \"from_column\": \"composition_detail\",\n      \"required\": false,\n      \"notes\": \"Material with highest percentage when available\"\n    },\n    {\n      \"rel_type\": \"HAS_COLOR\",\n      \"end_type\": \"Color\",\n      \"from_column\": \"colors\",\n      \"required\": false,\n      \"notes\": \"One edge per color name in colors JSONB\"\n    },\n    {\n      \"rel_type\": \"PRIMARY_COLOR\",\n      \"end_type\": \"Color\",\n      \"from_column\": \"colors\",\n      \"required\": false,\n      \"notes\": \"First color in colors array\"\n    },\n    {\n      \"rel_type\": \"HAS_AVAILABILITY\",\n      \"end_type\": \"Availability\",\n      \"from_column\": \"availability\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_SECTION\",\n      \"end_type\": \"Section\",\n      \"from_column\": \"section\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"PRICED_IN\",\n      \"end_type\": \"Currency\",\n      \"from_column\": \"currency\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"IN_CATALOG\",\n      \"end_type\": \"Catalog\",\n      \"from_column\": \"catalog_id\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"SCRAPED_FROM\",\n      \"end_type\": \"Domain\",\n      \"from_column\": \"domain\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_CONSTRUCTION\",\n      \"end_type\": \"Construction\",\n      \"from_column\": \"construction\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_FIT\",\n      \"end_type\": \"Fit\",\n      \"from_column\": \"fit\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_CARE\",\n      \"end_type\": \"CareInstruction\",\n      \"from_column\": \"care\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"MADE_IN\",\n      \"end_type\": \"Country\",\n      \"from_column\": \"country_of_origin\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_REFERENCE\",\n      \"end_type\": \"Reference\",\n      \"from_column\": \"reference\",\n      \"fallback_column\": \"display_reference\",\n      \"required\": false\n    },\n    {\n      \"rel_type\": \"HAS_MAIN_IMAGE\",\n      \"end_type\": \"Image\",\n      \"from_column\": \"image\",\n      \"required\": false,\n      \"notes\": \"Single main image URL when present\"\n    }\n  ],\n  \"envelope_only_columns\": [\n    \"catalog_product_ids\",\n    \"product_ids\",\n    \"prices_seen\",\n    \"images\",\n    \"product_urls\",\n    \"seo_product_id\",\n    \"primary_product_id\",\n    \"enriched_from\",\n    \"scrape_job_id\",\n    \"colorway_hash\",\n    \"last_changed_at\"\n  ],\n  \"deferred_to_v2\": [\n    \"HAS_LISTING / ProductListing from catalog_product_ids\",\n    \"HAS_PRICE_SNAPSHOT / HAS_PRICE_CHANGE from prices_seen\",\n    \"HAS_IMAGE multi from images jsonb\",\n    \"FOR_TARGET_GROUP from section/category_path rules\",\n    \"IN_MATERIAL_GROUP / IN_COLOR_FAMILY derived maps\",\n    \"LLM style attrs (silhouette, neckline, sleeve, pattern, occasion, season, style_tag, certification)\",\n    \"SizeAvailability (needs per-size scraper export)\",\n    \"SIMILAR_TO / CROSS_BRAND_MATCH / SAME_STYLE_AS\",\n    \"colorways child tables (*_colorways)\",\n    \"brand dump tables (zara_products, primark_products, \\u2026)\",\n    \"product_change_events\",\n    \"RESOLVES_TO links toward PLM own_products\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "0f POST /api/graphs/ecom_products/build",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/graphs/ecom_products/build",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"ecom_products\",\n  \"brand\": null,\n  \"full\": false,\n  \"limit\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const id = j.job && j.job.id;",
+                  "  if (id) pm.collectionVariables.set('jobId', id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "0g GET /api/graphs/ecom_products/build/status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/graphs/ecom_products/build/status?job_id={{jobId}}",
+            "description": ""
+          }
+        },
         {
           "name": "1 GET /api/sources",
           "request": {
@@ -1288,6 +1680,75 @@
     {
       "name": "Graph queries",
       "item": [
+        {
+          "name": "POST ecom_products \u2014 get_product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs/ecom_products/query",
+            "description": "Full product detail. Set productId from Products folder step 01.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"get_product\",\n  \"params\": {\n    \"node_id\": \"{{productId}}\"\n  },\n  \"limit\": 1,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST ecom_products \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs/ecom_products/query",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 20,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST ecom_products \u2014 list_products",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/graphs/ecom_products/query",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"list_products\",\n  \"params\": {},\n  \"limit\": 20,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
         {
           "name": "POST ecom_products \u2014 list_products",
           "request": {

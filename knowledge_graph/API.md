@@ -56,6 +56,15 @@ These mirror the Fashion Brain KG management plan. Legacy routes without the `/a
 | POST | `/api/graphs/rebuild` | Rebuild graph or source |
 | GET | `/api/metadata` | Dynamic metadata |
 | GET | `/api/metadata/values` | Paginated attribute value discovery |
+| GET | `/api/bootstrap` | UI home: health + ontologies/sources/graphs + checklist |
+| GET | `/api/setup/checklist` | ready_to_build + missing pieces |
+| GET/POST/PUT | `/api/sources/{id}/mapping` | Upload / read column mapping (no file copy) |
+| GET | `/api/db/connection` | Postgres table/column metadata (`.env` DSN) |
+| GET/POST | `/api/db/connections` | Named DB connections (password never returned) |
+| POST | `/api/db/connections/{id}/test` | Test named connection |
+| POST | `/api/graphs/{id}/build` | Checklist-gated build from source |
+| GET | `/api/graphs/{id}/build/status` | products / nodes / edges / errors / progress |
+| POST | `/api/kg/build` | Optional demo shortcut scaffold (+ optional sync) |
 
 ---
 
@@ -72,6 +81,55 @@ These mirror the Fashion Brain KG management plan. Legacy routes without the `/a
   "ollama": "ok"
 }
 ```
+
+### `GET /api/db/connection`
+
+Tests the configured e-comm Postgres DSN (`.env`) and returns connection + table metadata.
+
+Query params: `table` (default `master_products`), `schema` (default `public`).
+
+```json
+{
+  "ok": true,
+  "connection": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "database": "fashion_brain_live",
+    "user": "postgres",
+    "dsn_configured": true,
+    "driver": "postgresql",
+    "server_version": "PostgreSQL …"
+  },
+  "table": {
+    "schema": "public",
+    "name": "master_products",
+    "exists": true,
+    "row_count": 12345,
+    "column_count": 40,
+    "columns": [{"name": "brand", "data_type": "text", "nullable": false, "position": 1}]
+  },
+  "brands": {"primark": 100, "zara": 200},
+  "schema_tables": ["master_products", "…"]
+}
+```
+
+Password / full DSN are never returned.
+
+### `POST /api/kg/build`
+
+First-time knowledge-graph setup as a background job (`kind=kg_build`). Idempotent.
+
+```json
+{
+  "profile": "ecom_products",
+  "sync": false,
+  "full": false,
+  "brand": null,
+  "limit": null
+}
+```
+
+Ensures ontology `ecom`, graph `ecom_products`, source `ecom_products`, and restores `data/schemas/ecom_master_products_mapping.json` if missing. Set `"sync": true` to run the initial Postgres → Neo4j load in the same job. Poll `GET /jobs/{id}`.
 
 ### `GET /sources`
 
@@ -131,6 +189,8 @@ Hot-reload snapshots (background job).
 ### `POST /graphs/{graph_id}/sync` · `POST /graphs/{graph_id}/rebuild`
 
 Background sync/rebuild for that graph.
+
+The shared interconnect is derived from source entities: SQL-backed syncs refresh canonical `shared` nodes and `RESOLVES_TO` links before writing the `master` snapshot. File-backed rebuilds refresh it when they build source graphs.
 
 ### `DELETE /graphs/{graph_id}`
 
@@ -238,12 +298,15 @@ Grounded evidence text + evidence rows for a catalog/document intent.
 
 Neo4j product graphs (`kind=product`) are counted via Product nodes. Empty PLM file envelopes are not required for e-comm answers.
 
-### `POST /graphs/{graph_name}/query`
+### `POST /graphs/{graph_name}/query` · `POST /api/graphs/query`
 
 Approved templates only (no free Cypher).
 
+**List products** (summary cards — brand/price/image included for e-com):
+
 ```json
 {
+  "graph_id": "ecom_products",
   "template": "list_products",
   "params": {},
   "limit": 20,
@@ -251,13 +314,34 @@ Approved templates only (no free Cypher).
 }
 ```
 
+**Full product detail** (all node properties + relationships):
+
+```json
+{
+  "graph_id": "ecom_products",
+  "template": "get_product",
+  "params": { "node_id": "ecom:c-and-a:c-and-a:2053536" },
+  "limit": 1,
+  "offset": 0
+}
+```
+
+`source_path` / envelope `content_hash` are null on e-com SQL products unless set as PLM file provenance; e-com stores `content_hash` on the node and `get_product` returns it under `properties` / `provenance`.
+
 `limit` must be 1–100. Templates are defined in `knowledge_graph/graph/templates.py`.
 
 ### `GET /products`
 
-File-catalog search. Query params: `q`, `material`, `season`, `category`, `limit`, `offset`.
+Product search for UI cards.
 
-For e-comm Neo4j data prefer `POST /brain/retrieve`.
+Query params: `q`, `material`, `season`, `category`, `brand`, `graph_id`, `limit`, `offset`.
+
+1. If `own_products` file catalog has rows → search that.
+2. Otherwise (typical e-com setup) → Neo4j `ecom_products` with material/brand/category filters.
+
+Example: `GET /products?material=cotton&limit=5&offset=0`
+
+For one full product use `POST /api/graphs/query` with `template=get_product` and `params.node_id`.
 
 ---
 

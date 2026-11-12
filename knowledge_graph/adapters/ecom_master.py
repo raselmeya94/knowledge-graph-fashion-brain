@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any
 
+from knowledge_graph.config import DATA_ROOT
 from knowledge_graph.ontology import normalize_name
 
-_MAPPING_PATH = Path(__file__).resolve().parents[2] / "data" / "schemas" / "ecom_master_products_mapping.json"
+_MAPPING_PATH = DATA_ROOT / "schemas" / "ecom_master_products_mapping.json"
 
 _COMPOSITION_PART = re.compile(
     r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<name>[A-Za-z][A-Za-z0-9 \-/]+)|(?P<only>[A-Za-z][A-Za-z0-9 \-/]{1,40})"
@@ -21,6 +21,11 @@ _COMPOSITION_PART = re.compile(
 
 
 def load_mapping() -> dict:
+    if not _MAPPING_PATH.is_file():
+        raise FileNotFoundError(
+            f"E-com mapping missing: {_MAPPING_PATH}. "
+            "POST /api/sources/ecom_products/mapping with the mapping JSON first."
+        )
     return json.loads(_MAPPING_PATH.read_text(encoding="utf-8"))
 
 
@@ -111,30 +116,48 @@ def build_relationships(product: dict[str, Any]) -> list[dict[str, Any]]:
 
     edge("HAS_BRAND", "Brand", product.get("brand", ""), field_ref="brand")
     edge("BELONGS_TO_CATEGORY", "GarmentCategory", product.get("category", ""), field_ref="category")
-    edge("HAS_FAMILY", "GarmentCategory", product.get("family", ""), field_ref="family")
-    edge("HAS_SUB_CATEGORY", "GarmentCategory", product.get("subfamily", ""), field_ref="subfamily")
+    edge("HAS_FAMILY", "Family", product.get("family", ""), field_ref="family")
+    edge("HAS_SUBFAMILY", "Subfamily", product.get("subfamily", ""), field_ref="subfamily")
     edge("HAS_SECTION", "Section", product.get("section", ""), field_ref="section")
     edge("HAS_AVAILABILITY", "Availability", product.get("availability", ""), field_ref="availability")
     edge("PRICED_IN", "Currency", product.get("currency", ""), field_ref="currency")
     edge("IN_CATALOG", "Catalog", product.get("catalog_id", ""), field_ref="catalog_id")
     edge("SCRAPED_FROM", "Domain", product.get("domain", ""), field_ref="domain")
     edge("HAS_CONSTRUCTION", "Construction", product.get("construction", ""), field_ref="construction")
+    edge("HAS_FIT", "Fit", product.get("fit", ""), field_ref="fit")
+    edge("HAS_CARE", "CareInstruction", product.get("care", ""), field_ref="care")
+    edge("MADE_IN", "Country", product.get("country_of_origin", ""), field_ref="country_of_origin")
+    ref = _present(product.get("reference")) or _present(product.get("display_reference"))
+    if ref:
+        edge("HAS_REFERENCE", "Reference", ref, field_ref="reference")
+    edge("HAS_MAIN_IMAGE", "Image", product.get("image", ""), field_ref="image")
 
-    for color in product.get("colors") or []:
-        edge("HAS_COLOR", "Color", str(color), field_ref="colors")
+    colors = [str(c) for c in (product.get("colors") or []) if _present(c)]
+    for index, color in enumerate(colors):
+        edge("HAS_COLOR", "Color", color, field_ref="colors", properties={"position": index, "is_primary": index == 0})
+    if colors:
+        edge("PRIMARY_COLOR", "Color", colors[0], field_ref="colors")
 
-    for material, percentage in _materials(product):
+    materials = _materials(product)
+    for material, percentage in materials:
         props = {"percentage": percentage} if percentage is not None else {}
         edge("USES_MATERIAL", "Material", material, field_ref="composition", properties=props)
+    if materials:
+        primary = max(
+            materials,
+            key=lambda item: (item[1] is not None, item[1] if item[1] is not None else -1.0),
+        )
+        primary_props = {"percentage": primary[1]} if primary[1] is not None else {}
+        edge("PRIMARY_MATERIAL", "Material", primary[0], field_ref="composition", properties=primary_props)
 
-    # Category hierarchy: subfamily → family → category
+    # Hierarchy: Subfamily → Family → GarmentCategory (ontology PARENT_CATEGORY pairs)
     family = _present(product.get("family"))
     category = _present(product.get("category"))
     subfamily = _present(product.get("subfamily"))
     if subfamily and family:
-        rels.append(_parent_category(subfamily, family, "subfamily→family"))
+        rels.append(_parent_link("Subfamily", subfamily, "Family", family, "subfamily→family"))
     if family and category:
-        rels.append(_parent_category(family, category, "family→category"))
+        rels.append(_parent_link("Family", family, "GarmentCategory", category, "family→category"))
 
     return rels
 
@@ -171,15 +194,21 @@ def graph_sketch(product: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parent_category(child: str, parent: str, note: str) -> dict[str, Any]:
+def _parent_link(
+    start_type: str,
+    child: str,
+    end_type: str,
+    parent: str,
+    note: str,
+) -> dict[str, Any]:
     return {
         "rel_type": "PARENT_CATEGORY",
-        "start_type": "GarmentCategory",
+        "start_type": start_type,
         "start_name": child,
-        "start_id": f"garmentcategory:{normalize_name(child).replace(' ', '-')}",
-        "end_type": "GarmentCategory",
+        "start_id": f"{start_type.lower()}:{normalize_name(child).replace(' ', '-')}",
+        "end_type": end_type,
         "end_name": parent,
-        "end_id": f"garmentcategory:{normalize_name(parent).replace(' ', '-')}",
+        "end_id": f"{end_type.lower()}:{normalize_name(parent).replace(' ', '-')}",
         "field_ref": note,
         "properties": {},
     }

@@ -1,25 +1,121 @@
 {
   "name": "ecom-products-ontology",
-  "version": "1.0.0",
-  "description": "E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category, material, color, and availability.",
+  "version": "1.2.0",
+  "description": "E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category hierarchy, target group, material composition, style attributes, color, size-level availability, price history, sustainability, origin, images, and cross-brand similarity. Edges carry provenance (column, rule, or llm) and confidence.",
   "entity_types": [
     "Product",
+    "ProductListing",
+    "Reference",
     "Brand",
-    "Material",
-    "GarmentCategory",
-    "Color",
-    "Availability",
-    "Section",
-    "Currency",
-    "Catalog",
     "Domain",
-    "Construction"
+    "Catalog",
+    "ScrapeJob",
+    "Section",
+    "TargetGroup",
+    "GarmentCategory",
+    "Family",
+    "Subfamily",
+    "Material",
+    "MaterialGroup",
+    "Certification",
+    "Construction",
+    "Fit",
+    "Silhouette",
+    "Neckline",
+    "SleeveLength",
+    "GarmentLength",
+    "Closure",
+    "Pattern",
+    "Occasion",
+    "Season",
+    "StyleTag",
+    "Color",
+    "ColorFamily",
+    "Size",
+    "SizeAvailability",
+    "Availability",
+    "AvailabilitySnapshot",
+    "Currency",
+    "FxRate",
+    "PriceBand",
+    "PriceSnapshot",
+    "PriceChangeEvent",
+    "CareInstruction",
+    "Country",
+    "Image",
+    "ProductVersion"
   ],
   "relationship_allowlist": {
     "HAS_BRAND": [
       [
         "Product",
         "Brand"
+      ]
+    ],
+    "SOLD_BY": [
+      [
+        "Brand",
+        "Domain"
+      ]
+    ],
+    "SCRAPED_FROM": [
+      [
+        "Product",
+        "Domain"
+      ]
+    ],
+    "IN_CATALOG": [
+      [
+        "Product",
+        "Catalog"
+      ]
+    ],
+    "SCRAPED_IN_JOB": [
+      [
+        "Product",
+        "ScrapeJob"
+      ],
+      [
+        "PriceSnapshot",
+        "ScrapeJob"
+      ],
+      [
+        "AvailabilitySnapshot",
+        "ScrapeJob"
+      ]
+    ],
+    "HAS_LISTING": [
+      [
+        "Product",
+        "ProductListing"
+      ]
+    ],
+    "LISTING_IN_CATALOG": [
+      [
+        "ProductListing",
+        "Catalog"
+      ]
+    ],
+    "HAS_REFERENCE": [
+      [
+        "Product",
+        "Reference"
+      ]
+    ],
+    "HAS_SECTION": [
+      [
+        "Product",
+        "Section"
+      ]
+    ],
+    "FOR_TARGET_GROUP": [
+      [
+        "Product",
+        "TargetGroup"
+      ],
+      [
+        "Section",
+        "TargetGroup"
       ]
     ],
     "BELONGS_TO_CATEGORY": [
@@ -32,18 +128,46 @@
       [
         "Product",
         "GarmentCategory"
+      ],
+      [
+        "Product",
+        "Subfamily"
       ]
     ],
     "HAS_FAMILY": [
       [
         "Product",
         "GarmentCategory"
+      ],
+      [
+        "Product",
+        "Family"
+      ]
+    ],
+    "HAS_SUBFAMILY": [
+      [
+        "Product",
+        "Subfamily"
       ]
     ],
     "PARENT_CATEGORY": [
       [
         "GarmentCategory",
         "GarmentCategory"
+      ],
+      [
+        "Subfamily",
+        "Family"
+      ],
+      [
+        "Family",
+        "GarmentCategory"
+      ]
+    ],
+    "CATEGORY_IN_SECTION": [
+      [
+        "GarmentCategory",
+        "Section"
       ]
     ],
     "USES_MATERIAL": [
@@ -52,9 +176,139 @@
         "Material"
       ]
     ],
+    "PRIMARY_MATERIAL": [
+      [
+        "Product",
+        "Material"
+      ]
+    ],
+    "IN_MATERIAL_GROUP": [
+      [
+        "Material",
+        "MaterialGroup"
+      ]
+    ],
+    "HAS_CERTIFICATION": [
+      [
+        "Product",
+        "Certification"
+      ],
+      [
+        "Material",
+        "Certification"
+      ]
+    ],
+    "HAS_CONSTRUCTION": [
+      [
+        "Product",
+        "Construction"
+      ]
+    ],
+    "HAS_FIT": [
+      [
+        "Product",
+        "Fit"
+      ]
+    ],
+    "HAS_CARE": [
+      [
+        "Product",
+        "CareInstruction"
+      ]
+    ],
+    "MADE_IN": [
+      [
+        "Product",
+        "Country"
+      ]
+    ],
+    "HAS_SILHOUETTE": [
+      [
+        "Product",
+        "Silhouette"
+      ]
+    ],
+    "HAS_NECKLINE": [
+      [
+        "Product",
+        "Neckline"
+      ]
+    ],
+    "HAS_SLEEVE_LENGTH": [
+      [
+        "Product",
+        "SleeveLength"
+      ]
+    ],
+    "HAS_LENGTH": [
+      [
+        "Product",
+        "GarmentLength"
+      ]
+    ],
+    "HAS_CLOSURE": [
+      [
+        "Product",
+        "Closure"
+      ]
+    ],
+    "HAS_PATTERN": [
+      [
+        "Product",
+        "Pattern"
+      ]
+    ],
+    "SUITED_FOR_OCCASION": [
+      [
+        "Product",
+        "Occasion"
+      ]
+    ],
+    "SUITED_FOR_SEASON": [
+      [
+        "Product",
+        "Season"
+      ]
+    ],
+    "HAS_STYLE_TAG": [
+      [
+        "Product",
+        "StyleTag"
+      ]
+    ],
     "HAS_COLOR": [
       [
         "Product",
+        "Color"
+      ]
+    ],
+    "PRIMARY_COLOR": [
+      [
+        "Product",
+        "Color"
+      ]
+    ],
+    "IN_COLOR_FAMILY": [
+      [
+        "Color",
+        "ColorFamily"
+      ]
+    ],
+    "HAS_SIZE_AVAILABILITY": [
+      [
+        "Product",
+        "SizeAvailability"
+      ]
+    ],
+    "FOR_SIZE": [
+      [
+        "SizeAvailability",
+        "Size"
+      ]
+    ],
+    "OF_COLOR": [
+      [
+        "SizeAvailability",
         "Color"
       ]
     ],
@@ -64,10 +318,16 @@
         "Availability"
       ]
     ],
-    "HAS_SECTION": [
+    "HAS_AVAILABILITY_SNAPSHOT": [
       [
         "Product",
-        "Section"
+        "AvailabilitySnapshot"
+      ]
+    ],
+    "SNAPSHOT_STATUS": [
+      [
+        "AvailabilitySnapshot",
+        "Availability"
       ]
     ],
     "PRICED_IN": [
@@ -76,22 +336,118 @@
         "Currency"
       ]
     ],
-    "IN_CATALOG": [
+    "IN_PRICE_BAND": [
       [
         "Product",
-        "Catalog"
+        "PriceBand"
       ]
     ],
-    "SCRAPED_FROM": [
+    "PRICE_BAND_IN_CURRENCY": [
       [
-        "Product",
-        "Domain"
+        "PriceBand",
+        "Currency"
       ]
     ],
-    "HAS_CONSTRUCTION": [
+    "HAS_PRICE_SNAPSHOT": [
       [
         "Product",
-        "Construction"
+        "PriceSnapshot"
+      ]
+    ],
+    "SNAPSHOT_IN_CURRENCY": [
+      [
+        "PriceSnapshot",
+        "Currency"
+      ]
+    ],
+    "HAS_PRICE_CHANGE": [
+      [
+        "Product",
+        "PriceChangeEvent"
+      ]
+    ],
+    "FX_FROM": [
+      [
+        "FxRate",
+        "Currency"
+      ]
+    ],
+    "FX_TO": [
+      [
+        "FxRate",
+        "Currency"
+      ]
+    ],
+    "HAS_IMAGE": [
+      [
+        "Product",
+        "Image"
+      ]
+    ],
+    "HAS_MAIN_IMAGE": [
+      [
+        "Product",
+        "Image"
+      ]
+    ],
+    "HAS_VERSION": [
+      [
+        "Product",
+        "ProductVersion"
+      ]
+    ],
+    "NEXT_VERSION": [
+      [
+        "ProductVersion",
+        "ProductVersion"
+      ]
+    ],
+    "VARIANT_OF": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "SIMILAR_TO": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "CROSS_BRAND_MATCH": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "SAME_REFERENCE_AS": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "SUBSTITUTE_FOR": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "PRICED_HIGHER_THAN": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "COMPLEMENTS": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "SAME_STYLE_AS": [
+      [
+        "Product",
+        "Product"
       ]
     ]
   },
@@ -147,6 +503,125 @@
       "aliases": [
         "Walmart",
         "WALMART"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "materialgroup:natural",
+      "type": "MaterialGroup",
+      "name": "natural",
+      "aliases": [
+        "Natural",
+        "natural fibre",
+        "natural fiber"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "materialgroup:synthetic",
+      "type": "MaterialGroup",
+      "name": "synthetic",
+      "aliases": [
+        "Synthetic",
+        "man-made"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "materialgroup:semi-synthetic",
+      "type": "MaterialGroup",
+      "name": "semi-synthetic",
+      "aliases": [
+        "Semi-synthetic",
+        "regenerated cellulose"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "targetgroup:women",
+      "type": "TargetGroup",
+      "name": "women",
+      "aliases": [
+        "Women",
+        "WOMAN",
+        "ladies"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "targetgroup:men",
+      "type": "TargetGroup",
+      "name": "men",
+      "aliases": [
+        "Men",
+        "MAN"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "targetgroup:girls",
+      "type": "TargetGroup",
+      "name": "girls",
+      "aliases": [
+        "Girls",
+        "GIRL"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "targetgroup:boys",
+      "type": "TargetGroup",
+      "name": "boys",
+      "aliases": [
+        "Boys",
+        "BOY"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "targetgroup:baby",
+      "type": "TargetGroup",
+      "name": "baby",
+      "aliases": [
+        "Baby",
+        "BABY",
+        "newborn"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "currency:gbp",
+      "type": "Currency",
+      "name": "GBP",
+      "aliases": [
+        "gbp",
+        "pound",
+        "pounds",
+        "GBP"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "currency:eur",
+      "type": "Currency",
+      "name": "EUR",
+      "aliases": [
+        "eur",
+        "euro",
+        "euros",
+        "EUR"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "currency:usd",
+      "type": "Currency",
+      "name": "USD",
+      "aliases": [
+        "usd",
+        "dollar",
+        "dollars",
+        "USD"
       ],
       "external_ids": []
     }

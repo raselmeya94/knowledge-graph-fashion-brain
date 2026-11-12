@@ -60,6 +60,7 @@ def _field_to_label(platform, field: str, graph_id: str | None) -> str | None:
         "color": ("Color", "Colour"),
         "availability": ("Availability",),
         "brand": ("Brand",),
+        "country": ("Country",),
     }
     for candidate in aliases.get(key, ()):
         if candidate in ctx.facet_types or candidate in ctx.entity_types:
@@ -74,7 +75,7 @@ class LinkHit:
     name: str
     normalized_name: str
     score: float
-    source: str  # exact|fulltext|vector|alias
+    source: str  # exact|fulltext|alias
 
 
 @dataclass
@@ -344,36 +345,6 @@ def _adjust_material_score(hit: LinkHit, term_nn: str) -> LinkHit:
     return LinkHit(hit.label, hit.id, hit.name, hit.normalized_name, score, hit.source)
 
 
-def _merge_vector_hits(
-    platform,
-    *,
-    label: str,
-    term: str,
-    existing: list[LinkHit],
-    top_k: int,
-) -> list[LinkHit]:
-    try:
-        from knowledge_graph.linking.embeddings import get_or_build_facet_index
-    except Exception:
-        return existing
-    index = get_or_build_facet_index(platform)
-    if index is None:
-        return existing
-    by_id = {h.id: h for h in existing}
-    for row, score in index.search(term, label=label, top_k=top_k):
-        prev = by_id.get(row.id)
-        if prev is None or score > prev.score:
-            by_id[row.id] = LinkHit(
-                label=row.label,
-                id=row.id,
-                name=row.name,
-                normalized_name=row.normalized_name,
-                score=float(score),
-                source="vector",
-            )
-    return sorted(by_id.values(), key=lambda h: (-h.score, h.normalized_name))
-
-
 def _select_hits(
     hits: list[LinkHit],
     *,
@@ -488,8 +459,6 @@ def link_one(
     alias_applied = search_term.casefold() != raw.casefold()
 
     hits = _exact_and_fulltext(platform, graph_id=graph_id, label=label, term=search_term, top_k=top_k * 2)
-    if getattr(settings, "entity_linker_embeddings", True):
-        hits = _merge_vector_hits(platform, label=label, term=search_term, existing=hits, top_k=top_k * 2)
 
     term_nn = normalize_name(search_term)
     if label == "Material":
@@ -507,6 +476,29 @@ def link_one(
     if status == "no_match" and len(chosen) > 5:
         return LinkResult(field=field, term=term, status="no_match", hits=[])
     return LinkResult(field=field, term=term, status=status, hits=chosen)
+
+
+def link_by_label(
+    platform,
+    label: str,
+    term: str,
+    *,
+    graph_id: str | None = None,
+) -> LinkResult:
+    """KG API helper: resolve a term against one Neo4j facet/entity label (no LLM)."""
+
+    settings = getattr(platform, "settings", None)
+    top_k = int(getattr(settings, "entity_linker_top_k", 5) or 5)
+    min_score = float(getattr(settings, "entity_linker_min_score", 0.35) or 0.35)
+    score_delta = float(getattr(settings, "entity_linker_score_delta", 0.08) or 0.08)
+    graph_id = _resolve_graph_id(platform, graph_id)
+    raw = str(term or "").strip()
+    safe = re.sub(r"[^A-Za-z0-9_]", "", str(label or ""))
+    if not raw or not graph_id or not safe:
+        return LinkResult(field=str(label or ""), term=term, status="skipped", hits=[])
+    hits = _exact_and_fulltext(platform, graph_id=graph_id, label=safe, term=raw, top_k=top_k * 2)
+    status, chosen = _select_hits(hits, top_k=top_k, min_score=min_score, score_delta=score_delta)
+    return LinkResult(field=str(label or ""), term=term, status=status, hits=chosen)
 
 
 def link_entities(
@@ -529,7 +521,7 @@ def link_entities(
 
     scope = build_runtime_schema(platform, graph_id).scope_tokens if graph_id else []
     results: list[LinkResult] = []
-    for field in ("brand", "category", "material", "color", "availability"):
+    for field in ("brand", "category", "material", "color", "availability", "country"):
         value = entities.get(field)
         if value in (None, "", []):
             continue
@@ -566,20 +558,39 @@ def resolved_payload(results: list[LinkResult]) -> dict[str, Any]:
     return out
 
 
-def clarification_message(results: list[LinkResult]) -> str | None:
+def clarification_message(
+    results: list[LinkResult],
+    *,
+    require_hard_match: bool = False,
+    schema=None,
+) -> str | None:
+    """Ask user to rephrase only for hard named-entity misses.
+
+    Default is soft: unmatched filters are dropped by the caller and Text2Cypher continues.
+    Hard clarify only when require_hard_match=True (user named a specific catalog value).
+    """
+
     try:
-        from fashion_brain.agents.entity_extract import is_catalog_scope_term
+        from fashion_brain.agents.entity_extract import is_catalog_scope_term, is_reserved_term
     except Exception:  # pragma: no cover
 
         def is_catalog_scope_term(term: str | None) -> bool:  # type: ignore[misc]
             return False
 
+        def is_reserved_term(term: str | None, _schema=None) -> bool:  # type: ignore[misc]
+            return False
+
     misses = [
         r
         for r in results
-        if r.status == "no_match" and not is_catalog_scope_term(r.term)
+        if r.status == "no_match"
+        and not is_catalog_scope_term(r.term)
+        and not is_reserved_term(r.term, schema)
     ]
     if not misses:
+        return None
+    if not require_hard_match:
+        # Soft path: pipeline drops these filters and answers without aborting.
         return None
     parts = []
     for miss in misses:

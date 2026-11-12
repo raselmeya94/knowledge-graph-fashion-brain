@@ -12,9 +12,12 @@ from knowledge_graph.pipeline.service import Platform
 from knowledge_graph.retrieval.queries import product_materials, products_sharing_material
 from knowledge_graph.retrieval.news import search_news
 
+_PRODUCT_TEMPLATES = {"list_products", "get_product", "product_materials", "products_sharing_material", "trace"}
 TEMPLATES = {
-    "own_products": {"list_products", "product_materials", "products_sharing_material", "trace"},
-    "ecom_products": {"list_products", "product_materials", "products_sharing_material", "trace"},
+    "own_products": set(_PRODUCT_TEMPLATES),
+    "ecom_products": set(_PRODUCT_TEMPLATES),
+    "plmex": set(_PRODUCT_TEMPLATES),
+    "plmex_products": set(_PRODUCT_TEMPLATES),
     "news": {"trace", "news_facts"},
     "documents": {"trace"},
     "customers": {"trace"},
@@ -22,7 +25,11 @@ TEMPLATES = {
     "master": {"sources", "trace", "news_facts", "review_queue", "products_sharing_material", "canonical_materials"},
 }
 NODE_ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,140}$")
-RECORD_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+RECORD_ID_RE = re.compile(r"^[A-Za-z0-9:_.-]{1,120}$")
+
+# Provenance / internal keys omitted from product detail payloads.
+_HIDDEN_PROP_PREFIXES = ("prov_",)
+_HIDDEN_PROP_KEYS = {"id"}
 
 
 def _page(items: list, limit: int, offset: int) -> dict:
@@ -46,6 +53,8 @@ def _templates_for(platform: Platform, graph_name: str) -> set[str]:
     except Exception:
         return set()
     allowed = {"trace"}
+    if getattr(graph, "kind", None) == "product":
+        allowed.update({"list_products", "get_product", "product_materials", "products_sharing_material"})
     try:
         ontology = platform.kg_registry.load_ontology_object(graph.ontology_id)
         if "EXPORTS_TO" in ontology.relationship_allowlist or graph.ontology_id == "news":
@@ -87,7 +96,17 @@ def run_template(
 
     if template == "list_products":
         nodes = _visible_records(platform, graph_name, "Product", principal)
-        return _page([_public_node(node) for node in nodes], limit, offset)
+        return _page([_product_summary(node) for node in nodes], limit, offset)
+    if template == "get_product":
+        if not node_id:
+            raise ValidationFailed("get_product requires params.node_id (product id).")
+        node = platform.graph.get_node(str(node_id), include_deleted=False)
+        if node is None or (graph_name not in {"master", "shared"} and node.graph != graph_name):
+            raise NotFoundError(f"Product '{node_id}' was not found in graph '{graph_name}'.")
+        if "Product" not in (node.labels or []) and "Record" not in (node.labels or []):
+            raise ValidationFailed(f"Node '{node_id}' is not a Product record.")
+        _guard_node(node, principal)
+        return _product_detail(platform, node)
     if template == "product_materials":
         rows = []
         for row in product_materials(platform, principal):
@@ -183,14 +202,87 @@ def _visible_records(platform: Platform, graph_name: str, label: str, principal:
 
 
 def _public_node(node: GraphNode) -> dict:
+    props = node.properties or {}
     return {
         "id": node.id,
         "labels": node.labels,
         "graph": node.graph,
-        "name": node.properties.get("name") or node.properties.get("title"),
-        "classification": node.properties.get("classification"),
-        "lifecycle": node.properties.get("lifecycle"),
-        "source_path": node.properties.get("prov_source_path"),
-        "content_hash": node.properties.get("prov_content_hash"),
-        "synthetic": node.properties.get("synthetic", node.properties.get("prov_synthetic")),
+        "name": props.get("name") or props.get("title"),
+        "classification": props.get("classification"),
+        "lifecycle": props.get("lifecycle"),
+        # File/PLM envelopes use prov_*; e-com SQL sync stores content_hash directly.
+        "source_path": props.get("prov_source_path") or props.get("source_path"),
+        "content_hash": props.get("prov_content_hash") or props.get("content_hash"),
+        "synthetic": props.get("synthetic", props.get("prov_synthetic")),
+    }
+
+
+def _product_summary(node: GraphNode) -> dict:
+    """List-card fields for Product nodes (e-com + PLM)."""
+
+    props = node.properties or {}
+    base = _public_node(node)
+    base.update(
+        {
+            "brand": props.get("brand"),
+            "master_id": props.get("master_id"),
+            "price": props.get("price"),
+            "price_num": props.get("price_num"),
+            "currency": props.get("currency"),
+            "availability": props.get("availability"),
+            "image": props.get("image"),
+            "product_url": props.get("product_url"),
+            "category_path": props.get("category_path"),
+            "reference": props.get("reference") or props.get("display_reference"),
+        }
+    )
+    return base
+
+
+def _product_detail(platform: Platform, node: GraphNode) -> dict:
+    """Full product properties + outgoing relationship facets for UI detail pages."""
+
+    props = {
+        key: value
+        for key, value in (node.properties or {}).items()
+        if key not in _HIDDEN_PROP_KEYS and not any(key.startswith(prefix) for prefix in _HIDDEN_PROP_PREFIXES)
+    }
+    # Keep a stable provenance block without dumping every prov_* key inline.
+    provenance = {
+        "source_id": (node.properties or {}).get("prov_source_id"),
+        "record_id": (node.properties or {}).get("prov_record_id"),
+        "source_type": (node.properties or {}).get("prov_source_type"),
+        "source_path": (node.properties or {}).get("prov_source_path") or (node.properties or {}).get("source_path"),
+        "content_hash": (node.properties or {}).get("prov_content_hash") or (node.properties or {}).get("content_hash"),
+    }
+    relationships = []
+    for edge in platform.graph.find_edges(graph=node.graph, include_deleted=False):
+        if edge.start_id != node.id:
+            continue
+        end = platform.graph.get_node(edge.end_id, include_deleted=False)
+        end_props = (end.properties if end else {}) or {}
+        relationships.append(
+            {
+                "id": edge.id,
+                "type": edge.type,
+                "end_id": edge.end_id,
+                "end_name": end_props.get("name") or edge.end_id,
+                "end_type": end_props.get("entity_type")
+                or (next((label for label in (end.labels if end else []) if label not in {"Entity", "SourceEntity"}), None)),
+                "properties": {
+                    key: value
+                    for key, value in (edge.properties or {}).items()
+                    if not any(key.startswith(prefix) for prefix in _HIDDEN_PROP_PREFIXES)
+                },
+            }
+        )
+    return {
+        "id": node.id,
+        "labels": node.labels,
+        "graph": node.graph,
+        "name": props.get("name") or props.get("title") or node.id,
+        "properties": props,
+        "provenance": provenance,
+        "relationships": relationships,
+        "relationship_count": len(relationships),
     }

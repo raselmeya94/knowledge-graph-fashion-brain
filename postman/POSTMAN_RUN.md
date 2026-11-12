@@ -9,8 +9,8 @@ Import these two collections (do **not** mix ports):
 
 Swagger (optional): http://127.0.0.1:8001/docs · http://127.0.0.1:8000/docs
 
-> **Empty KG / e-com first:** re-import [`knowledge_graph.postman_collection.json`](knowledge_graph.postman_collection.json) and run folder **`0 Ecom pipeline (empty → live)`** (steps 01–18).  
-> Full guide: [`../knowledge_graph/POSTMAN.md`](../knowledge_graph/POSTMAN.md) · bodies: [`bodies/`](bodies/).
+> **Empty KG / e-com first:** re-import [`knowledge_graph.postman_collection.json`](knowledge_graph.postman_collection.json) and run folder **`0 UI wizard (empty → live)`** (inspect → ontology → mapping → DB → source → graph → build → status).  
+> Plan: [`../knowledge_graph/UI_CONTROL_PLAN.md`](../knowledge_graph/UI_CONTROL_PLAN.md) · guide: [`../knowledge_graph/POSTMAN.md`](../knowledge_graph/POSTMAN.md).
 
 ---
 

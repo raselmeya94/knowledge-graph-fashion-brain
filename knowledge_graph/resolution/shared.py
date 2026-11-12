@@ -57,9 +57,13 @@ def build_shared_graph(repo, ontology: Ontology, decisions: list[ReviewDecision]
     ensure_canonical_nodes(repo, ontology)
     repo.delete_edges_of_type("RESOLVES_TO")
     created = {"verified": 0, "review": 0, "rejected": 0}
-    for node in repo.find_nodes(include_deleted=False):
-        if "SourceEntity" not in node.labels:
-            continue
+    source_nodes = {
+        node.id: node
+        for entity_type in sorted({entity.type for entity in ontology.canonical_entities})
+        for node in repo.find_nodes(label=entity_type, include_deleted=False)
+        if "SourceEntity" in node.labels
+    }
+    for node in sorted(source_nodes.values(), key=lambda item: item.id):
         entity_type = node.properties.get("entity_type")
         name = node.properties.get("name")
         if not entity_type or not name:

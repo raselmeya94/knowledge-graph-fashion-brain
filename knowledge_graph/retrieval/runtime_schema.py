@@ -76,6 +76,30 @@ class RuntimeSchemaContext:
             brand_block = "Canonical brands (from ontology):\n" + "\n".join(
                 f"- {b.get('name')} aliases={b.get('aliases') or []}" for b in brands[:20]
             )
+        temporal_hint = ""
+        entities = {str(x) for x in (self.entity_types or [])}
+        if "PriceChangeEvent" in entities or "PriceSnapshot" in entities:
+            temporal_hint = (
+                "Temporal price analysis:\n"
+                "- Current price: Product.price_num\n"
+                "- History: (p)-[:HAS_PRICE_SNAPSHOT]->(s:PriceSnapshot) use s.observed_at, s.price_num\n"
+                "- Movers/trends: (p)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) use e.detected_at, "
+                "e.delta_pct, e.direction (up|down|currency_change); prefer direction <> 'currency_change' "
+                "for real price moves\n"
+            )
+        inventory = ""
+        try:
+            from knowledge_graph.retrieval.kg_stats import facet_inventory
+
+            cards = facet_inventory(str(self.graph_id or ""))
+            if cards:
+                inventory = (
+                    "Indexed facet cardinalities for this graph (keys present + distinct values): "
+                    + ", ".join(f"{k}={v}" for k, v in cards.items())
+                    + "\n"
+                )
+        except Exception:
+            inventory = ""
         return (
             f"Target graph_id: {self.graph_id}\n"
             f"Ontology: {self.ontology_name or self.ontology_id}\n"
@@ -83,11 +107,16 @@ class RuntimeSchemaContext:
             f"Facet types: {', '.join(self.facet_types)}\n"
             f"Filter keys: {', '.join(self.filter_keys)}\n"
             f"Product properties: {', '.join(self.product_properties) or 'id, name, graph, lifecycle'}\n"
-            "Relationships:\n"
+            + inventory
+            + "Relationships:\n"
             + ("\n".join(rel_lines) if rel_lines else "- (none registered)")
             + "\n"
             + (brand_block + "\n" if brand_block else "")
-            + "Match facets by id IN $…_ids from resolved entities. Never invent names."
+            + temporal_hint
+            + "Match facets by id IN $…_ids from resolved entities. Never invent names.\n"
+            "User plurals map onto this graph's filter keys (e.g. <key>s → <key>). "
+            "'How many <key>s' means count distinct values of that key — not products — "
+            "and only for keys listed above for this KG."
         )
 
 
@@ -203,15 +232,20 @@ def ensure_facet_fulltext_indexes(platform, facet_types: list[str]) -> list[str]
 
 
 def _facet_filter_key(label: str) -> str:
-    text = str(label or "")
-    # GarmentCategory → category; common shortenings
-    mapping = {
-        "garmentcategory": "category",
-        "garment": "category",
-    }
-    key = text.casefold()
-    if key in mapping:
-        return mapping[key]
+    """Ontology/entity label → snake filter key (Buyer→buyer, GarmentCategory→category)."""
+
+    import re
+
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    # CamelCase / spaces → snake_case
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", text)
+    key = snake.casefold().replace("-", "_").replace(" ", "_")
+    key = re.sub(r"_+", "_", key).strip("_")
+    # Historical shortenings used as filter keys in retrieve/Cypher.
+    if key in {"garment_category", "garmentcategory", "garment"}:
+        return "category"
     return key
 
 
@@ -229,27 +263,14 @@ def _infer_product_label(entity_types: list[str], allowlist: dict[str, list[list
 
 
 def _scope_tokens(graphs: list[GraphRuntimeInfo], target: str | None) -> list[str]:
-    """Tokens from graph names/descriptions/ids — used to ignore catalog-scope words."""
+    """Structural catalog-scope tokens only (graph id / kind / ontology).
+
+    Do **not** tokenize free-text ``description`` — it often lists brand names
+    (Zara, Primark, …) which must remain linkable entity values, not scope noise.
+    """
 
     tokens: set[str] = set()
-    generic = {
-        "how",
-        "many",
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "in",
-        "of",
-        "to",
-        "for",
-        "from",
-        "with",
-        "our",
-        "is",
-        "are",
-        "found",
+    structural = {
         "product",
         "products",
         "knowledge",
@@ -258,26 +279,34 @@ def _scope_tokens(graphs: list[GraphRuntimeInfo], target: str | None) -> list[st
         "source",
         "sources",
         "data",
-        "contains",
-        "information",
-        "multiple",
+        "ecom",
+        "ecommerce",
+        "commerce",
+        "plm",
+        "catalog",
+        "ontology",
     }
+    tokens |= structural
     selected = [g for g in graphs if not target or g.graph_id == target or g.kind == "product"]
     for g in selected:
-        blob = " ".join([g.graph_id, g.name, g.description, " ".join(g.source_ids or [])])
-        nn = normalize_name(blob)
-        for tok in nn.split():
-            if len(tok) >= 2 and tok not in generic:
-                tokens.add(tok)
-        # Hyphen/underscore collapsed forms
-        compact = nn.replace(" ", "")
-        if compact:
-            tokens.add(compact)
-        # id slug parts: ecom_products → ecom, products
-        for part in re.split(r"[_\-\s]+", g.graph_id):
+        for part in re.split(r"[_\-\s]+", g.graph_id or ""):
             p = normalize_name(part)
-            if p and p not in generic:
+            if len(p) >= 2:
                 tokens.add(p)
+        kind = normalize_name(g.kind or "")
+        if kind:
+            tokens.add(kind)
+        ont = normalize_name(g.ontology_id or "")
+        if ont:
+            tokens.add(ont)
+            for part in re.split(r"[_\-\s]+", g.ontology_id or ""):
+                p = normalize_name(part)
+                if len(p) >= 2:
+                    tokens.add(p)
+        # Short structural words from the graph display name only (not description).
+        for tok in normalize_name(g.name or "").split():
+            if tok in structural or tok in tokens:
+                tokens.add(tok)
     return sorted(tokens)
 
 

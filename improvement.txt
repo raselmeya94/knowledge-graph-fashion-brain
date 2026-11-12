@@ -1,0 +1,669 @@
+================================================================================
+Knowledge Graph Enhancement: Multi-Table Integration & Advanced Analytics
+Schema-grounded architecture proposal (based on pg_db_tables_schema/schema.sql)
+Generated: 2026-11-10
+================================================================================
+
+STATUS SNAPSHOT
+---------------
+- Ontology (ecom v1.2) already declares PriceSnapshot, PriceChangeEvent,
+  AvailabilitySnapshot, ProductVersion, Colorway-related edges, ScrapeJob, etc.
+- IMPLEMENTED (2026-11-10) Phase 1a:
+    * adapters/ecom_events.py → build_event_graph()
+    * ecom_sync.sync_ecom_events_to_neo4j() (watermark: ecom_events_sync_state.json)
+    * Wired into sync_ecom_to_neo4j(sync_events=True) after product upsert
+    * Live sync: 902 PriceChangeEvent, 902 PriceSnapshot, 2743 AvailabilitySnapshot
+    * retrieval: cypher_price_history / cypher_price_movers
+    * runtime_schema temporal hints for text2cypher
+- Still deferred: prices_seen backfill, *_colorways, brand dumps, ProductVersion
+
+
+================================================================================
+0. CONCRETE SCHEMA-ANALYSIS WORKFLOW
+================================================================================
+
+Run this workflow whenever adding or changing Postgres → Neo4j mapping. Do not
+skip steps; each step produces an artifact that feeds the next.
+
+STEP A — Inventory tables (artifact: table_inventory)
+  For every CREATE TABLE in schema.sql, record:
+    table_name | row_role | PK | FKs | approx purpose | has_time_columns?
+  Row roles: entity | child_of_entity | event_log | operational | staging
+
+STEP B — Classify columns (artifact: column_classes)
+  For each column, assign ONE class:
+    identity | descriptive | categorical_facet | numeric_measure |
+    temporal | jsonb_multi | jsonb_history | provenance | operational_only
+  Mark nullability / brand-skew (e.g. category_path Primark-heavy).
+
+STEP C — Detect temporal & event sources (artifact: temporal_sources)
+  Prefer append-only event tables over overwritten current columns.
+  Rank sources for price history:
+    1) product_change_events (change_type contains price; before/after JSON)
+    2) prices_seen JSONB on product rows (if populated with timestamps)
+    3) scrape-job diffs via content_hash / last_changed_at (weak)
+  Rank sources for availability history similarly (change_type=availability).
+
+STEP D — Apply graph design decision criteria (Section 0b) → mapping draft
+  Produce: node_labels | relationship_types | property homes | stay_in_postgres
+
+STEP E — Capability coverage matrix (artifact: capability_matrix)
+  Map each Fashion Brain capability (basic QA / analysis / specs / price trends)
+  to required graph paths. Mark: available_now | needs_sync | needs_pg_join |
+  impossible_without_new_data
+
+STEP F — Gap vs current KG (artifact: gap_list)
+  Diff mapping draft against ecom_master adapter + ontology allowlist.
+  Separate: ontology-declared-but-unsynced vs ontology-missing vs data-missing.
+
+STEP G — Incremental sync plan (artifact: migration_phases)
+  Phases that extend ecom_sync without wiping Product nodes. Each phase has:
+    watermark column, idempotent MERGE keys, Fashion Brain Cypher/template impact.
+
+STEP H — Validation queries (artifact: smoke_cypher)
+  3–5 Cypher checks per phase proving counts, temporal ranges, and no orphan events.
+
+
+--------------------------------------------------------------------------------
+0b. GRAPH DESIGN DECISION CRITERIA
+--------------------------------------------------------------------------------
+
+Use these rules in order. First matching rule wins.
+
+C1 — IDENTITY ENTITY → Node label
+  Table (or logical entity) has a stable business identity reused across queries
+  and joins (Product, Brand, Material, Color, Currency, Catalog, Domain, Country).
+  MERGE key must be deterministic from PK or natural key.
+
+C2 — SHARED VOCABULARY / FACET → Node label (not free-text property)
+  Values are compared, grouped, filtered, or linked across products
+  (category, family, section, construction, fit, availability status).
+  Prefer one shared node per normalized name to enable aggregations.
+
+C3 — CHILD / VARIANT OF ONE PARENT → Child node OR edge property
+  Prefer child node when the child has its own attributes queried independently
+  (Colorway: color + price + availability + image).
+  Prefer edge property when only a scalar attaches to an existing edge
+  (USES_MATERIAL.percentage).
+
+C4 — APPEND-ONLY CHANGE / OBSERVATION → Event or Snapshot node
+  Never overwrite history onto Product.current_* only.
+  - Observation at time T with a measured value → Snapshot node
+    (PriceSnapshot, AvailabilitySnapshot)
+  - Transition from old→new with delta semantics → ChangeEvent node
+    (PriceChangeEvent; generalize to ProductChangeEvent when mixed fields)
+  Always store observed_at / detected_at and link to Product via stable id.
+
+C5 — OPERATIONAL CONTROL PLANE → Optional node or stay in Postgres
+  scrape_jobs supports provenance and debugging. Sync as ScrapeJob only if
+  Fashion Brain must answer “which job detected this change”; otherwise keep
+  scrape_job_id as a property on event nodes and leave the table in Postgres.
+
+C6 — BRAND-SPECIFIC DUMP PARALLEL TO MASTER → Enrichment overlay, not new label
+  zara_products / primark_products / … share master_id with master_products.
+  Do NOT create :ZaraProduct labels. Sync brand tables as:
+    - fill-null enrichment onto existing Product properties, and/or
+    - brand-specific property namespace (e.g. sizes, product_features JSON), and/or
+    - Colorway / SizeAvailability children sourced from that brand’s child tables.
+  Product identity remains ecom:{brand}:{master_id}.
+
+C7 — DUPLICATE CURRENT STATE → Property on Product (single source of truth)
+  Latest price, availability, currency stay on Product for fast current-state QA.
+  Historical answers MUST go through Snapshot/Event nodes, not scraped_at alone.
+
+C8 — HIGH-CARDINALITY RAW / BINARY / DUMP → Stay in Postgres or envelope
+  Full before_json/after_json blobs, large images arrays, variant_offers matrices:
+  keep in Postgres; graph stores extracted scalars + pointers (event_id, url).
+
+C9 — CROSS-SOURCE BUSINESS ROLE → Separate graph / shared interconnect
+  Buyer, Season (PLM year), Supplier exist on own_products, NOT in ecom schema.sql.
+  Do not invent Buyer/Region tables from ecom columns. Map:
+    - ecom Brand ≈ retail brand / marketplace seller identity
+    - PLM Buyer / Season stay on own_products; cross-query via global/shared KG
+    - “Region” in ecom ≈ Domain / catalog market / country_of_origin (document alias)
+
+C10 — ONTOLOGY FIRST, THEN SYNC
+  Every new label/rel must be allowlisted in ecom ontology before sync writes it.
+  Fashion Brain text2cypher / runtime_schema must see the new types after sync.
+
+
+================================================================================
+1. EXISTING DATABASE SCHEMA ANALYSIS
+================================================================================
+
+1.1 Table inventory (from schema.sql)
+
+┌─────────────────────────┬──────────────────┬────────────────────────┬──────────────────────────────┐
+│ Table                   │ Role             │ PK                     │ Links                        │
+├─────────────────────────┼──────────────────┼────────────────────────┼──────────────────────────────┤
+│ master_products         │ Hub entity       │ (brand, master_id)     │ Logical parent of brand rows │
+│ zara_products           │ Brand dump       │ master_id              │ Same id space as master      │
+│ primark_products        │ Brand dump       │ master_id              │ idem                         │
+│ matalan_products        │ Brand dump       │ master_id              │ idem                         │
+│ c_and_a_products        │ Brand dump       │ master_id              │ brand slug c-and-a           │
+│ walmart_products        │ Brand dump       │ master_id              │ Extra: seller, upc, specs…   │
+│ calvin_klein_products   │ Brand dump       │ master_id              │ idem                         │
+│ *_colorways             │ Child variant    │ BIGSERIAL id           │ FK → brand_products.master_id│
+│ product_change_events   │ Event log        │ BIGSERIAL id           │ (brand, master_id) logical FK│
+│ scrape_jobs             │ Operational      │ job_id                 │ Referenced by scrape_job_id  │
+└─────────────────────────┴──────────────────┴────────────────────────┴──────────────────────────────┘
+
+NOTE: There is NO formal FK from master_products to brand dump tables; linkage is
+by shared master_id (+ brand discriminator on master). product_change_events has
+NO declared FK to master_products — join on (brand, master_id).
+
+
+1.2 master_products — current-state product hub
+
+Purpose: shared, enriched product row for all brands after scrape/enrich.
+
+Key identity: brand + master_id
+Important facets: section, category, family, subfamily, category_path,
+  composition / composition_detail, construction, care, fit, country_of_origin
+Commercial: currency, price, original_price, price_min/max, prices_seen (JSONB)
+Stock: availability, in_stock_count, out_stock_count
+Provenance: scraped_at, scrape_job_id, content_hash, colorway_hash,
+  last_changed_at, created_at, updated_at
+
+prices_seen: JSONB array intended as historical price observations (exact element
+shape must be confirmed from live data before parsing; treat as secondary to
+product_change_events until validated).
+
+
+1.3 Brand dump tables (*_products)
+
+Purpose: full scraper dump + brand-native ids (zara_ids, primark_id, walmart_id…).
+Overlap heavily with master; add brand-skew fields:
+  sizes, size_names, care (JSONB), product_features, badges, product_tags,
+  color_variants, colorway_tiles, listing/grid metadata
+Walmart extras: product_brand, gender, seller, seller_type, upc, model, sku,
+  specifications, rating, review_count, variant_offers, savings, etc.
+
+Graph implication: enrichment + Colorway/size sources — not parallel Product trees.
+
+
+1.4 *_colorways
+
+Purpose: one row per colorway tile / color variant under a master_id.
+Columns: product_id, color, color_id, price, original_price, availability,
+  image, product_url, grid_position
+
+Graph implication: Colorway child nodes (C3), optionally feeding Color + price
+at variant grain.
+
+
+1.5 product_change_events — PRIMARY historical source (HIGH PRIORITY)
+
+Append-only. Written when scrape detects change (skip dump when content unchanged).
+
+Columns of analytical value:
+  brand, master_id          → Product link key
+  change_type               → created | price | availability | content | mixed
+  fields_changed            → JSONB list of field names
+  before_json / after_json  → state slices (extract price, availability, …)
+  detected_at / scraped_at  → event time
+  scrape_job_id, catalog_id → provenance
+  content_hash_before/after → versioning
+
+This table is what enables true time-based price and availability analysis.
+
+
+1.6 scrape_jobs
+
+Job lifecycle + counts (products_created/updated/unchanged) + changes_summary_json.
+Useful for ops and provenance; secondary for Fashion Brain Q&A.
+
+
+1.7 What is NOT in this Postgres schema
+
+Despite Fashion Brain vocabulary, ecom schema.sql does NOT contain:
+  Buyer, Supplier, Manufacturer, Season-year, Region/Market dimension tables.
+Those live in PLM own_products (CSV/JSON) today:
+  ORDERED_BY → Company (Buyer), IN_SEASON → Season, etc.
+For ecom questions, “buyer” is remapped to Brand in retrieval/ecom.py.
+
+
+================================================================================
+2. CURRENT KNOWLEDGE GRAPH GAP ANALYSIS
+================================================================================
+
+What works today (master_products sync):
+  ✓ Product counts by Brand
+  ✓ Products by GarmentCategory / Family / Subfamily / Section
+  ✓ Specs partially: composition→Material, construction, fit, care, colors,
+    country, current price/availability on Product properties
+  ✓ Basic distribution / material analysis via facet edges
+
+What fails or is weak because of master-only current-state sync:
+
+G1 PRICE HISTORY — Cannot answer “price over last 6 months”, “largest increases”,
+   “brand average price trend”, “category trending up/down”. Product.price is
+   latest only; product_change_events and prices_seen are not in Neo4j.
+
+G2 AVAILABILITY HISTORY — No restock/sell-out timeline; only current Availability.
+
+G3 COLORWAY GRAIN — No per-color price/availability; colors are name edges only.
+
+G4 BRAND-DUMP DEPTH — sizes, product_features, Walmart seller/specs/ratings,
+   badges/tags not on Product; specs incomplete vs brand tables.
+
+G5 VERSION / CONTENT CHANGE — content_hash not modeled as ProductVersion chain;
+   cannot ask “what changed in the spec last month”.
+
+G6 REGION — No Region node; Domain/catalog_id/country_of_origin exist but are not
+   framed as market-region analytics.
+
+G7 BUYER / SEASON (ecom) — Not in ecom DB; must use own_products or clarify that
+   ecom “buyer” means Brand/retailer.
+
+G8 ONTOLOGY vs RUNTIME — ecom.json already lists PriceSnapshot/PriceChangeEvent
+   but sync never creates them → text2cypher may invent queries that return empty.
+
+
+================================================================================
+3. PROPOSED KNOWLEDGE GRAPH ARCHITECTURE
+================================================================================
+
+3.1 Principle
+
+Product remains the hub (ecom:{brand}:{master_id}). Extend with:
+  (a) facet nodes already in use,
+  (b) Colorway children from *_colorways,
+  (c) temporal Snapshot + ChangeEvent nodes from product_change_events
+      (+ prices_seen when validated),
+  (d) selective enrichment from brand dump tables,
+  (e) optional ScrapeJob provenance.
+
+Do NOT rebuild the graph. Incremental MERGE extensions to ecom_sync.
+
+
+3.2 Node labels (keep / add / defer)
+
+KEEP (already synced or trivial):
+  Product, Brand, GarmentCategory, Family, Subfamily, Section, Material, Color,
+  Construction, Fit, CareInstruction, Country, Currency, Availability, Catalog,
+  Domain, Reference, Image
+
+ADD (Phase 1–2 — high value, schema-backed):
+  PriceSnapshot          — observed price at time T
+  PriceChangeEvent       — old→new price transition with delta
+  AvailabilitySnapshot   — stock status observation at time T
+  ProductChangeEvent     — optional umbrella for content/mixed (or reuse typed nodes)
+  Colorway               — variant under Product
+  ScrapeJob              — optional provenance
+  ProductVersion         — content_hash versions when content changes
+
+DERIVE later (rules/LLM, not raw tables):
+  TargetGroup, MaterialGroup, ColorFamily, PriceBand, Season (fashion season),
+  style attrs (Silhouette, Neckline, …), SIMILAR_TO / CROSS_BRAND_MATCH
+
+STAY OUT / DO NOT CREATE:
+  :ZaraProduct, :PrimarkProduct, … (use Product + brand)
+  :Buyer from ecom (use Brand or PLM Company)
+  Nodes for every JSONB key in before_json
+
+
+3.3 Relationship types (new / activate)
+
+  Product -[:HAS_COLORWAY]-> Colorway
+  Colorway -[:OF_COLOR]-> Color
+  Colorway -[:PRICED_IN]-> Currency   (optional; or price props on Colorway)
+
+  Product -[:HAS_PRICE_SNAPSHOT]-> PriceSnapshot
+  PriceSnapshot -[:SNAPSHOT_IN_CURRENCY]-> Currency
+  Product -[:HAS_PRICE_CHANGE]-> PriceChangeEvent
+  PriceChangeEvent -[:DETECTED_IN_JOB]-> ScrapeJob   (optional)
+
+  Product -[:HAS_AVAILABILITY_SNAPSHOT]-> AvailabilitySnapshot
+  AvailabilitySnapshot -[:SNAPSHOT_STATUS]-> Availability
+
+  Product -[:HAS_VERSION]-> ProductVersion
+  ProductVersion -[:NEXT_VERSION]-> ProductVersion
+
+  Product -[:SCRAPED_IN_JOB]-> ScrapeJob
+  PriceSnapshot|AvailabilitySnapshot -[:SCRAPED_IN_JOB]-> ScrapeJob
+
+  (Existing facet edges unchanged: HAS_BRAND, BELONGS_TO_CATEGORY, USES_MATERIAL, …)
+
+
+3.4 Product properties (current-state cache — keep)
+
+  Keep latest: name, price, price_num, original_price, currency, availability,
+  in_stock_count, out_stock_count, scraped_at, content_hash, product_url, …
+  Add: last_price_change_at, last_price_direction (denormalized for fast filters)
+  Add enrichment when present: sizes (list), gauge/construction detail, seller
+  (Walmart), rating — without duplicating full dump rows.
+
+
+3.5 Event / snapshot property contracts
+
+PriceSnapshot
+  id: price_snap:{brand}:{master_id}:{observed_at}:{price_num}
+  price, price_num, original_price, original_price_num, currency,
+  observed_at, source (product_change_events | prices_seen | master_current),
+  scrape_job_id, pg_event_id (nullable)
+
+PriceChangeEvent
+  id: price_chg:{pg_event_id}  OR  price_chg:{brand}:{master_id}:{detected_at}
+  old_price, old_price_num, new_price, new_price_num,
+  delta, delta_pct, direction (up|down|unchanged),
+  currency, detected_at, scraped_at, fields_changed, scrape_job_id, pg_event_id
+
+AvailabilitySnapshot
+  id: avail_snap:{brand}:{master_id}:{observed_at}:{status}
+  status, in_stock_count, out_stock_count, observed_at, source, pg_event_id
+
+Colorway
+  id: colorway:{brand}:{master_id}:{color_id|slug(color)|row_id}
+  color_id, color_name, price, price_num, original_price, availability,
+  image, product_url, grid_position, source_table
+
+
+3.6 Temporal model
+
+  Product ──HAS_PRICE_SNAPSHOT──► PriceSnapshot (many; ordered by observed_at)
+  Product ──HAS_PRICE_CHANGE────► PriceChangeEvent (many; ordered by detected_at)
+
+Query pattern:
+  current price  → Product.price_num
+  history        → MATCH (p)-[:HAS_PRICE_SNAPSHOT|HAS_PRICE_CHANGE]->(e)
+                   WHERE e.observed_at|detected_at >= $since
+  trends         → aggregate delta / avg(price_num) over time windows
+                  group by Brand / GarmentCategory / Section
+
+Indexes (Neo4j):
+  PriceChangeEvent(detected_at), PriceSnapshot(observed_at),
+  PriceChangeEvent(direction), Product(last_price_change_at)
+  Composite uniqueness on event ids as above.
+
+
+================================================================================
+4. TABLE-TO-GRAPH MAPPING
+================================================================================
+
+4.1 master_products → Product + facets (EXISTING — preserve)
+
+  (brand, master_id) → Product.id = ecom:{brand}:{master_id}
+  brand → HAS_BRAND
+  category/family/subfamily/section → category hierarchy edges
+  composition_detail/composition → USES_MATERIAL / PRIMARY_MATERIAL
+  colors → HAS_COLOR / PRIMARY_COLOR
+  currency/price* → Product props + PRICED_IN
+  availability* → HAS_AVAILABILITY + Product props
+  domain/catalog_id/construction/fit/care/country/reference/image → existing edges
+  prices_seen → (NEW) parse → PriceSnapshot [Phase 1b]
+  scrape_job_id → SCRAPED_IN_JOB [Phase 2]
+  content_hash / last_changed_at → ProductVersion triggers [Phase 3]
+
+
+4.2 product_change_events → temporal nodes (NEW — Phase 1a, CRITICAL)
+
+  WHERE change_type IN ('price','mixed') AND price fields in fields_changed
+    OR before/after price differs
+      → PriceChangeEvent + HAS_PRICE_CHANGE
+      → also emit PriceSnapshot for after_json price if not duplicate
+  WHERE change_type IN ('availability','mixed') …
+      → AvailabilitySnapshot + HAS_AVAILABILITY_SNAPSHOT
+  WHERE change_type IN ('content','mixed') …
+      → ProductVersion + HAS_VERSION / NEXT_VERSION (changed_fields from JSON)
+  WHERE change_type = 'created'
+      → optional first PriceSnapshot + Product created provenance
+
+  Join: Product {brand, master_id} = event {brand, master_id}
+  Watermark: id (BIGSERIAL) or detected_at for incremental sync
+
+
+4.3 *_colorways → Colorway (NEW — Phase 2)
+
+  FK master_id → Product (brand implied by source table / join to master)
+  color → OF_COLOR → Color (and reuse HAS_COLOR on Product if missing)
+  price/availability → Colorway properties (variant grain)
+
+
+4.4 Brand dump tables → enrichment (NEW — Phase 2/3)
+
+  LEFT JOIN master sync: for each Product, pull non-null extras:
+    sizes, size_names, product_features, badges, product_tags,
+    brand-native id (zara_ids / primark_id / …) as external_ids props
+  Walmart: seller → optional Seller/Company node later; rating/review_count props;
+    specifications JSON → selective scalar extraction, not full dump as nodes
+
+
+4.5 scrape_jobs → ScrapeJob (OPTIONAL — Phase 2)
+
+  job_id → ScrapeJob.id
+  status, job_type, product counts, created_at/updated_at as properties
+  Link from events/snapshots via scrape_job_id
+
+
+4.6 Explicit non-mappings
+
+  Full before_json/after_json → Postgres only (pointer pg_event_id on graph)
+  variant_offers / large images arrays → Postgres / envelope
+  Every badge string → defer StyleTag until curated vocabulary exists
+
+
+================================================================================
+5. PRICE HISTORY MODELING (DETAIL)
+================================================================================
+
+5.1 Dual representation (why both Snapshot and ChangeEvent)
+
+  Snapshot  = “price was X at time T”     → series charts, averages, windows
+  ChangeEvent = “price moved X→Y at T”  → increases/decreases, volatility, alerts
+
+  Derive ChangeEvent from consecutive Snapshots if only prices_seen exists.
+  Prefer native ChangeEvent from product_change_events when change_type=price.
+
+
+5.2 Extraction algorithm (product_change_events)
+
+  For each new event row (incremental by id > last_synced_event_id):
+    1. Resolve Product id ecom:{brand}:{master_id}; skip or quarantine if missing
+    2. Parse before_json/after_json for price, original_price, currency
+       (confirm keys from sample rows — do not assume)
+    3. parse_price_num on both; if either side missing, skip price event
+    4. delta = new - old; delta_pct = delta/old when old != 0
+       direction = up|down|unchanged
+    5. MERGE PriceChangeEvent by pg_event_id
+    6. MERGE PriceSnapshot for after state at detected_at/scraped_at
+    7. SET Product.price_num / price / last_price_change_at / last_price_direction
+       only if this event is the latest for that product
+
+
+5.3 prices_seen fallback
+
+  After validating element schema (e.g. {price, observed_at} vs bare strings):
+    MERGE distinct PriceSnapshots; generate ChangeEvents between consecutive
+    sorted observations when product_change_events coverage is sparse.
+
+
+5.4 Aggregation patterns Fashion Brain needs
+
+  - Product 6-month series: snapshots WHERE observed_at >= dateReduce
+  - Top movers: ChangeEvents in window ORDER BY abs(delta_pct) DESC
+  - Brand trend: avg(delta_pct) or regression over ChangeEvents via HAS_BRAND
+  - Category trend: same via BELONGS_TO_CATEGORY
+  - Cross-buyer/brand/region: Brand + Domain/Country facets on Product path
+
+
+5.5 Currency / FX
+
+  Keep PRICED_IN / SNAPSHOT_IN_CURRENCY. Cross-currency compare only after FxRate
+  nodes exist (defer); until then filter to single currency in queries.
+
+
+================================================================================
+6. IMPLEMENTATION STRATEGY (NO FULL REBUILD)
+================================================================================
+
+Phase 0 — Schema analysis freeze (1–2 days)
+  Run workflow §0 on live DB: sample product_change_events before/after JSON,
+  prices_seen shapes, colorways fill rates, brand-dump null fill vs master.
+  Produce capability_matrix + smoke data checks.
+
+Phase 1a — Price & availability events sync (HIGHEST PRIORITY)
+  - New module: knowledge_graph/adapters/ecom_events.py
+  - Extend ecom_sync (or sibling sync_ecom_events) reading product_change_events
+  - Ontology: ensure PriceChangeEvent/PriceSnapshot/AvailabilitySnapshot props
+    documented; allowlist already largely present
+  - Watermark: data/generated/ecom_events_sync_state.json {last_event_id}
+  - Idempotent MERGE; do not delete existing Product nodes
+  - Fashion Brain: add runtime_schema hints + approved Cypher templates for
+    price_history, top_price_movers, brand_price_trend
+  - Update mapping.json: remove these from deferred_to_v2
+
+Phase 1b — prices_seen backfill
+  - One-shot + incremental parse from master_products.prices_seen
+  - Dedup against events from 1a by (product_id, observed_at, price_num)
+
+Phase 2 — Colorways + ScrapeJob + brand enrichment
+  - Sync *_colorways → Colorway
+  - Optional ScrapeJob nodes
+  - Enrich Product from brand tables (sizes, native ids, Walmart seller/rating)
+  - Preserve master as source of truth when both present; brand fills nulls
+
+Phase 3 — ProductVersion + content change analytics
+  - From change_type=content/mixed + content_hash transitions
+  - Enables “spec changed” questions
+
+Phase 4 — Derived intelligence (optional)
+  - TargetGroup rules, PriceBand, MaterialGroup, SIMILAR_TO / CROSS_BRAND_MATCH
+  - LLM style attributes with confidence thresholds (existing ontology plan)
+  - Global KG links: ecom Product ↔ PLM own_products via RESOLVES_TO / shared materials
+
+Phase 5 — Fashion Brain NL→Cypher hardening
+  - Extend kg_catalog / runtime_schema with temporal entity types
+  - Intent routing for “trend / increase / last N months”
+  - Forbid hallucinated Buyer/Region labels for ecom; alias map documented
+  - Eval set: scripts/eval_text2cypher.py cases for price trends
+
+Rollback: each phase uses MERGE + separate watermark; disabling event sync
+leaves Product current-state intact.
+
+
+================================================================================
+7. EXAMPLE CYPHER QUERIES
+================================================================================
+
+-- A1. How many products does brand Primark have?
+MATCH (p:Product)-[:HAS_BRAND]->(b:Brand {name: 'primark'})
+RETURN count(p) AS product_count;
+
+-- A2. Products in a category
+MATCH (p:Product)-[:BELONGS_TO_CATEGORY]->(c:GarmentCategory {name: $category})
+RETURN p.id, p.name, p.price_num
+LIMIT 50;
+
+-- A3. Specs for one product
+MATCH (p:Product {id: $product_id})
+OPTIONAL MATCH (p)-[um:USES_MATERIAL]->(m:Material)
+OPTIONAL MATCH (p)-[:HAS_CONSTRUCTION]->(con:Construction)
+OPTIONAL MATCH (p)-[:HAS_FIT]->(f:Fit)
+OPTIONAL MATCH (p)-[:HAS_COLOR]->(col:Color)
+RETURN p, collect(DISTINCT {material: m.name, pct: um.percentage}) AS materials,
+       collect(DISTINCT con.name) AS construction,
+       collect(DISTINCT f.name) AS fit,
+       collect(DISTINCT col.name) AS colors;
+
+-- B1. Distribution by brand and category
+MATCH (p:Product)-[:HAS_BRAND]->(b:Brand)
+OPTIONAL MATCH (p)-[:BELONGS_TO_CATEGORY]->(c:GarmentCategory)
+RETURN b.name AS brand, c.name AS category, count(p) AS n
+ORDER BY n DESC;
+
+-- B2. Most common materials
+MATCH (p:Product)-[um:USES_MATERIAL]->(m:Material)
+RETURN m.name AS material, count(*) AS uses, avg(um.percentage) AS avg_pct
+ORDER BY uses DESC
+LIMIT 25;
+
+-- D1. Price history last 6 months for one product
+MATCH (p:Product {id: $product_id})-[:HAS_PRICE_SNAPSHOT]->(s:PriceSnapshot)
+WHERE s.observed_at >= datetime() - duration('P180D')
+RETURN s.observed_at AS at, s.price_num AS price, s.currency AS currency
+ORDER BY at;
+
+-- D2. Largest price increases in window
+MATCH (p:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent)
+WHERE e.detected_at >= datetime() - duration('P180D') AND e.direction = 'up'
+OPTIONAL MATCH (p)-[:HAS_BRAND]->(b:Brand)
+RETURN p.id, p.name, b.name AS brand, e.old_price_num, e.new_price_num,
+       e.delta_pct, e.detected_at
+ORDER BY e.delta_pct DESC
+LIMIT 25;
+
+-- D3. Average price trend by brand (net % change events)
+MATCH (p:Product)-[:HAS_BRAND]->(b:Brand)
+MATCH (p)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent)
+WHERE e.detected_at >= datetime() - duration('P180D')
+RETURN b.name AS brand,
+       count(e) AS change_events,
+       avg(e.delta_pct) AS avg_delta_pct,
+       avg(e.new_price_num) AS avg_new_price
+ORDER BY avg_delta_pct DESC;
+
+-- D4. Category price direction
+MATCH (p:Product)-[:BELONGS_TO_CATEGORY]->(c:GarmentCategory)
+MATCH (p)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent)
+WHERE e.detected_at >= datetime() - duration('P90D')
+RETURN c.name AS category,
+       sum(CASE WHEN e.direction = 'up' THEN 1 ELSE 0 END) AS ups,
+       sum(CASE WHEN e.direction = 'down' THEN 1 ELSE 0 END) AS downs,
+       avg(e.delta_pct) AS avg_delta_pct
+ORDER BY avg_delta_pct DESC;
+
+-- D5. Significant fluctuations (many changes or high abs delta)
+MATCH (p:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent)
+WHERE e.detected_at >= datetime() - duration('P180D')
+WITH p, count(e) AS n_changes, max(abs(e.delta_pct)) AS max_abs_pct
+WHERE n_changes >= 3 OR max_abs_pct >= 15
+RETURN p.id, p.name, n_changes, max_abs_pct
+ORDER BY max_abs_pct DESC
+LIMIT 25;
+
+-- D6. Colorway-level prices
+MATCH (p:Product {id: $product_id})-[:HAS_COLORWAY]->(cw:Colorway)
+OPTIONAL MATCH (cw)-[:OF_COLOR]->(col:Color)
+RETURN col.name AS color, cw.price_num AS price, cw.availability
+ORDER BY color;
+
+
+================================================================================
+8. FASHION BRAIN / NL PIPELINE NOTES
+================================================================================
+
+- Teach temporal intents: trend, increased, decreased, over time, last N months.
+- Expose PriceSnapshot / PriceChangeEvent in runtime_schema entity types.
+- Prefer templates for high-stakes aggregations (top movers) over free Cypher.
+- Alias map for users:
+    buyer (ecom) → Brand
+    region (ecom) → Domain or Country (document which)
+    season (ecom) → SUITED_FOR_SEASON when derived; else PLM Season on own_products
+- Do not advertise empty ontology types until Phase 1a sync has run.
+
+
+================================================================================
+9. SUCCESS CRITERIA
+================================================================================
+
+1. product_change_events rows with change_type price appear as PriceChangeEvent
+   nodes linked to the correct Product (spot-check 20 ids).
+2. Cypher D1–D4 return non-empty results on staging data with known price moves.
+3. Existing Product facet queries (A1–B2) unchanged in counts after Phase 1.
+4. Fashion Brain answers at least 5 golden price-trend questions with grounded
+   numbers (eval harness).
+5. Mapping file deferred_to_v2 no longer lists product_change_events / price snapshots.
+
+
+================================================================================
+10. RECOMMENDED IMMEDIATE NEXT ACTION
+================================================================================
+
+1. Sample 50 rows from product_change_events (especially change_type='price') and
+   document before_json/after_json key paths for price fields.
+2. Sample prices_seen from master_products for 20 products with >1 entry.
+3. Implement Phase 1a event sync + 3 Cypher templates + Fashion Brain intent hooks.
+4. Only then expand Colorways / brand-dump enrichment.
+
+END OF DOCUMENT

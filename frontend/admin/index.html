@@ -5,36 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fashion Brain — Admin KG</title>
   <link rel="stylesheet" href="/shared/admin.css" />
+  <link rel="stylesheet" href="/admin/kg-builder.css" />
 </head>
 <body>
   <div class="shell">
     <nav>
       <div class="brand">
-        <div class="mark">FB</div>
+        <div class="mark">KG</div>
         <div>
-          <h1>FB Admin</h1>
+          <h1>KG Admin</h1>
           <p>Knowledge graph console</p>
         </div>
       </div>
 
-      <div class="nav-label">Do everything here</div>
-      <button class="nav-btn active" type="button" data-view="overview">
-        <span class="ico">◉</span> Overview
+      <div class="nav-label">Workspace</div>
+      <button class="nav-btn active" type="button" data-view="kg-builder">
+        <span class="ico">01</span> KG setup wizard
       </button>
-      <button class="nav-btn" type="button" data-view="ingest">
-        <span class="ico">1</span> Ingest PLM data
-      </button>
-      <button class="nav-btn" type="button" data-view="pipeline">
-        <span class="ico">2</span> Scraping wizard
-      </button>
-      <button class="nav-btn" type="button" data-view="reviews">
-        <span class="ico">3</span> Reviews
-      </button>
-      <button class="nav-btn" type="button" data-view="query">
-        <span class="ico">4</span> Graph query
+      <button class="nav-btn" type="button" data-view="overview">
+        <span class="ico">02</span> Graph overview
       </button>
 
-      <div class="nav-label">Apps</div>
+      <div class="nav-label">Application</div>
       <a class="nav-btn" href="/user/">
         <span class="ico">→</span> Open user chat
       </a>
@@ -52,11 +44,204 @@
     </nav>
 
     <main class="content">
+      <section id="view-kg-builder">
+        <div class="top">
+          <div>
+            <p class="kg-eyebrow">KNOWLEDGE GRAPH CONTROL PLANE</p>
+            <h2>Build a knowledge graph</h2>
+            <p>Register the schema, source and graph, then run a checklist-gated build. No file copying or CLI steps.</p>
+          </div>
+          <span class="pill" id="kg-service-pill">KG API · not checked</span>
+        </div>
+
+        <div class="card kg-connection-card">
+          <div class="kg-connection-fields">
+            <p class="hint-line">Connect through the authenticated Fashion Brain API. KG service credentials stay on the server.</p>
+            <div class="kg-connect-action">
+              <button class="btn" type="button" id="kg-inspect">Connect &amp; inspect</button>
+            </div>
+          </div>
+          <p class="msg" id="kg-inspect-msg" role="status"></p>
+        </div>
+
+        <div class="kg-workflow">
+          <div class="kg-section-title">
+            <div>
+              <h3>1 · Inspect the service</h3>
+              <p>Check health and reuse registered resources before creating anything.</p>
+            </div>
+            <span class="kg-step-state" id="kg-inspect-state">Waiting</span>
+          </div>
+          <div class="grid kg-inspect-grid">
+            <div class="kg-inspect-tile"><span>Ontologies</span><strong id="kg-count-ontologies">—</strong></div>
+            <div class="kg-inspect-tile"><span>Sources</span><strong id="kg-count-sources">—</strong></div>
+            <div class="kg-inspect-tile"><span>Graphs</span><strong id="kg-count-graphs">—</strong></div>
+          </div>
+          <div class="grid two kg-lists">
+            <div class="card"><h3>Registered sources</h3><div id="kg-sources-list" class="kg-resource-list">Connect to load sources.</div></div>
+            <div class="card"><h3>Registered graphs</h3><div id="kg-graphs-list" class="kg-resource-list">Connect to load graphs.</div></div>
+          </div>
+          <details class="card kg-response-details">
+            <summary>Inspection response and active jobs</summary>
+            <pre id="kg-inspect-output">—</pre>
+          </details>
+        </div>
+
+        <div class="kg-workflow">
+          <div class="kg-section-title">
+            <div>
+              <h3>2 · Define the ontology</h3>
+              <p>Create a schema or select one that is already registered.</p>
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="card">
+              <h3>Use an existing ontology</h3>
+              <label for="kg-ontology-existing">Registered ontology</label>
+              <select id="kg-ontology-existing"><option value="">Connect to load ontologies</option></select>
+              <button class="btn secondary" type="button" id="kg-use-ontology">Use selected ontology</button>
+            </div>
+            <div class="card">
+              <h3>Create an ontology</h3>
+              <div class="grid two kg-compact-grid">
+                <div><label for="kg-ontology-id">ID <span class="kg-optional">optional</span></label><input id="kg-ontology-id" placeholder="e.g. product_catalog" /></div>
+                <div><label for="kg-ontology-name">Name</label><input id="kg-ontology-name" value="New knowledge graph ontology" /></div>
+              </div>
+              <label for="kg-ontology-description">Description</label>
+              <input id="kg-ontology-description" placeholder="What this graph represents" />
+              <label for="kg-entity-types">Entity types <span class="kg-optional">one per line or comma-separated</span></label>
+              <textarea id="kg-entity-types" class="kg-short-json">Product</textarea>
+              <label for="kg-relationship-allowlist">Relationship allowlist (JSON)</label>
+              <textarea id="kg-relationship-allowlist" class="kg-short-json">{}</textarea>
+              <div class="actions"><button class="btn" type="button" id="kg-create-ontology">Create ontology</button></div>
+              <p class="msg" id="kg-ontology-msg" role="status"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="kg-workflow">
+          <div class="kg-section-title">
+            <div>
+              <h3>3 · Configure the data source</h3>
+              <p>Upload a source mapping through the API. Database passwords should remain in server environment variables.</p>
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="card">
+              <h3>Source mapping</h3>
+              <label for="kg-source-id">Source ID</label>
+              <div class="kg-inline-field">
+                <input id="kg-source-id" value="ecom_products" />
+                <button class="btn secondary" type="button" id="kg-load-mapping">Load saved mapping</button>
+              </div>
+              <label for="kg-mapping-json">Mapping JSON</label>
+              <textarea id="kg-mapping-json" class="kg-code-editor" spellcheck="false" placeholder='Paste the source mapping object (see the Postman "0 UI wizard" mapping request).'></textarea>
+              <p class="hint-text">On save, the builder links the mapping to the source ID, graph ID, ontology and named database connection above.</p>
+              <div class="actions"><button class="btn" type="button" id="kg-save-mapping">Save mapping</button></div>
+              <p class="msg" id="kg-mapping-msg" role="status"></p>
+            </div>
+            <div class="card">
+              <h3>Database connection</h3>
+              <p class="hint-text">Use a <code>password_env</code> variable configured on the KG server. This form never asks for or sends a database password.</p>
+              <div class="grid two kg-compact-grid">
+                <div><label for="kg-db-id">Connection ID</label><input id="kg-db-id" value="ecom_postgres" /></div>
+                <div><label for="kg-db-database">Database</label><input id="kg-db-database" value="fashion_brain_live" /></div>
+                <div><label for="kg-db-host">Host</label><input id="kg-db-host" value="127.0.0.1" /></div>
+                <div><label for="kg-db-port">Port</label><input id="kg-db-port" type="number" value="5432" min="1" max="65535" /></div>
+                <div><label for="kg-db-user">User</label><input id="kg-db-user" value="postgres" /></div>
+                <div><label for="kg-db-password-env">Password env var</label><input id="kg-db-password-env" value="POSTGRES_PASSWORD" /></div>
+                <div><label for="kg-db-schema">Schema</label><input id="kg-db-schema" value="public" /></div>
+                <div><label for="kg-db-table">Table</label><input id="kg-db-table" value="master_products" /></div>
+              </div>
+              <div class="actions"><button class="btn" type="button" id="kg-save-test-db">Save &amp; test connection</button></div>
+              <p class="msg" id="kg-db-msg" role="status"></p>
+              <pre id="kg-db-output">—</pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="kg-workflow">
+          <div class="kg-section-title">
+            <div>
+              <h3>4 · Register source and graph</h3>
+              <p>Link the graph to the ontology and source that you configured above.</p>
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="card">
+              <h3>Register source</h3>
+              <div class="grid two kg-compact-grid">
+                <div><label for="kg-source-type">Source type</label><input id="kg-source-type" value="ecom_products" /></div>
+                <div><label for="kg-source-connector">Connector</label><input id="kg-source-connector" value="authorized_sql" /></div>
+                <div><label for="kg-source-format">Supported format</label><input id="kg-source-format" value="sql" /></div>
+                <div><label for="kg-source-mode">Ingestion mode</label><input id="kg-source-mode" value="incremental" /></div>
+              </div>
+              <label for="kg-source-description">Description</label>
+              <input id="kg-source-description" placeholder="Describe this source" />
+              <div class="actions"><button class="btn" type="button" id="kg-register-source">Register source</button></div>
+              <p class="msg" id="kg-source-msg" role="status"></p>
+            </div>
+            <div class="card">
+              <h3>Register graph</h3>
+              <div class="grid two kg-compact-grid">
+                <div><label for="kg-graph-id">Graph ID</label><input id="kg-graph-id" value="ecom_products" /></div>
+                <div><label for="kg-graph-name">Graph name</label><input id="kg-graph-name" value="E-Commerce Knowledge Graph" /></div>
+              </div>
+              <label for="kg-graph-kind">Graph kind</label>
+              <select id="kg-graph-kind"><option value="product">Product</option><option value="documents">Documents</option><option value="custom">Custom</option></select>
+              <label for="kg-graph-description">Description</label>
+              <input id="kg-graph-description" placeholder="What this graph contains" />
+              <div class="actions"><button class="btn" type="button" id="kg-register-graph">Register graph</button></div>
+              <p class="msg" id="kg-graph-msg" role="status"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="kg-workflow">
+          <div class="kg-section-title">
+            <div>
+              <h3>5 · Validate and build</h3>
+              <p>The build remains disabled until the KG API checklist says the graph is ready.</p>
+            </div>
+          </div>
+          <div class="grid two">
+            <div class="card">
+              <h3>Build checklist</h3>
+              <div class="actions kg-checklist-actions">
+                <button class="btn secondary" type="button" id="kg-refresh-checklist">Refresh checklist</button>
+                <span id="kg-checklist-summary" class="kg-step-state">Not checked</span>
+              </div>
+              <ul id="kg-checklist" class="kg-checklist"><li>Inspect the API and refresh the checklist.</li></ul>
+              <div class="kg-build-options">
+                <div><label for="kg-build-brand">Brand filter <span class="kg-optional">optional</span></label><input id="kg-build-brand" placeholder="Leave blank for all brands" /></div>
+                <div><label for="kg-build-limit">Record limit <span class="kg-optional">optional</span></label><input id="kg-build-limit" type="number" min="1" placeholder="Full build if blank" /></div>
+                <label class="kg-checkbox"><input type="checkbox" id="kg-build-full" /> Full rebuild</label>
+              </div>
+              <button class="btn" type="button" id="kg-start-build" disabled>Build knowledge graph</button>
+              <p class="msg" id="kg-build-msg" role="status"></p>
+              <div class="kg-progress-track"><div id="kg-build-progress" class="kg-progress"></div></div>
+              <pre id="kg-build-output">—</pre>
+            </div>
+            <div class="card">
+              <h3>Explore after build</h3>
+              <p class="hint-text">Run a safe, approved graph query template. Free-form Cypher is not exposed here.</p>
+              <label for="kg-query-template">Query template</label>
+              <input id="kg-query-template" value="list_products" />
+              <label for="kg-query-params">Parameters (JSON)</label>
+              <textarea id="kg-query-params" class="kg-short-json">{}</textarea>
+              <button class="btn secondary" type="button" id="kg-run-query">Run graph query</button>
+              <p class="msg" id="kg-query-msg" role="status"></p>
+              <pre id="kg-query-output">—</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="view-overview">
         <div class="top">
           <div>
             <h2>Overview</h2>
-            <p>Run the full KG workflow from this panel — no CLI required for normal ops.</p>
+            <p>Inspect registered sources and graphs, then use the KG Builder for new graph setup and builds.</p>
           </div>
           <div class="pills">
             <span class="pill" id="pill-fb">FB …</span>
@@ -65,16 +250,17 @@
         </div>
         <div class="card workflow-card">
           <div class="panel-head">
-            <h3>Admin workflow</h3>
-            <button class="btn secondary" type="button" id="btn-reload-graphs">Reload Neo4j from snapshots</button>
+            <h3>Knowledge graph lifecycle</h3>
+            <button class="btn secondary" type="button" data-view="kg-builder">Open KG Builder</button>
           </div>
           <ol class="workflow-steps">
-            <li><button type="button" class="linkish" data-view="ingest"><strong>1 · Ingest PLM data</strong></button> — build <code>own_products</code> from CSV into Neo4j</li>
-            <li><button type="button" class="linkish" data-view="pipeline"><strong>2 · Scraping wizard</strong></button> — extract → chunk → propose → queue → commit</li>
-            <li><button type="button" class="linkish" data-view="reviews"><strong>3 · Reviews</strong></button> — approve relationships / ontology pairs</li>
-            <li><button type="button" class="linkish" data-view="query"><strong>4 · Graph query</strong></button> — inspect templates on a graph</li>
+            <li><button type="button" class="linkish" data-view="kg-builder"><strong>1 · Inspect</strong></button> — check API health and existing schemas, sources, and graphs</li>
+            <li><button type="button" class="linkish" data-view="kg-builder"><strong>2 · Configure</strong></button> — create or reuse an ontology, mapping, database connection, and source</li>
+            <li><button type="button" class="linkish" data-view="kg-builder"><strong>3 · Register and build</strong></button> — create the graph, satisfy the checklist, and monitor the build job</li>
+            <li><button type="button" class="linkish" data-view="kg-builder"><strong>4 · Explore</strong></button> — query the graph with an approved template</li>
           </ol>
-          <p class="hint-line">Rebuild / Sync on each graph below also run as jobs (poll status in this message).</p>
+          <div class="actions"><button class="btn secondary" type="button" id="btn-reload-graphs">Reload graph snapshots</button></div>
+          <p class="hint-line">Use the KG setup wizard to register, build, sync, and query a graph.</p>
           <p class="msg" id="reload-msg"></p>
         </div>
         <div class="grid stats">
@@ -106,262 +292,11 @@
         </div>
       </section>
 
-      <section id="view-ingest" class="hidden">
-        <div class="top">
-          <div>
-            <h2>1 · Ingest PLM data</h2>
-            <p>Step 1 of the admin workflow. Rebuilds <strong>own_products</strong> from <code>data/raw/own_products/</code> into Neo4j (development env).</p>
-          </div>
-        </div>
-        <div class="card">
-          <div class="actions">
-            <button class="btn" type="button" id="btn-ingest-status">Refresh status</button>
-            <button class="btn secondary" type="button" id="btn-ingest-run">Run own_products ingest</button>
-          </div>
-          <p class="hint-line">Long work runs as background jobs (ingest / rebuild / reload). The UI returns immediately and polls job status. When ingest is done, use Overview → Reload if chat still looks empty.</p>
-          <p class="hint-line">Jobs API: <code>GET /v1/admin/jobs</code> · <code>GET /v1/admin/jobs/{id}</code></p>
-          <p class="msg" id="ingest-msg"></p>
-          <pre id="ingest-out">—</pre>
-        </div>
-      </section>
-
-      <section id="view-pipeline" class="hidden">
-        <div class="top">
-          <div>
-            <h2>Scraping wizard</h2>
-            <p>Extract → chunk → propose → queue → approve → commit. Each step shows input and output before you continue.</p>
-          </div>
-        </div>
-        <div class="step-bar" id="scraping-step-bar">
-          <button type="button" class="step-tab active" data-step="1">1 · Extract</button>
-          <button type="button" class="step-tab" data-step="2">2 · Chunk</button>
-          <button type="button" class="step-tab" data-step="3">3 · Propose</button>
-          <button type="button" class="step-tab" data-step="4">4 · Queue</button>
-          <button type="button" class="step-tab" data-step="5">5 · Approve &amp; commit</button>
-        </div>
-
-        <div class="card step-panel active" data-step-panel="1">
-          <h3>Step 1 — Extract text</h3>
-          <div class="step-io">
-            <div>
-              <label for="scrape-kind">Kind</label>
-              <select id="scrape-kind">
-                <option value="text">text</option>
-                <option value="pdf">pdf</option>
-                <option value="docx">docx</option>
-                <option value="doc">doc</option>
-                <option value="json">json</option>
-              </select>
-              <label for="scrape-file">Upload file (optional)</label>
-              <input id="scrape-file" type="file" accept=".pdf,.doc,.docx,.txt,.md,.json" />
-              <label for="scrape-text">Or paste text / JSON</label>
-              <textarea id="scrape-text" placeholder="Paste scraped article text…"></textarea>
-              <div class="actions">
-                <button class="btn" type="button" id="btn-scrape-extract">Run extract</button>
-                <button class="btn secondary hidden" type="button" id="btn-scrape-next-1" data-goto="2">Next → Chunk</button>
-              </div>
-              <p class="msg" id="scrape-msg-1"></p>
-            </div>
-            <div>
-              <h3>Output</h3>
-              <pre id="scrape-out-1">—</pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="card step-panel" data-step-panel="2">
-          <h3>Step 2 — Paragraph chunks</h3>
-          <div class="step-io">
-            <div>
-              <p class="msg ok" id="scrape-file-id-label">file_id: —</p>
-              <div class="actions">
-                <button class="btn secondary" type="button" data-goto="1">Back</button>
-                <button class="btn" type="button" id="btn-scrape-chunk">Run chunk</button>
-                <button class="btn secondary hidden" type="button" id="btn-scrape-next-2" data-goto="3">Next → Propose</button>
-              </div>
-              <p class="msg" id="scrape-msg-2"></p>
-            </div>
-            <div>
-              <h3>Chunks</h3>
-              <div class="chunk-list" id="scrape-chunks">No chunks yet.</div>
-              <pre id="scrape-out-2" style="margin-top:12px;">—</pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="card step-panel" data-step-panel="3">
-          <h3>Step 3 — Propose relationships</h3>
-          <div class="step-io">
-            <div>
-              <label for="scrape-ontology">Ontology (hints)</label>
-              <select id="scrape-ontology">
-                <option value="news">news</option>
-              </select>
-              <label for="scrape-graph">Graph</label>
-              <select id="scrape-graph"></select>
-              <label class="check-row">
-                <input type="checkbox" id="scrape-model" checked />
-                <span>Use local Ollama LLM (required for real relationships)</span>
-              </label>
-              <p class="hint-text">
-                Keep this checked. Ollama prefers the ontology list below and invents
-                <span class="em">new</span> types when needed. Unchecked = MENTIONS fallback only.
-              </p>
-              <h3>Selected ontology relationships</h3>
-              <div class="chunk-list" id="scrape-ontology-rels" style="max-height:220px;">Loading…</div>
-              <div class="actions" style="margin-top:12px;">
-                <button class="btn secondary" type="button" data-goto="2">Back</button>
-                <button class="btn" type="button" id="btn-scrape-propose">Run propose</button>
-                <button class="btn secondary hidden" type="button" id="btn-scrape-next-3" data-goto="4">Next → Queue</button>
-              </div>
-              <p class="msg" id="scrape-msg-3"></p>
-            </div>
-            <div>
-              <h3>Proposed relationships</h3>
-              <div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:12px;">
-                <table class="table rel-table">
-                  <thead>
-                    <tr><th>Method</th><th>Novelty</th><th>Type</th><th>From</th><th>To</th><th>Chunk</th></tr>
-                  </thead>
-                  <tbody id="scrape-rels-body">
-                    <tr><td colspan="6">No proposals yet.</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <pre id="scrape-out-3" style="margin-top:12px;">—</pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="card step-panel" data-step-panel="4">
-          <h3>Step 4 — Queue review</h3>
-          <div class="step-io">
-            <div>
-              <p class="hint-text">Saves proposed relationships for admin approve / reject.</p>
-              <div class="actions">
-                <button class="btn secondary" type="button" data-goto="3">Back</button>
-                <button class="btn" type="button" id="btn-scrape-queue">Queue review</button>
-                <button class="btn secondary hidden" type="button" id="btn-scrape-next-4" data-goto="5">Next → Approve &amp; commit</button>
-              </div>
-              <p class="msg" id="scrape-msg-4"></p>
-            </div>
-            <div>
-              <h3>Output</h3>
-              <pre id="scrape-out-4">—</pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="card step-panel" data-step-panel="5">
-          <h3>Step 5 — Approve &amp; commit</h3>
-          <div class="step-io">
-            <div>
-              <p class="msg ok" id="scrape-review-label">review_id: —</p>
-              <div class="actions" style="margin-bottom:12px;">
-                <button class="btn" type="button" id="btn-scrape-approve">Approve all pending</button>
-                <button class="btn secondary" type="button" data-goto="4">Back</button>
-              </div>
-              <label for="scrape-commit-mode">Ontology mode</label>
-              <select id="scrape-commit-mode">
-                <option value="existing">Use existing ontology / graph</option>
-                <option value="new">Create new ontology + graph</option>
-              </select>
-              <div id="scrape-commit-existing">
-                <label for="scrape-commit-ontology">Ontology id</label>
-                <select id="scrape-commit-ontology"></select>
-                <label for="scrape-commit-graph">Graph id</label>
-                <select id="scrape-commit-graph"></select>
-              </div>
-              <div id="scrape-commit-new" class="hidden">
-                <label for="scrape-new-ontology-id">New ontology id</label>
-                <input id="scrape-new-ontology-id" placeholder="buyer-scraping" />
-                <label for="scrape-new-ontology-name">Ontology name</label>
-                <input id="scrape-new-ontology-name" placeholder="Buyer scraping" />
-                <label for="scrape-new-graph-id">New graph id</label>
-                <input id="scrape-new-graph-id" placeholder="buyer-hm" />
-                <label for="scrape-new-graph-name">Graph name</label>
-                <input id="scrape-new-graph-name" placeholder="Buyer H&amp;M" />
-                <label for="scrape-clone-from">Clone ontology from</label>
-                <input id="scrape-clone-from" value="news" />
-              </div>
-              <div class="actions">
-                <button class="btn" type="button" id="btn-scrape-commit">Commit to KG</button>
-              </div>
-              <p class="msg" id="scrape-msg-5"></p>
-            </div>
-            <div>
-              <h3>Review detail</h3>
-              <pre id="scrape-out-5">—</pre>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="view-reviews" class="hidden">
-        <div class="top">
-          <div>
-            <h2>Reviews</h2>
-            <p>All queued reviews (including scraping). Prefer the Scraping wizard for the full flow.</p>
-          </div>
-          <button class="btn secondary" type="button" id="btn-refresh-reviews">Refresh</button>
-        </div>
-        <div class="card">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Source</th>
-                <th>Rels</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="reviews-body">
-              <tr><td colspan="5">Loading…</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="card" style="margin-top:16px;">
-          <h3>Selected review</h3>
-          <pre id="review-detail">Select a review.</pre>
-          <div class="actions" style="margin-top:12px;">
-            <button class="btn" type="button" id="btn-approve">Approve</button>
-            <button class="btn secondary" type="button" id="btn-commit">Commit / build</button>
-          </div>
-          <p class="msg" id="review-msg"></p>
-        </div>
-      </section>
-
-      <section id="view-query" class="hidden">
-        <div class="top">
-          <div>
-            <h2>Graph query</h2>
-            <p>Run an approved template against a named graph. No free-form Cypher.</p>
-          </div>
-        </div>
-        <div class="card">
-          <label for="q-graph">Graph</label>
-          <select id="q-graph">
-            <option value="own_products">own_products</option>
-            <option value="news">news</option>
-            <option value="shared">shared</option>
-            <option value="master">master</option>
-          </select>
-          <label for="q-template">Template</label>
-          <input id="q-template" value="list_products" />
-          <label for="q-params">Params JSON</label>
-          <textarea id="q-params">{}</textarea>
-          <div class="actions">
-            <button class="btn" type="button" id="btn-query">Run query</button>
-          </div>
-          <p class="msg" id="query-msg"></p>
-          <pre id="query-out">—</pre>
-        </div>
-      </section>
     </main>
   </div>
   <script src="/shared/config.js"></script>
   <script src="/shared/api.js"></script>
+  <script src="/admin/kg-builder.js"></script>
   <script src="/admin/app.js"></script>
 </body>
 </html>

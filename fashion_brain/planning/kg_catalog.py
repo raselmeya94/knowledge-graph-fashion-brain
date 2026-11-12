@@ -48,6 +48,34 @@ _PRODUCT_HIT_ATTRS = frozenset(
 )
 SYSTEM_GRAPH_ID = "kg_system"
 
+# Cheap system/registry detect — no HTTP metadata value probing.
+_SYSTEM_META_PHRASES = (
+    "knowledge graph",
+    "knowledge graphs",
+    "registered graph",
+    "registered graphs",
+    "what graphs",
+    "which graphs",
+    "system meta",
+    "system metadata",
+    "what sources",
+    "which sources",
+    "source inventory",
+    "kg registry",
+    "graph registry",
+    "list graphs",
+    "show graphs",
+)
+
+
+def looks_like_system_meta(question: str) -> bool:
+    """True for registry/system asks without calling /api/metadata/values."""
+
+    low = (question or "").casefold()
+    if not low.strip():
+        return False
+    return any(phrase in low for phrase in _SYSTEM_META_PHRASES)
+
 _TOKEN_STOP = frozenset(
     """
     analysis analyze analysing analyzing analyse profile review overview study data
@@ -145,8 +173,12 @@ _BASE_CATALOG_KEY = "__graphs_base__"
 _BASE_CATALOG_TTL_S = 120.0
 
 
-def build_field_catalog(platform, question: str = "") -> FieldCatalog:
-    """Load unique columns per active product + system KG, then match question tokens to values."""
+def build_field_catalog(platform, question: str = "", *, probe_values: bool = True) -> FieldCatalog:
+    """Load unique columns per active product + system KG, then optionally match values.
+
+    ``probe_values=False`` skips the N×M ``/api/metadata/values`` fan-out (major latency).
+    Text2Cypher path should use EntityExtract + ``/brain/link_entities`` instead.
+    """
 
     import time
 
@@ -171,9 +203,11 @@ def build_field_catalog(platform, question: str = "") -> FieldCatalog:
             return None
 
     cache_key = normalize_name(question or "")
+    if not probe_values:
+        cache_key = f"noprobe:{cache_key}"
     cached = _CATALOG_CACHE.get(cache_key)
     if cached and (time.monotonic() - cached[0]) < _CATALOG_CACHE_TTL_S:
-        record_stage("schema_catalog", 0.0, cache="hit", question=cache_key[:80])
+        record_stage("schema_catalog", 0.0, cache="hit", question=cache_key[:80], probe=probe_values)
         trace_step(
             "catalog",
             "Field catalog cache hit",
@@ -181,15 +215,16 @@ def build_field_catalog(platform, question: str = "") -> FieldCatalog:
             hits=[f"{h.token}->{h.attribute}@{h.graph_id}" for h in (cached[1].hits or [])[:8]],
             preferred=cached[1].preferred_graphs(),
             system_meta=cached[1].prefers_system_meta(),
+            probe_values=probe_values,
         )
         return cached[1]
 
-    # Reuse graph/attribute skeleton across questions; only re-match value hits.
+    # Reuse graph/attribute skeleton across questions; only re-match value hits when probing.
     base = _CATALOG_CACHE.get(_BASE_CATALOG_KEY)
     if base and (time.monotonic() - base[0]) < _BASE_CATALOG_TTL_S:
-        with timed("schema_catalog", cache="base_hit", question=cache_key[:80]):
+        with timed("schema_catalog", cache="base_hit", question=cache_key[:80], probe=probe_values):
             catalog = FieldCatalog(graphs=dict(base[1].graphs), hits=[])
-            if question.strip():
+            if question.strip() and probe_values:
                 catalog.hits = match_question_values(platform, question, catalog)
             _CATALOG_CACHE[cache_key] = (time.monotonic(), catalog)
             if len(_CATALOG_CACHE) > 48:
@@ -201,33 +236,46 @@ def build_field_catalog(platform, question: str = "") -> FieldCatalog:
                     _CATALOG_CACHE.pop(key, None)
             trace_step(
                 "catalog",
-                "Field catalog base reuse + value match",
+                "Field catalog base reuse"
+                + (" + value match" if probe_values else " (no value probe)"),
                 graphs=list(catalog.graphs.keys()),
                 hits=[f"{h.token}->{h.attribute}@{h.graph_id}" for h in (catalog.hits or [])[:8]],
                 preferred=catalog.preferred_graphs(),
                 system_meta=catalog.prefers_system_meta(),
+                probe_values=probe_values,
             )
             return catalog
 
-    with timed("schema_catalog", cache="miss", question=cache_key[:80]):
-        return _build_field_catalog_uncached(platform, question, cache_key, trace_step, trace_debug)
+    with timed("schema_catalog", cache="miss", question=cache_key[:80], probe=probe_values):
+        return _build_field_catalog_uncached(
+            platform, question, cache_key, trace_step, trace_debug, probe_values=probe_values
+        )
 
 
-def _build_field_catalog_uncached(platform, question: str, cache_key: str, trace_step, trace_debug) -> FieldCatalog:
+def _build_field_catalog_uncached(
+    platform,
+    question: str,
+    cache_key: str,
+    trace_step,
+    trace_debug,
+    *,
+    probe_values: bool = True,
+) -> FieldCatalog:
     import time
 
     # Prefer cached system meta from sync/rebuild — rebuilding on every ask is very slow.
-    try:
-        from knowledge_graph.retrieval.system_meta import load_or_build_system_meta, system_meta_path
+    if probe_values or looks_like_system_meta(question):
+        try:
+            from knowledge_graph.retrieval.system_meta import load_or_build_system_meta, system_meta_path
 
-        meta_path = system_meta_path()
-        sync_path = Path(getattr(platform.settings, "generated", Path())) / "ecom_sync_state.json"
-        refresh = not meta_path.is_file()
-        if not refresh and sync_path.is_file() and meta_path.is_file():
-            refresh = sync_path.stat().st_mtime > meta_path.stat().st_mtime + 1
-        load_or_build_system_meta(platform, refresh=refresh)
-    except Exception:
-        pass
+            meta_path = system_meta_path()
+            sync_path = Path(getattr(platform.settings, "generated", Path())) / "ecom_sync_state.json"
+            refresh = not meta_path.is_file()
+            if not refresh and sync_path.is_file() and meta_path.is_file():
+                refresh = sync_path.stat().st_mtime > meta_path.stat().st_mtime + 1
+            load_or_build_system_meta(platform, refresh=refresh)
+        except Exception:
+            pass
 
     catalog = FieldCatalog()
     rows = _registry_rows(platform)
@@ -269,15 +317,16 @@ def _build_field_catalog_uncached(platform, question: str, cache_key: str, trace
                 analysis_fields=_analysis_fields(attrs, row),
             )
         trace_debug("Catalog graph columns", graph_id=graph_id, kind=kind, attributes=attrs[:12])
-    if question.strip():
+    if question.strip() and probe_values:
         catalog.hits = match_question_values(platform, question, catalog)
     trace_step(
         "catalog",
-        "Field catalog ready",
+        "Field catalog ready" + ("" if probe_values else " (no value probe)"),
         graphs=list(catalog.graphs.keys()),
         hits=[f"{h.token}->{h.attribute}@{h.graph_id}" for h in (catalog.hits or [])[:8]],
         preferred=catalog.preferred_graphs(),
         system_meta=catalog.prefers_system_meta(),
+        probe_values=probe_values,
     )
     # Persist graph skeleton separately so later asks skip registry/attribute rebuild.
     skeleton = FieldCatalog(graphs=dict(catalog.graphs), hits=[])
@@ -407,7 +456,12 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
     # Drop filter values that are graph/source words, not catalog parties.
     for key in ("brand", "buyer", "garment", "garment_type", "category"):
         value = cleaned.get(key)
-        if value and normalize_name(str(value)) in _TOKEN_STOP:
+        if not value:
+            continue
+        nn = normalize_name(str(value))
+        tokens = [t for t in nn.split() if t]
+        # Whole value or every token is planner noise → drop (e.g. "conduct comprehensive").
+        if nn in _TOKEN_STOP or (tokens and all(t in _TOKEN_STOP for t in tokens)):
             cleaned.pop(key, None)
 
     text = (question or "").casefold()
@@ -444,6 +498,19 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
                 return hit
         return None
 
+    def facet_hit_for(value: str, attrs: set[str]) -> ValueHit | None:
+        raw = normalize_name(str(value))
+        hit = best_hit(raw)
+        if hit and hit.attribute in attrs:
+            return hit
+        for token in raw.split():
+            if token in _TOKEN_STOP or len(token) < 2:
+                continue
+            hit = best_hit(token)
+            if hit and hit.attribute in attrs:
+                return hit
+        return None
+
     # Remap garment/category that are actually party values in the KG.
     for key in ("garment", "garment_type", "category"):
         value = cleaned.get(key)
@@ -453,6 +520,18 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
         if hit:
             cleaned.pop(key, None)
             cleaned[hit.attribute] = hit.matched_value
+
+    # Drop garment/category that do not ground to a live catalog facet value.
+    # Stops task phrasing ("conduct comprehensive") surviving as a product type.
+    facet_attrs = {"category", "garment_type", "family", "subfamily"}
+    for key in ("garment", "garment_type", "category"):
+        value = cleaned.get(key)
+        if not value:
+            continue
+        if party_hit_for(str(value)):
+            continue
+        if not facet_hit_for(str(value), facet_attrs):
+            cleaned.pop(key, None)
 
     # Explicit brand/buyer: prefer the catalog spelling and drop the other when exclusive.
     for attr in ("brand", "buyer"):
@@ -496,6 +575,71 @@ def ground_filters_with_catalog(filters: dict, catalog: FieldCatalog, *, questio
     if buyer_hit and "buyer" not in cleaned and "brand" not in cleaned:
         cleaned["buyer"] = buyer_hit.matched_value
 
+    return cleaned
+
+
+_METRIC_NOISE_TOKENS = frozenset(
+    {
+        "price",
+        "prices",
+        "trend",
+        "trends",
+        "trending",
+        "change",
+        "changes",
+        "changed",
+        "average",
+        "avg",
+        "percent",
+        "pct",
+        "history",
+        "historical",
+        "mover",
+        "movers",
+        "availability",
+        "available",
+        "stock",
+    }
+)
+
+
+def ground_product_type_filters(filters: dict, catalog: FieldCatalog, question: str) -> dict:
+    """Recover a product-type filter when a live value match identifies its stored field."""
+
+    from knowledge_graph.retrieval.products import _TYPE_FIELDS
+
+    cleaned = {key: value for key, value in (filters or {}).items() if value not in (None, "")}
+    # Price/availability metric asks: never invent garment from "price"→"special prices" etc.
+    try:
+        from fashion_brain.ask import availability_history_mode, temporal_count_entity
+        from knowledge_graph.retrieval.ecom import price_history_mode
+
+        if price_history_mode(question) or availability_history_mode(question) or temporal_count_entity(question):
+            for key in ("garment", *_TYPE_FIELDS):
+                cleaned.pop(key, None)
+            return cleaned
+    except Exception:
+        pass
+    if any(key in cleaned for key in ("garment", *_TYPE_FIELDS)):
+        return cleaned
+
+    question_key = f" {normalize_name(question)} "
+    by_token: dict[str, list[ValueHit]] = {}
+    for hit in catalog.hits:
+        token_key = normalize_name(hit.token)
+        if not token_key or token_key in _METRIC_NOISE_TOKENS:
+            continue
+        if f" {token_key} " in question_key:
+            by_token.setdefault(token_key, []).append(hit)
+
+    for matches in by_token.values():
+        # A token matching a party is not safe to reuse as a product type.
+        if any(hit.attribute in {"brand", "buyer"} for hit in matches):
+            continue
+        type_hits = [hit for hit in matches if hit.attribute in _TYPE_FIELDS]
+        if type_hits:
+            cleaned["garment"] = type_hits[0].matched_value
+            break
     return cleaned
 
 
@@ -691,29 +835,25 @@ def _ecom_mapping_keys() -> list[str]:
 
 
 def _analysis_fields(attributes: list[str], row: dict) -> list[str]:
-    preferred = [
-        "brand",
-        "buyer",
-        "category",
-        "family",
-        "subfamily",
-        "garment_type",
-        "material",
-        "color",
-        "gender",
-        "season",
-        "department",
-        "availability",
-        "section",
-        "price",
-        "gauge",
-        "gsm",
-    ]
-    present = set(attributes)
-    chosen = [key for key in preferred if key in present]
-    if not chosen:
-        return [key for key in attributes if key not in {"product_id", "name", "content_hash"}][:12]
-    return chosen
+    """Product-mix attrs only — shared meta filter (no scrape/url/ops columns)."""
+
+    _ = row
+    try:
+        from knowledge_graph.retrieval.ecom import is_analysis_facet_attr
+    except Exception:
+        is_analysis_facet_attr = None
+    chosen: list[str] = []
+    for key in attributes:
+        folded = str(key or "").strip().casefold().replace(" ", "_")
+        if not folded:
+            continue
+        if is_analysis_facet_attr is not None:
+            if not is_analysis_facet_attr(folded):
+                continue
+        elif folded.endswith(("_id", "_ids", "_url")) or folded in {"name", "price", "graph", "source"}:
+            continue
+        chosen.append(folded)
+    return chosen[:16]
 
 
 def _candidate_tokens(question: str) -> list[str]:

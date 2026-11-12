@@ -1,50 +1,141 @@
 {
   "source_id": "ecom_products",
   "source_table": "master_products",
-  "primary_key": ["brand", "master_id"],
+  "primary_key": [
+    "brand",
+    "master_id"
+  ],
   "product_id_template": "ecom:{brand}:{master_id}",
   "graph_id": "ecom_products",
   "ontology": "ecom-products-ontology",
-  "watermark_columns": ["updated_at", "content_hash"],
-  "description": "Column map from Postgres master_products to KG product fields and Neo4j relationships (v1).",
+  "ontology_version": "1.2.0",
+  "watermark_columns": [
+    "updated_at",
+    "content_hash"
+  ],
+  "description": "Column map from Postgres master_products \u2192 Neo4j, aligned with ecom ontology v1.2. Family/Subfamily are first-class types (not GarmentCategory). LLM-only style attrs stay deferred.",
   "product_properties": {
-    "master_id": {"column": "master_id", "required": true},
-    "brand": {"column": "brand", "required": true},
-    "product_name": {"column": "name"},
-    "reference": {"column": "reference"},
-    "display_reference": {"column": "display_reference"},
-    "description": {"column": "description"},
-    "composition": {"column": "composition"},
-    "composition_detail": {"column": "composition_detail", "type": "jsonb"},
-    "construction": {"column": "construction"},
-    "care": {"column": "care"},
-    "fit": {"column": "fit"},
-    "country_of_origin": {"column": "country_of_origin"},
-    "section": {"column": "section"},
-    "category": {"column": "category"},
-    "family": {"column": "family"},
-    "subfamily": {"column": "subfamily"},
-    "category_path": {"column": "category_path"},
-    "availability": {"column": "availability"},
-    "in_stock_count": {"column": "in_stock_count", "type": "integer"},
-    "out_stock_count": {"column": "out_stock_count", "type": "integer"},
-    "currency": {"column": "currency"},
-    "price": {"column": "price"},
-    "original_price": {"column": "original_price"},
-    "price_min": {"column": "price_min"},
-    "price_max": {"column": "price_max"},
-    "image": {"column": "image"},
-    "images": {"column": "images", "type": "jsonb", "store": "envelope_only"},
-    "colors": {"column": "colors", "type": "jsonb"},
-    "color_count": {"column": "color_count", "type": "integer"},
-    "product_url": {"column": "product_url"},
-    "product_url_with_variant": {"column": "product_url_with_variant"},
-    "source_url": {"column": "source_url"},
-    "domain": {"column": "domain"},
-    "catalog_id": {"column": "catalog_id"},
-    "scraped_at": {"column": "scraped_at"},
-    "content_hash": {"column": "content_hash"},
-    "pdp_enriched": {"column": "pdp_enriched", "type": "boolean"}
+    "master_id": {
+      "column": "master_id",
+      "required": true
+    },
+    "brand": {
+      "column": "brand",
+      "required": true
+    },
+    "product_name": {
+      "column": "name"
+    },
+    "reference": {
+      "column": "reference"
+    },
+    "display_reference": {
+      "column": "display_reference"
+    },
+    "description": {
+      "column": "description"
+    },
+    "composition": {
+      "column": "composition"
+    },
+    "composition_detail": {
+      "column": "composition_detail",
+      "type": "jsonb"
+    },
+    "construction": {
+      "column": "construction"
+    },
+    "care": {
+      "column": "care"
+    },
+    "fit": {
+      "column": "fit"
+    },
+    "country_of_origin": {
+      "column": "country_of_origin"
+    },
+    "section": {
+      "column": "section"
+    },
+    "category": {
+      "column": "category"
+    },
+    "family": {
+      "column": "family"
+    },
+    "subfamily": {
+      "column": "subfamily"
+    },
+    "category_path": {
+      "column": "category_path"
+    },
+    "availability": {
+      "column": "availability"
+    },
+    "in_stock_count": {
+      "column": "in_stock_count",
+      "type": "integer"
+    },
+    "out_stock_count": {
+      "column": "out_stock_count",
+      "type": "integer"
+    },
+    "currency": {
+      "column": "currency"
+    },
+    "price": {
+      "column": "price"
+    },
+    "original_price": {
+      "column": "original_price"
+    },
+    "price_min": {
+      "column": "price_min"
+    },
+    "price_max": {
+      "column": "price_max"
+    },
+    "image": {
+      "column": "image"
+    },
+    "images": {
+      "column": "images",
+      "type": "jsonb",
+      "store": "envelope_only"
+    },
+    "colors": {
+      "column": "colors",
+      "type": "jsonb"
+    },
+    "color_count": {
+      "column": "color_count",
+      "type": "integer"
+    },
+    "product_url": {
+      "column": "product_url"
+    },
+    "product_url_with_variant": {
+      "column": "product_url_with_variant"
+    },
+    "source_url": {
+      "column": "source_url"
+    },
+    "domain": {
+      "column": "domain"
+    },
+    "catalog_id": {
+      "column": "catalog_id"
+    },
+    "scraped_at": {
+      "column": "scraped_at"
+    },
+    "content_hash": {
+      "column": "content_hash"
+    },
+    "pdp_enriched": {
+      "column": "pdp_enriched",
+      "type": "boolean"
+    }
   },
   "neo4j_product_properties": [
     "name",
@@ -73,7 +164,7 @@
       "end_type": "Brand",
       "from_column": "brand",
       "required": true,
-      "notes": "Always set from master_products.brand"
+      "notes": "Always set from master_products.brand; facet name stored lowercase"
     },
     {
       "rel_type": "BELONGS_TO_CATEGORY",
@@ -83,33 +174,35 @@
     },
     {
       "rel_type": "HAS_FAMILY",
-      "end_type": "GarmentCategory",
+      "end_type": "Family",
       "from_column": "family",
-      "required": false
+      "required": false,
+      "notes": "Ontology first-class Family (not GarmentCategory)"
     },
     {
-      "rel_type": "HAS_SUB_CATEGORY",
-      "end_type": "GarmentCategory",
+      "rel_type": "HAS_SUBFAMILY",
+      "end_type": "Subfamily",
       "from_column": "subfamily",
-      "required": false
+      "required": false,
+      "notes": "Ontology first-class Subfamily"
     },
     {
       "rel_type": "PARENT_CATEGORY",
       "start_from_column": "subfamily",
       "end_from_column": "family",
-      "start_type": "GarmentCategory",
-      "end_type": "GarmentCategory",
+      "start_type": "Subfamily",
+      "end_type": "Family",
       "required": false,
-      "notes": "Link subfamily → family when both present"
+      "notes": "Subfamily \u2192 Family when both present"
     },
     {
       "rel_type": "PARENT_CATEGORY",
       "start_from_column": "family",
       "end_from_column": "category",
-      "start_type": "GarmentCategory",
+      "start_type": "Family",
       "end_type": "GarmentCategory",
       "required": false,
-      "notes": "Link family → category when both present"
+      "notes": "Family \u2192 GarmentCategory when both present"
     },
     {
       "rel_type": "USES_MATERIAL",
@@ -117,14 +210,28 @@
       "from_column": "composition_detail",
       "fallback_column": "composition",
       "required": false,
-      "notes": "Prefer composition_detail JSONB entries; else parse composition text"
+      "notes": "Prefer composition_detail JSONB; else parse composition text; percentage on edge"
+    },
+    {
+      "rel_type": "PRIMARY_MATERIAL",
+      "end_type": "Material",
+      "from_column": "composition_detail",
+      "required": false,
+      "notes": "Material with highest percentage when available"
     },
     {
       "rel_type": "HAS_COLOR",
       "end_type": "Color",
       "from_column": "colors",
       "required": false,
-      "notes": "One edge per color name in colors JSONB array"
+      "notes": "One edge per color name in colors JSONB"
+    },
+    {
+      "rel_type": "PRIMARY_COLOR",
+      "end_type": "Color",
+      "from_column": "colors",
+      "required": false,
+      "notes": "First color in colors array"
     },
     {
       "rel_type": "HAS_AVAILABILITY",
@@ -161,6 +268,38 @@
       "end_type": "Construction",
       "from_column": "construction",
       "required": false
+    },
+    {
+      "rel_type": "HAS_FIT",
+      "end_type": "Fit",
+      "from_column": "fit",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_CARE",
+      "end_type": "CareInstruction",
+      "from_column": "care",
+      "required": false
+    },
+    {
+      "rel_type": "MADE_IN",
+      "end_type": "Country",
+      "from_column": "country_of_origin",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_REFERENCE",
+      "end_type": "Reference",
+      "from_column": "reference",
+      "fallback_column": "display_reference",
+      "required": false
+    },
+    {
+      "rel_type": "HAS_MAIN_IMAGE",
+      "end_type": "Image",
+      "from_column": "image",
+      "required": false,
+      "notes": "Single main image URL when present"
     }
   ],
   "envelope_only_columns": [
@@ -177,8 +316,16 @@
     "last_changed_at"
   ],
   "deferred_to_v2": [
+    "HAS_LISTING / ProductListing from catalog_product_ids",
+    "HAS_PRICE_SNAPSHOT / HAS_PRICE_CHANGE from prices_seen",
+    "HAS_IMAGE multi from images jsonb",
+    "FOR_TARGET_GROUP from section/category_path rules",
+    "IN_MATERIAL_GROUP / IN_COLOR_FAMILY derived maps",
+    "LLM style attrs (silhouette, neckline, sleeve, pattern, occasion, season, style_tag, certification)",
+    "SizeAvailability (needs per-size scraper export)",
+    "SIMILAR_TO / CROSS_BRAND_MATCH / SAME_STYLE_AS",
     "colorways child tables (*_colorways)",
-    "brand dump tables (zara_products, primark_products, …)",
+    "brand dump tables (zara_products, primark_products, \u2026)",
     "product_change_events",
     "RESOLVES_TO links toward PLM own_products"
   ]

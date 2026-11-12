@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from fashion_brain.api.app import create_app
+from fashion_brain.api.app import _set_answer_title, _title_from_answer, create_app
 from knowledge_graph.api import create_app as create_graph_app
 from knowledge_graph.errors import GraphBackendUnavailable
 from knowledge_graph.graph.neo4j_repo import Neo4jGraphRepository, connect_neo4j
@@ -18,6 +18,48 @@ def _graph_client(platform):
     return TestClient(create_graph_app(platform))
 
 
+def test_conversation_title_comes_from_answer_prose():
+    assert _title_from_answer(
+        "## **Primark leads the comparison.**\n\n| Brand | Count |\n| --- | ---: |"
+    ) == "Primark leads the comparison."
+    assert _title_from_answer("| Brand | Count |\n| --- | ---: |\n") == ""
+    assert len(_title_from_answer("A very long answer title that should be shortened at a word boundary " * 2)) <= 64
+
+    class Store:
+        title = "New chat"
+
+        def get_conversation(self, _conversation_id, _user_id):
+            return {"title": self.title}
+
+        def touch_conversation(self, _conversation_id, title=None):
+            if title:
+                self.title = title
+
+    store = Store()
+    _set_answer_title(store, "chat", "user", "Primark leads the comparison.")
+    _set_answer_title(store, "chat", "user", "A later answer should not replace this title.")
+    assert store.title == "Primark leads the comparison."
+
+
+def test_conversation_message_persists_answer_based_title(demo):
+    client = _client(demo)
+    headers = {"Authorization": f"Bearer {demo.settings.api_token}", "X-Clearance": "internal"}
+    created = client.post("/v1/conversations", headers=headers, json={"title": "New chat"})
+    assert created.status_code == 200
+    conversation_id = created.json()["id"]
+
+    response = client.post(
+        f"/v1/conversations/{conversation_id}/messages",
+        headers=headers,
+        json={"question": "Which products share a material?"},
+    )
+    assert response.status_code == 200
+    expected_title = _title_from_answer(response.json()["answer"]["answer"])
+    assert expected_title
+    saved = client.get(f"/v1/conversations/{conversation_id}", headers=headers)
+    assert saved.json()["title"] == expected_title
+
+
 def test_sample_image_is_served_from_the_generated_folder(demo):
     folder = demo.settings.generated / "samples"
     folder.mkdir(parents=True, exist_ok=True)
@@ -28,6 +70,34 @@ def test_sample_image_is_served_from_the_generated_folder(demo):
     assert found.status_code == 200
     assert found.content.startswith(b"\x89PNG")
     assert client.get("/samples/../chat.html").status_code == 404
+
+
+def test_kg_builder_proxy_is_admin_only_and_allowlisted(demo, monkeypatch):
+    calls = []
+
+    def fake_kg_request(settings, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"status": "ok"}
+
+    monkeypatch.setattr("fashion_brain.api.app.kg_request", fake_kg_request)
+    client = _client(demo)
+    headers = {"Authorization": "Bearer test-token", "X-Clearance": "internal"}
+
+    unauthorized = client.get("/v1/admin/kg-api/health")
+    assert unauthorized.status_code == 401
+
+    response = client.get(
+        "/v1/admin/kg-api/api/setup/checklist?graph_id=products&source_id=products",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert calls[0][0:2] == ("GET", "/api/setup/checklist")
+    assert calls[0][2]["params"] == {"graph_id": "products", "source_id": "products"}
+    assert calls[0][2]["clearance"] == "internal"
+
+    unsupported = client.get("/v1/admin/kg-api/api/graphs/registry", headers=headers)
+    assert unsupported.status_code == 404
+    assert len(calls) == 1
 
 
 def test_api_auth_validation_and_grounded_ask(demo):
@@ -232,6 +302,153 @@ def test_neo4j_queries_are_parameterized():
     assert "DETACH DELETE" not in query
     statements = repo.ensure_constraints()
     assert any("entity_id" in statement for statement in statements)
+
+
+def test_shared_material_retrieval_uses_one_parameterized_neo4j_query():
+    from types import SimpleNamespace
+
+    from knowledge_graph.access import Principal
+    from knowledge_graph.retrieval.queries import products_sharing_material
+    from knowledge_graph.ontology import empty_ontology
+
+    ontology = empty_ontology()
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+            self.rows = [
+                {
+                    "canonical_id": "fashion:material:cotton",
+                    "material_key": "fashion:material:cotton",
+                    "material": "Cotton",
+                    "graph_ids": ["catalog"],
+                    "product_count": 2,
+                    "product_refs": [
+                        {"graph_id": "catalog", "product_id": "style-1"},
+                        {"graph_id": "catalog", "product_id": "style-2"},
+                    ],
+                },
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def run(self, query, parameters=None):
+            self.calls.append((query, parameters or {}))
+            return self.rows
+
+    class Driver:
+        def __init__(self):
+            self.session_obj = Session()
+
+        def session(self, **kwargs):
+            return self.session_obj
+
+    platform = SimpleNamespace(
+        graph=Neo4jGraphRepository(Driver(), ontology),
+        kg_registry=SimpleNamespace(
+            list_graphs=lambda: [SimpleNamespace(id="catalog", kind="product", status="active")]
+        ),
+    )
+    groups = products_sharing_material(platform, Principal(subject="analyst", clearance="internal"))
+
+    assert len(platform.graph.driver.session_obj.calls) == 1
+    query, parameters = platform.graph.driver.session_obj.calls[0]
+    assert "p.graph IN $graph_ids" in query
+    assert "collect(DISTINCT p.graph)" in query
+    assert "product_refs[..8]" in query
+    assert parameters == {
+        "graph_ids": ["catalog"],
+        "allowed_classifications": ["public", "internal"],
+        "across_graphs": False,
+    }
+    assert groups == [
+        {
+            "canonical_id": "fashion:material:cotton",
+            "material": "Cotton",
+            "products": ["style-1", "style-2"],
+            "product_refs": [
+                {"graph_id": "catalog", "product_id": "style-1"},
+                {"graph_id": "catalog", "product_id": "style-2"},
+            ],
+            "product_count": 2,
+            "verified": True,
+            "graph_id": "catalog",
+            "graph_ids": ["catalog"],
+        }
+    ]
+
+
+def test_shared_material_groups_can_require_cross_graph_matches():
+    from types import SimpleNamespace
+
+    from knowledge_graph.access import Principal
+    from knowledge_graph.models import GraphEdge, GraphNode
+    from knowledge_graph.retrieval.queries import products_sharing_material
+
+    rows = []
+
+    def add_row(graph_id, product_id, material_id, name, canonical_id):
+        product = GraphNode(
+            id=f"{graph_id}:{product_id}",
+            labels=["Entity", "Product"],
+            graph=graph_id,
+            properties={"prov_record_id": product_id, "classification": "internal"},
+        )
+        material = GraphNode(
+            id=material_id,
+            labels=["Entity", "SourceEntity", "Material"],
+            graph=graph_id,
+            properties={"name": name},
+        )
+        edge = GraphEdge(
+            id=f"uses:{graph_id}:{product_id}",
+            type="USES_MATERIAL",
+            start_id=product.id,
+            end_id=material.id,
+            graph=graph_id,
+            properties={},
+        )
+        rows.append(
+            {
+                "product": product,
+                "material": material,
+                "edge": edge,
+                "graph_id": graph_id,
+                "canonical_id": canonical_id,
+                "material_key": canonical_id,
+                "review": False,
+            }
+        )
+
+    add_row("ecom_products", "ecom-1", "ecom:cotton", "Cotton", "fashion:material:cotton")
+    add_row("plmex_products", "plmex-1", "plmex:cotton", "Cotton", "fashion:material:cotton")
+    add_row("ecom_products", "linen-1", "ecom:linen", "Linen", "fashion:material:linen")
+    add_row("ecom_products", "linen-2", "ecom:linen", "Linen", "fashion:material:linen")
+
+    class Graph:
+        def product_material_rows(self, graph_ids):
+            return [row for row in rows if row["graph_id"] in graph_ids]
+
+    platform = SimpleNamespace(graph=Graph())
+    principal = Principal(subject="analyst", clearance="internal")
+
+    cross_graph = products_sharing_material(
+        platform,
+        principal,
+        graph_ids=["ecom_products", "plmex_products"],
+        across_graphs=True,
+    )
+    assert [group["material"] for group in cross_graph] == ["Cotton"]
+    assert cross_graph[0]["graph_ids"] == ["ecom_products", "plmex_products"]
+    assert cross_graph[0]["product_count"] == 2
+    assert cross_graph[0]["product_refs"] == [
+        {"graph_id": "ecom_products", "product_id": "ecom-1"},
+        {"graph_id": "plmex_products", "product_id": "plmex-1"},
+    ]
 
 
 def test_connect_neo4j_reports_unavailable(monkeypatch):

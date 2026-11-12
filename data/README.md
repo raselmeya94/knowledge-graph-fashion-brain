@@ -1,13 +1,4 @@
-# Data root
+﻿# Data root (cleaned)
 
-All KG **data** lives here — separate from Python under `knowledge_graph/`.
-
-```text
-data/
-  schemas/                 Ontologies + ecom mapping (committed seeds)
-  raw/                     PLM files + source_registry.json (optional)
-  generated/               Runtime only (gitignored except .gitkeep)
-  config/                  Optional entity review decisions
-```
-
-See `knowledge_graph/FRESH_DEVICE.md` for clone → run on a new machine.
+Runtime + schemas are empty. Restore seeds via Postman (see knowledge_graph/POSTMAN.md).
+Backup of previous contents: ../data_backup_20261109_120417

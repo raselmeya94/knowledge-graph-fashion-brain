@@ -50,26 +50,33 @@ class Settings(BaseSettings):
     admin_bootstrap_secret: str = ""
     fashion_brain_db: Path = Path("generated/fashion_brain/app.db")
     cors_origins: str = ""
+    # KG ingest is deterministic (DB/sync/build). LLM extract is not part of KG API.
     extraction_mode: str = "deterministic"
+    # --- Fashion Brain only (shared .env); KG API ignores these at runtime ---
     answer_mode: str = "llm"
-    # LLM schema→Cypher path for product asks; templated ecom Cypher remains fallback.
     text2cypher_enabled: bool = True
-    # Resolve user terms to real Neo4j facet ids before Text-to-Cypher.
+    graph_rag_mode: str = "text2cypher"
+    simple_kg_rag: bool = True
     entity_linker_enabled: bool = True
-    entity_linker_embeddings: bool = True
-    entity_linker_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    schema_ttl_seconds: int = 600
+    cypher_timeout_seconds: float = 10.0
+    cypher_max_rows: int = 200
+    fewshot_k: int = 0
+    # --- KG linker: Neo4j exact + full-text only ---
     entity_linker_top_k: int = 5
     entity_linker_min_score: float = 0.35
     entity_linker_score_delta: float = 0.08
-    model_provider: str = "openrouter"
+    # --- Fashion Brain model settings (shared .env; unused by KG HTTP handlers) ---
+    model_provider: str = "openrouter"  # openrouter | ollama | openai-compatible | none
     model_base_url: str = "https://openrouter.ai/api/v1"
     model_api_key: str = ""
     model_name: str = "~openai/gpt-sol-latest"
-    image_model: str = "google/gemini-nano-banana-2.1"
+    image_model: str = "google/gemini-3.1-flash-image"
     model_app_url: str = "http://127.0.0.1:8000"
     model_app_title: str = "Fashion Brain"
+    # Local Ollama (FASHIONGPT_MODEL_PROVIDER=ollama). OpenAI-compatible /v1 API.
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "gemma4:31b"
     ollama_vision_model: str = ""
     ollama_timeout_seconds: float = 60.0
     embedding_provider: str = "lexical"

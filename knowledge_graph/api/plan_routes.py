@@ -12,10 +12,16 @@ from knowledge_graph.errors import RequestTimeout, ValidationFailed
 from knowledge_graph.global_kg import global_info
 from knowledge_graph.graph.templates import run_template
 from knowledge_graph.jobs import JobStore
+from knowledge_graph.pipeline.build_status import build_graph, build_status
+from knowledge_graph.pipeline.kg_build import build_new_kg
 from knowledge_graph.retrieval.brain import BrainRetrieveRequest, retrieve
 from knowledge_graph.retrieval.metadata import discover_values, metadata_overview
+from knowledge_graph.sources.db_connections import DbConnectionBody, get_connection, list_connections, test_connection, upsert_connection
+from knowledge_graph.sources.db_inspect import inspect_ecom_connection
+from knowledge_graph.sources.mapping_store import get_mapping, put_mapping
 from knowledge_graph.sources.registry_ops import SourceRegisterBody, get_source, list_sources, register_source
 from knowledge_graph.sources.schema import source_schema
+from knowledge_graph.sources.setup import bootstrap_overview, setup_checklist
 from knowledge_graph.sources.sync import sync_source
 
 
@@ -51,7 +57,44 @@ class RebuildBody(BaseModel):
     source_id: str | None = None
 
 
+class KgBuildBody(BaseModel):
+    """First-time scaffold for a product KG (ontology + graph + source + mapping)."""
+
+    profile: str = "ecom_products"
+    sync: bool = False
+    full: bool = False
+    brand: str | None = None
+    limit: int | None = None
+
+
+class GraphBuildBody(BaseModel):
+    """Build an already-registered graph from its source."""
+
+    source_id: str | None = None
+    brand: str | None = None
+    full: bool = False
+    limit: int | None = None
+
+
 def register_plan_api_routes(app, current_platform, current_principal, current_jobs) -> None:
+    @app.get("/api/bootstrap")
+    def api_bootstrap(
+        platform=Depends(current_platform),
+        jobs: JobStore = Depends(current_jobs),
+        _principal=Depends(current_principal),
+    ):
+        return bootstrap_overview(platform, jobs=jobs)
+
+    @app.get("/api/setup/checklist")
+    def api_setup_checklist(
+        graph_id: str = "ecom_products",
+        source_id: str = "ecom_products",
+        ontology_id: str | None = None,
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        return setup_checklist(platform, graph_id=graph_id, source_id=source_id, ontology_id=ontology_id)
+
     @app.get("/api/sources")
     def api_list_sources(platform=Depends(current_platform), _principal=Depends(current_principal)):
         return {"sources": list_sources(platform)}
@@ -71,6 +114,27 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
     @app.get("/api/sources/{source_id}/schema")
     def api_source_schema(source_id: str, platform=Depends(current_platform), _principal=Depends(current_principal)):
         return source_schema(platform, source_id)
+
+    @app.get("/api/sources/{source_id}/mapping")
+    def api_get_mapping(source_id: str, _principal=Depends(current_principal)):
+        return get_mapping(source_id)
+
+    @app.post("/api/sources/{source_id}/mapping")
+    def api_post_mapping(
+        source_id: str,
+        body: dict[str, Any],
+        _principal=Depends(current_principal),
+    ):
+        # Allow mapping upload before source registration (UI wizard step order).
+        return put_mapping(source_id, body, replace=False)
+
+    @app.put("/api/sources/{source_id}/mapping")
+    def api_put_mapping(
+        source_id: str,
+        body: dict[str, Any],
+        _principal=Depends(current_principal),
+    ):
+        return put_mapping(source_id, body, replace=True)
 
     @app.post("/api/sources/{source_id}/sync")
     async def api_sync_source(
@@ -254,6 +318,133 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
             limit=limit,
             offset=offset,
         )
+
+    @app.get("/api/db/connection")
+    def api_db_connection(
+        table: str = "master_products",
+        schema: str = "public",
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        """Test configured Postgres and return database / table / column metadata."""
+
+        return inspect_ecom_connection(platform.settings, table=table, schema=schema)
+
+    @app.get("/api/db/connections")
+    def api_list_db_connections(platform=Depends(current_platform), _principal=Depends(current_principal)):
+        return {"connections": list_connections(platform.settings)}
+
+    @app.post("/api/db/connections")
+    def api_upsert_db_connection(
+        body: DbConnectionBody,
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        return {"connection": upsert_connection(platform.settings, body)}
+
+    @app.get("/api/db/connections/{connection_id}")
+    def api_get_db_connection(
+        connection_id: str,
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        return {"connection": get_connection(platform.settings, connection_id)}
+
+    @app.post("/api/db/connections/{connection_id}/test")
+    def api_test_db_connection(
+        connection_id: str,
+        table: str | None = None,
+        schema: str | None = None,
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        return test_connection(platform.settings, connection_id, table=table, schema=schema)
+
+    @app.post("/api/graphs/{graph_id}/build")
+    async def api_graph_build(
+        graph_id: str,
+        body: GraphBuildBody | None = None,
+        platform=Depends(current_platform),
+        jobs: JobStore = Depends(current_jobs),
+        _principal=Depends(current_principal),
+    ):
+        """Build KG from registered source + mapping + ontology (checklist-gated)."""
+
+        payload = body or GraphBuildBody()
+
+        def _runner() -> dict[str, Any]:
+            return build_graph(
+                platform,
+                graph_id,
+                source_id=payload.source_id,
+                brand=payload.brand,
+                full=payload.full,
+                limit=payload.limit,
+            )
+
+        job, created = await jobs.start(
+            kind="build",
+            runner=_runner,
+            params={
+                "graph_id": graph_id,
+                "source_id": payload.source_id,
+                "brand": payload.brand,
+                "full": payload.full,
+                "limit": payload.limit,
+            },
+            exclusive_key=f"build:{graph_id}",
+            message=f"Build queued for {graph_id}",
+        )
+        return {"status": "started" if created else "already_running", "job": job}
+
+    @app.get("/api/graphs/{graph_id}/build/status")
+    def api_graph_build_status(
+        graph_id: str,
+        job_id: str | None = None,
+        platform=Depends(current_platform),
+        jobs: JobStore = Depends(current_jobs),
+        _principal=Depends(current_principal),
+    ):
+        """Building status: products, nodes, edges, errors, progress."""
+
+        return build_status(platform, graph_id, jobs=jobs, job_id=job_id)
+
+    @app.post("/api/kg/build")
+    async def api_kg_build(
+        body: KgBuildBody | None = None,
+        platform=Depends(current_platform),
+        jobs: JobStore = Depends(current_jobs),
+        _principal=Depends(current_principal),
+    ):
+        """Optional shortcut scaffold (demo). Prefer the visible wizard + /api/graphs/{id}/build."""
+
+        payload = body or KgBuildBody()
+        exclusive = f"build:{payload.profile or 'ecom_products'}"
+
+        def _runner() -> dict[str, Any]:
+            return build_new_kg(
+                platform,
+                profile=payload.profile,
+                sync=payload.sync,
+                full=payload.full,
+                brand=payload.brand,
+                limit=payload.limit,
+            )
+
+        job, created = await jobs.start(
+            kind="kg_build",
+            runner=_runner,
+            params={
+                "profile": payload.profile,
+                "sync": payload.sync,
+                "full": payload.full,
+                "brand": payload.brand,
+                "limit": payload.limit,
+            },
+            exclusive_key=exclusive,
+            message=f"KG build queued for {payload.profile}",
+        )
+        return {"status": "started" if created else "already_running", "job": job}
 
 
 async def _run(platform, func, *args, **kwargs):

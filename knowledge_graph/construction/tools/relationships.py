@@ -13,7 +13,11 @@ from knowledge_graph.construction.news_facts import (
     ontology_gap_warning,
     reject_news_relationship,
 )
-from knowledge_graph.construction.ollama import parse_model_json
+from knowledge_graph.errors import ValidationFailed
+
+
+def parse_model_json(text: str):
+    raise ValidationFailed("LLM JSON parse removed from Knowledge Graph.")
 from knowledge_graph.errors import ModelUnavailableError
 from knowledge_graph.kg_registry import default_graph_for_kind
 from knowledge_graph.ontology import Ontology, normalize_name
