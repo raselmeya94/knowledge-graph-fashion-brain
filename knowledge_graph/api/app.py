@@ -99,6 +99,27 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         if getattr(app.state, "jobs", None) is None:
             app.state.jobs = JobStore()
         try:
+            from knowledge_graph.retrieval.live_schema import warm_live_schema
+
+            report = warm_live_schema(app.state.platform)
+            LOGGER.info("live schema warm %s", report)
+        except Exception:
+            LOGGER.exception("live schema warm failed")
+        try:
+            from knowledge_graph.ontology_registry import warm_ontology_registry
+
+            oreport = warm_ontology_registry(app.state.platform)
+            LOGGER.info("ontology registry warm %s", oreport)
+        except Exception:
+            LOGGER.exception("ontology registry warm failed")
+        try:
+            from knowledge_graph.retrieval.runtime_catalog import warm_runtime_catalog
+
+            creport = warm_runtime_catalog(app.state.platform)
+            LOGGER.info("runtime catalog warm %s", creport)
+        except Exception:
+            LOGGER.exception("runtime catalog warm failed")
+        try:
             yield
         finally:
             jobs = getattr(app.state, "jobs", None)
@@ -464,6 +485,50 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         _ = principal
         return await _run(platform, _link)
 
+    @app.post("/brain/resolve_canonical")
+    async def brain_resolve_canonical(
+        body: dict,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        """Resolve a free-text term via fulltext / aliases / RESOLVES_TO (read-only)."""
+
+        from knowledge_graph.linking.canonical_resolve import resolve_canonical_entity
+
+        term = str((body or {}).get("term") or "")
+        graph_id = (body or {}).get("graph_id")
+        labels = (body or {}).get("labels") if isinstance((body or {}).get("labels"), list) else None
+
+        def _resolve():
+            result = resolve_canonical_entity(
+                platform,
+                term,
+                graph_id=str(graph_id) if graph_id else None,
+                labels=[str(x) for x in (labels or [])] or None,
+            )
+            return result.to_dict()
+
+        _ = principal
+        return await _run(platform, _resolve)
+
+    @app.post("/brain/resolve_fuzzy")
+    async def brain_resolve_fuzzy(
+        body: dict,
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        """Fuzzy-resolve question terms against ontology canonical_entities (read-only)."""
+
+        from knowledge_graph.linking.fuzzy_entity_resolver import resolve_fuzzy_entities
+
+        question = str((body or {}).get("question") or (body or {}).get("term") or "")
+
+        def _resolve():
+            return resolve_fuzzy_entities(question, platform=platform).to_resolved_payload()
+
+        _ = principal
+        return await _run(platform, _resolve)
+
     @app.get("/brain/brands")
     async def brain_brands(
         graph_id: str | None = None,
@@ -493,6 +558,36 @@ def create_app(platform: Platform | None = None) -> FastAPI:
 
         _ = principal
         return await _run(platform, _schema)
+
+    @app.get("/brain/runtime_catalog")
+    async def brain_runtime_catalog(
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        from knowledge_graph.retrieval.runtime_catalog import get_runtime_catalog
+
+        def _status():
+            return get_runtime_catalog(platform).status()
+
+        _ = principal
+        return await _run(platform, _status)
+
+    @app.post("/brain/runtime_catalog/refresh")
+    async def brain_runtime_catalog_refresh(
+        platform: Platform = Depends(current_platform),
+        principal: Principal = Depends(current_principal),
+    ):
+        from knowledge_graph.retrieval.runtime_catalog import (
+            invalidate_runtime_catalog,
+            warm_runtime_catalog,
+        )
+
+        def _refresh():
+            invalidate_runtime_catalog()
+            return warm_runtime_catalog(platform, force=True)
+
+        _ = principal
+        return await _run(platform, _refresh)
 
     register_registry_routes(app, current_platform, current_principal, current_jobs)
 

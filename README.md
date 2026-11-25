@@ -80,15 +80,19 @@ Set `FASHIONGPT_GRAPH_BACKEND=neo4j` and `FASHIONGPT_NEO4J_PASSWORD` in `.env`. 
 Start the knowledge graph first (slow once; holds the catalog and graphs), then Fashion Brain (fast start):
 
 ```powershell
-# Terminal 1
+# Terminal 1 — binds 0.0.0.0:8001 (LAN)
 python -m knowledge_graph.cli serve
 
-# Terminal 2
+# Terminal 2 — binds 0.0.0.0:8000 (LAN)
 python -m fashion_brain.cli serve
+
+# Terminal 3 — binds 0.0.0.0:5173 (LAN)
+cd frontend; npm start
 ```
 
-Interactive docs: http://127.0.0.1:8000/docs  
-KG API docs: [knowledge_graph/API.md](knowledge_graph/API.md) · Swagger http://127.0.0.1:8001/docs · OpenAPI [knowledge_graph/openapi.json](knowledge_graph/openapi.json)
+Local: http://127.0.0.1:8000/docs · http://127.0.0.1:8001/docs · http://127.0.0.1:5173/  
+LAN: `http://<this-pc-ip>:5173/` (UI), `:8000` (Fashion Brain), `:8001` (KG).  
+KG API docs: [knowledge_graph/API.md](knowledge_graph/API.md) · OpenAPI [knowledge_graph/openapi.json](knowledge_graph/openapi.json)
 
 Postman (import both collections):
 

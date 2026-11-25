@@ -78,6 +78,15 @@ def clean_filters(filters: dict | None, schema=None) -> dict[str, str]:
         # Only skip pure noise keys.
         if k in {"unsupported", "limit", "suggest", "analysis"}:
             continue
+        try:
+            from fashion_brain.ask import _is_schema_prose_filter, _reliable_filter
+
+            if k not in {"brand", "buyer"} and (
+                _is_schema_prose_filter(text) or not _reliable_filter(text)
+            ):
+                continue
+        except Exception:
+            pass
         if dims and k not in dims and k not in {"garment", "buyer"}:
             # Keep anyway if it looks like a facet key (letters); drop garbage.
             if not re.fullmatch(r"[a-z][a-z0-9_]*", k):
@@ -198,7 +207,7 @@ def relationship_hints_for_filters(schema, filters: dict[str, str]) -> str:
                     continue
                 if str(pair[1]).casefold() == label.casefold() or label.casefold() in str(pair[1]).casefold():
                     lines.append(
-                        f"- filter `{key}={filters[key]}` → use relationship {rel} toward :{pair[1]}"
+                        f"- Keep `{key}={filters[key]}` via Neo4j rel `{rel}` end-label `{pair[1]}`"
                     )
                     break
     if not lines:

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fashion Brain — Chat</title>
-  <link rel="stylesheet" href="/shared/user.css?v=sample-board-rail-20261112" />
+  <link rel="stylesheet" href="/shared/user.css?v=chatgpt-ui-20261118" />
 </head>
 <body>
   <div class="app">
@@ -13,16 +13,20 @@
         <div class="mark" aria-hidden="true">FB</div>
         <div>
           <h1>Fashion Brain</h1>
-          <p>Ask PLM data &amp; the web</p>
+          <p>Product knowledge chat</p>
         </div>
       </div>
 
       <button id="new-chat" type="button">
-        <span class="btn-ico" aria-hidden="true">+</span>
+        <span class="btn-ico" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </span>
         New chat
       </button>
 
-      <div class="nav-label">Chat history</div>
+      <div class="nav-label">Chats</div>
       <div class="history" id="history"></div>
 
       <div class="side-tools">
@@ -80,9 +84,9 @@
 
       <section id="thread">
         <div class="column empty" id="empty">
-          <div class="eyebrow">Fashion Brain</div>
-          <h2>Ask the PLM data</h2>
-          <p>Products, materials, tags, and industry facts — grounded in your knowledge graph.</p>
+          <div class="hero-mark" aria-hidden="true">FB</div>
+          <h2>How can I help with your catalog?</h2>
+          <p>Ask about products, materials, brands, and trends — answers stay grounded in your knowledge graph.</p>
           <div class="suggestions">
             <button type="button" data-prompt="How many products are in the PLM data?">
               <span class="kicker">PLM data</span>
@@ -92,9 +96,13 @@
               <span class="kicker">Materials</span>
               <span class="prompt-title">Which products share a material?</span>
             </button>
+            <button type="button" data-prompt="Analyze PRIMARK">
+              <span class="kicker">Analysis</span>
+              <span class="prompt-title">Analyze PRIMARK</span>
+            </button>
             <button type="button" data-prompt="What are current denim export trends in Bangladesh?">
               <span class="kicker">Web search</span>
-              <span class="prompt-title">Current denim export trends in Bangladesh</span>
+              <span class="prompt-title">Denim export trends in Bangladesh</span>
             </button>
           </div>
         </div>
@@ -103,9 +111,13 @@
       <form id="composer">
         <div class="composer">
           <textarea id="input" rows="1" placeholder="Message Fashion Brain…" aria-label="Message"></textarea>
-          <button id="send" type="submit" aria-label="Send">Send</button>
+          <button id="send" type="submit" aria-label="Send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 19V5M12 5l-6 6M12 5l6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
-        <p class="composer-hint">Enter to send · Shift+Enter for a new line · /trending · /specification · /garment_design · /advanced_garment_design</p>
+        <p class="composer-hint">Enter to send · Shift+Enter for a new line · /trending · /specification · /garment_design</p>
       </form>
     </main>
   </div>

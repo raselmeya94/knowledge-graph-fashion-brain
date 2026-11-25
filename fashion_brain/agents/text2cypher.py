@@ -13,7 +13,12 @@ from typing import Any
 
 from knowledge_graph.logging_config import get_logger
 from knowledge_graph.models import EvidenceItem
-from knowledge_graph.retrieval.cypher_safe import assert_read_only_cypher, rows_to_findings, run_read_cypher
+from knowledge_graph.retrieval.cypher_safe import (
+    assert_allowlisted_cypher,
+    assert_read_only_cypher,
+    rows_to_findings,
+    run_read_cypher,
+)
 
 from fashion_brain.agents.contracts import Intention, Retrieved
 from fashion_brain.llm import build_model_provider
@@ -77,6 +82,9 @@ INTERPRETATION AND QUERY QUALITY
   do not guess units or convert currencies.
 - A trend or historical comparison needs a real temporal property/event or snapshot relationship in
   schema. Use the actual timestamp and chronological ordering; never infer change from current values.
+- For price trend or price history asks, retrieve multiple useful slices when schema supports them:
+  overall summary (event count, avg old/new price, avg % change by currency), breakdown by period or
+  category/brand, and top upward/downward product examples (LIMIT 5–10 each).
 
 ANALYSIS AND FOLLOW-UPS
 - For a profile/comprehensive analysis, return an overview plus up to five distinct, useful top-N
@@ -89,6 +97,18 @@ ANALYSIS AND FOLLOW-UPS
 - Use parameters for values and keep "g" equal to the target graph id. Return exactly one JSON object,
   with no prose or Cypher outside it.
 - If the schema has no temporal evidence, do not claim a trend query can answer a historical question.
+
+ENTITY RESOLUTION AND OPTIONAL MATCH
+- Prefer resolved entity ids / canonical names from <resolved_entities> over free-text equality.
+- When <term_grounding> is present, treat it as the authoritative word→schema map: use the listed
+  Label.property / exact_db_value (or facet ids) for those user terms before inventing free-text filters.
+- Never rely only on exact `=` string matching for user brand/material/buyer/product terms.
+  Prefer id IN $…_ids, toLower(normalized_name) CONTAINS $term, or aliases when ids are absent.
+- When schema includes SourceEntity / Canonical / RESOLVES_TO, you may match
+  (:SourceEntity)-[:RESOLVES_TO]->(:Canonical) and filter on the canonical side.
+- Use OPTIONAL MATCH for secondary attributes (PriceSnapshot, PriceChangeEvent,
+  AvailabilitySnapshot, InventoryRecord, Shipment, Certification, etc.) so partial
+  records are never dropped by an inner join.
 """
 
 
@@ -108,10 +128,15 @@ _SKIP_INTENTS = frozenset({"system_meta", "live_sql", "news", "shared"})
 _MULTI_GRAPH_RULES = """
 MULTI-GRAPH (when seed_params.graph_ids has 2+ product graphs):
 - Products from every catalog live in the same Neo4j; scope with p.graph IN $graph_ids.
+- NEVER invent or hardcode graph property string literals. Use ONLY ids from seed_params.allowed_graph_ids
+  (or $g / $graph_ids). If a catalog id is not listed there, omit it.
 - Prefer ONE read-only Cypher for compare / shared-across / overlap asks.
 - For attribute values present in every selected catalog: aggregate per graph (or per value×graph),
   then keep only values that appear in all selected graphs. Return value + per-graph product counts.
-- Analysis / shared-across: attribute totals only — do NOT dump product ids or long product listings.
+- When the user asks for linked/shared *products* (not only shared attribute names), also return a
+  small sample of concrete product names/titles with their source graph tag (LIMIT 3–5 per shared value).
+  Never return colon-prefixed internal database ids as the primary display name.
+- Analysis / shared-across attribute totals: do NOT dump long product-id listings.
 - Product listing/details across graphs: LIMIT samples (cap 5–10 unless the user gave top-N).
 - Use only labels/relationships declared in the combined <schema> cards.
 """
@@ -119,6 +144,8 @@ MULTI-GRAPH (when seed_params.graph_ids has 2+ product graphs):
 
 class Text2CypherAgent:
     """Schema-aware LLM that writes Neo4j Cypher for product catalog questions."""
+
+    _last_allowlist_error: str = ""
 
     def applicable(self, intention: Intention) -> bool:
         if intention.unsupported:
@@ -180,10 +207,29 @@ class Text2CypherAgent:
         if not getattr(platform.settings, "text2cypher_enabled", True):
             return []
         provider = build_model_provider(platform.settings)
+        from fashion_brain.planning.schema_grounding import (
+            allowed_product_graph_ids,
+            sanitize_graph_param,
+        )
+
+        allowed_ids = allowed_product_graph_ids(platform)
         selected = [str(item) for item in (graph_ids or []) if item]
+        # Cross-catalog / shared asks: bind every discovered product graph when caller
+        # did not already supply a multi-graph scope.
+        if (
+            intention.intent == "shared_products"
+            or str(getattr(intention, "query_shape", "") or "") == "shared_overlap"
+        ) and len(selected) < 2:
+            selected = list(allowed_ids)
         if not selected and graph_id:
             selected = [str(graph_id)]
+        # Drop any guessed ids that are not in the live registry.
+        if allowed_ids:
+            selected = [gid for gid in selected if gid in allowed_ids] or list(allowed_ids[:1])
         primary = selected[0] if selected else str(graph_id or "")
+        if allowed_ids and primary not in allowed_ids:
+            primary = allowed_ids[0]
+            selected = [primary] if not selected else selected
         multi = len(selected) > 1
         if brands is None:
             try:
@@ -194,14 +240,29 @@ class Text2CypherAgent:
                 brands = []
         if schema_card:
             schema = schema_card
-        elif multi:
-            schema = self.multi_schema_card(platform, selected, brands=brands)
         else:
-            schema = self.schema_card(platform, primary, brands=brands)
+            base = (
+                self.multi_schema_card(platform, selected, brands=brands)
+                if multi
+                else self.schema_card(platform, primary, brands=brands)
+            )
+            try:
+                from fashion_brain.planning.schema_cache import get_pruned_schema_card
+
+                schema = get_pruned_schema_card(
+                    platform,
+                    question,
+                    graph_ids=selected,
+                    domain_key="|".join(selected),
+                    fallback_card=base,
+                ) or base
+            except Exception:
+                schema = base
         seeded_params: dict[str, Any] = {"g": primary}
         if prior_params:
             seeded_params.update({k: v for k, v in prior_params.items() if v is not None})
         seeded_params["g"] = primary
+        seeded_params["allowed_graph_ids"] = list(allowed_ids or selected)
         if multi:
             seeded_params["graph_ids"] = list(selected)
         for field, payload in (resolved or {}).items():
@@ -239,6 +300,19 @@ class Text2CypherAgent:
             for key, value in (intention.filters or {}).items()
             if value not in (None, "", [])
         }
+        term_grounding: dict[str, Any] = {}
+        try:
+            from knowledge_graph.retrieval.runtime_catalog import ground_query_terms
+
+            grounded = ground_query_terms(
+                question,
+                platform=platform,
+                graph_ids=selected or None,
+                limit=40,
+            )
+            term_grounding = grounded.to_prompt_dict()
+        except Exception:
+            term_grounding = {}
         system = TEXT2CYPHER_SYSTEM + (_MULTI_GRAPH_RULES if multi else "")
         prompt = (
             f"<schema>\n{schema}\n</schema>\n"
@@ -246,6 +320,7 @@ class Text2CypherAgent:
             f"<active_filters>\n{json.dumps(active_filters, ensure_ascii=False)}\n</active_filters>\n"
             f"<resolved_entities>\n{json.dumps(resolved or {}, ensure_ascii=False)}\n</resolved_entities>\n"
             f"<extracted_entities>\n{json.dumps(extracted or {}, ensure_ascii=False)}\n</extracted_entities>\n"
+            f"<term_grounding>\n{json.dumps(term_grounding, ensure_ascii=False)}\n</term_grounding>\n"
             f"<live_brands>\n{json.dumps((brands or [])[:40], ensure_ascii=False)}\n</live_brands>\n"
             f"<candidates>\n{json.dumps(candidates or [], ensure_ascii=False)}\n</candidates>\n"
             f"<seed_params>\n{json.dumps(seeded_params, ensure_ascii=False)}\n</seed_params>\n"
@@ -267,8 +342,9 @@ class Text2CypherAgent:
             )
         if multi or intention.intent == "shared_products":
             prompt += (
-                "\nCross-catalog / shared-across ask: one Cypher with p.graph IN $graph_ids; "
-                "return shared attribute values with per-graph counts; no product-id scrape.\n"
+                "\nCross-catalog / shared-across ask: one Cypher with p.graph IN $graph_ids using ONLY "
+                "seed_params.allowed_graph_ids; return shared attribute values with per-graph counts. "
+                "If the user asked for linked products, also sample product names (not internal ids).\n"
             )
 
         try:
@@ -279,18 +355,22 @@ class Text2CypherAgent:
                     prompt,
                     timeout=_llm_timeout(platform.settings.request_timeout_seconds),
                     system=system,
+                    temperature=0.0,
                 )
         except Exception as exc:
             LOGGER.warning("text2cypher LLM failed: %s", exc)
             return []
-        plans = _parse_plans(raw, default_graph=primary)
+        plans = _parse_plans(raw, default_graph=primary, allowed_graphs=allowed_ids or selected)
         accepted: list[CypherPlan] = []
+        allowlist = _allowlist_for_question(platform, question, selected)
+        self._last_allowlist_error = ""
         for plan in plans:
             if not plan.cypher.strip():
                 continue
             merged = dict(plan.params or {})
             merged.update(seeded_params)
-            merged["g"] = primary
+            safe_g = sanitize_graph_param(merged.get("g"), allowed_ids or selected) or primary
+            merged["g"] = safe_g
             if multi:
                 merged["graph_ids"] = list(selected)
             plan.params = merged
@@ -299,12 +379,21 @@ class Text2CypherAgent:
             except ValueError as exc:
                 LOGGER.warning("text2cypher rejected unsafe Cypher: %s", exc)
                 continue
+            plan.cypher = _rewrite_graph_literals(plan.cypher, allowed_ids or selected, multi=multi)
+            try:
+                plan.cypher = assert_allowlisted_cypher(plan.cypher, allowlist)
+            except ValueError as exc:
+                self._last_allowlist_error = str(exc)
+                LOGGER.warning("text2cypher rejected allowlist Cypher: %s", exc)
+                continue
             if not _labels_match_schema(platform, primary, plan.cypher, graph_ids=selected):
                 LOGGER.warning("text2cypher rejected Cypher with unknown labels: %s", plan.cypher[:200])
                 continue
             plan.params.setdefault("g", primary)
             accepted.append(plan)
-        return accepted
+            if len(accepted) >= 6:
+                break
+        return accepted[:6]
 
     def retrieve(
         self,
@@ -330,90 +419,182 @@ class Text2CypherAgent:
         if not getattr(platform.settings, "text2cypher_enabled", True):
             return None
 
+        from fashion_brain.planning.schema_grounding import allowed_product_graph_ids
+
+        allowed_ids = allowed_product_graph_ids(platform)
         selected = [str(item) for item in (graph_ids or []) if item]
+        if (
+            intention.intent == "shared_products"
+            or str(getattr(intention, "query_shape", "") or "") == "shared_overlap"
+        ) and len(selected) < 2:
+            selected = list(allowed_ids)
         if not selected and graph_id:
             selected = [str(graph_id)]
+        if allowed_ids:
+            selected = [gid for gid in selected if gid in allowed_ids] or list(allowed_ids[:1])
         primary = selected[0] if selected else str(graph_id or "")
 
-        plans = self.generate(
-            platform,
-            question,
-            intention,
-            primary,
-            graph_ids=selected if len(selected) > 1 else None,
-            resolved=resolved,
-            extracted=extracted,
-            brands=brands,
-            prior_cypher=prior_cypher,
-            prior_params=prior_params,
-        )
-        if not plans:
-            trace_step("text2cypher", "No LLM Cypher — templated fallback")
-            return None
+        linked = dict(resolved or {})
+        if not linked:
+            linked = _auto_resolve_entities(
+                platform, question, intention, extracted=extracted, graph_id=primary
+            )
 
-        first = plans[0]
-        trace_step(
-            "text2cypher",
-            "LLM Cypher ready",
-            result_kind=first.result_kind,
-            params=list(first.params.keys()),
-            cypher=first.cypher[:240],
-            query_count=len(plans),
-            graphs=selected,
-            adapted=bool(prior_cypher),
-        )
+        repair_feedback: str | None = None
+        last_error = ""
+        plans: list[CypherPlan] = []
         sections: list[str] = []
         evidence: list[EvidenceItem] = []
         total_rows = 0
         evidence_graph = "+".join(selected) if len(selected) > 1 else primary
-        for idx, plan in enumerate(plans):
-            try:
-                rows = _execute(platform, principal, plan)
-            except Exception as exc:
-                LOGGER.warning("text2cypher execute failed (%s): %s", plan.label or idx, exc)
-                if len(plans) == 1:
-                    trace_step("text2cypher", "Execute failed — templated fallback", error=str(exc)[:200])
-                    return None
-                continue
-            if (
-                len(plans) == 1
-                and intention.intent in {"product_count", "breakdown", "list", "count"}
-                and not bool(getattr(intention, "analysis", False))
-                and (intention.filters or intention.group_by)
-                and _is_empty_product_result(rows)
-            ):
-                trace_step(
-                    "text2cypher",
-                    "Empty product query — templated fallback",
-                    graph_id=primary,
-                    filters=intention.filters,
-                    group_by=intention.group_by,
-                )
-                return None
-            total_rows += len(rows)
-            heading = (plan.label or plan.explanation or f"Query {idx + 1}").strip()
-            chunk = rows_to_findings(rows, explanation="", cypher=plan.cypher)
-            if len(plans) > 1:
-                sections.append(f"### {heading}\n{chunk}")
-            else:
-                sections.append(
-                    rows_to_findings(rows, explanation=plan.explanation, cypher=plan.cypher)
-                )
-            evidence.append(
-                EvidenceItem(
-                    source_id=evidence_graph,
-                    record_id="text2cypher" if idx == 0 else f"text2cypher_{idx}",
-                    title="LLM Text-to-Cypher" if idx == 0 else f"LLM Text-to-Cypher ({heading})",
-                    excerpt=plan.cypher[:400],
-                    source_path="neo4j",
-                    verification_status="observed",
-                    graph=evidence_graph,
-                    node_id=None,
-                    synthetic=False,
-                )
+        first: CypherPlan | None = None
+
+        for attempt in range(1, 4):
+            plans = self.generate(
+                platform,
+                question,
+                intention,
+                primary,
+                graph_ids=selected if len(selected) > 1 else None,
+                resolved=linked,
+                extracted=extracted,
+                brands=brands,
+                prior_cypher=prior_cypher,
+                prior_params=prior_params,
+                repair_feedback=repair_feedback,
             )
-        if not sections:
-            trace_step("text2cypher", "All Cypher executes failed — templated fallback")
+            if not plans:
+                last_error = "no_cypher_plan"
+                if self._last_allowlist_error:
+                    last_error = "allowlist_reject"
+                    repair_feedback = (
+                        f"Previous Cypher failed ontology relationship allowlist: "
+                        f"{self._last_allowlist_error}. "
+                        "Use only relationship types and [Source, Target] directions from <schema>; "
+                        "prefer OPTIONAL MATCH and LIMIT 20 when broadening."
+                    )
+                else:
+                    repair_feedback = (
+                        "Previous attempt returned no valid read-only Cypher. "
+                        "Write a simpler MATCH using only <schema> labels and resolved ids; "
+                        "broaden filters; use OPTIONAL MATCH for secondary attributes; LIMIT 20."
+                    )
+                trace_step("text2cypher", "Self-heal regenerate", attempt=attempt, reason=last_error)
+                continue
+
+            first = plans[0]
+            trace_step(
+                "text2cypher",
+                "LLM Cypher ready",
+                result_kind=first.result_kind,
+                params=list(first.params.keys()),
+                cypher=first.cypher[:240],
+                query_count=len(plans),
+                graphs=selected,
+                adapted=bool(prior_cypher),
+                attempt=attempt,
+            )
+            sections = []
+            evidence = []
+            total_rows = 0
+            exec_errors: list[str] = []
+            empty_strict = False
+            for idx, plan in enumerate(plans):
+                try:
+                    rows = _execute(platform, principal, plan)
+                except Exception as exc:
+                    LOGGER.warning("text2cypher execute failed (%s): %s", plan.label or idx, exc)
+                    exec_errors.append(str(exc)[:240])
+                    continue
+                if (
+                    len(plans) == 1
+                    and intention.intent in {"product_count", "breakdown", "list", "count"}
+                    and not bool(getattr(intention, "analysis", False))
+                    and (intention.filters or intention.group_by)
+                    and _is_empty_product_result(rows)
+                ):
+                    empty_strict = True
+                    continue
+                # Suppress empty secondary blocks when another plan already has rows
+                # (avoids noisy zero-count / dash tables from a second catalog).
+                if (
+                    len(plans) > 1
+                    and _is_empty_product_result(rows)
+                    and total_rows > 0
+                ):
+                    continue
+                if len(plans) > 1 and _findings_look_empty(rows):
+                    if total_rows > 0:
+                        continue
+                total_rows += len(rows)
+                heading = (plan.label or plan.explanation or f"Query {idx + 1}").strip()
+                chunk = rows_to_findings(rows, explanation="", cypher=plan.cypher)
+                if len(plans) > 1:
+                    if _chunk_is_empty_table(chunk) and total_rows > len(rows):
+                        continue
+                    sections.append(f"### {heading}\n{chunk}")
+                else:
+                    sections.append(
+                        rows_to_findings(rows, explanation=plan.explanation, cypher=plan.cypher)
+                    )
+                evidence.append(
+                    EvidenceItem(
+                        source_id=evidence_graph,
+                        record_id="text2cypher" if idx == 0 else f"text2cypher_{idx}",
+                        title="LLM Text-to-Cypher" if idx == 0 else f"LLM Text-to-Cypher ({heading})",
+                        excerpt=plan.cypher[:400],
+                        source_path="neo4j",
+                        verification_status="observed",
+                        graph=evidence_graph,
+                        node_id=None,
+                        synthetic=False,
+                    )
+                )
+
+            if sections:
+                break
+
+            # Self-heal: feed diagnostic back without exposing Neo4j errors to the user.
+            if exec_errors:
+                last_error = exec_errors[0]
+                repair_feedback = (
+                    f"Neo4j rejected or failed the previous Cypher (attempt {attempt}): {last_error}. "
+                    "Fix syntax using only labels/relationships in <schema>. "
+                    "Prefer OPTIONAL MATCH for secondary attrs; broaden overly strict filters; "
+                    "use resolved ids from <resolved_entities>."
+                )
+            elif empty_strict:
+                last_error = "empty_filtered_result"
+                repair_feedback = (
+                    f"Previous Cypher returned zero products for filters {intention.filters}. "
+                    "Broaden the filter (CONTAINS / normalized_name / OR alternatives), "
+                    "keep graph scope, and avoid inventing values."
+                )
+            else:
+                last_error = "empty_sections"
+                repair_feedback = (
+                    "Previous Cypher produced no usable rows. Simplify the query, keep read-only "
+                    "MATCH/RETURN, and use OPTIONAL MATCH for optional attributes."
+                )
+            trace_step(
+                "text2cypher",
+                "Self-heal regenerate",
+                attempt=attempt,
+                reason=last_error[:160],
+            )
+            sections = []
+            evidence = []
+        else:
+            # Exhausted attempts
+            trace_step(
+                "text2cypher",
+                "Self-heal exhausted — templated fallback",
+                error=last_error[:200],
+            )
+            return None
+
+        if not sections or first is None:
+            trace_step("text2cypher", "No findings after self-heal — templated fallback")
             return None
         preface = ""
         if len(plans) > 1 and first.explanation:
@@ -429,19 +610,119 @@ class Text2CypherAgent:
             caveats.append(f"Ran {len(plans)} analysis Cyphers (overview + attribute breakdowns).")
         if prior_cypher:
             caveats.append("Adapted prior turn Cypher (did not rebuild past filters from scratch).")
-        if resolved:
-            caveats.append("Entity-linked ids used for facet filters.")
+        if linked:
+            caveats.append("Entity-linked / canonical-resolved ids used for facet filters.")
         return Retrieved(
             text=text,
             evidence=evidence,
             caveats=caveats,
             cypher=first.cypher,
             cypher_params=dict(first.params or {}),
-            resolved=dict(resolved or {}),
+            resolved=dict(linked or {}),
             extracted=dict(extracted or {}),
             unavailable=[],
             synthetic_data=False,
         )
+
+
+def _allowlist_for_question(platform, question: str, graph_ids: list[str] | None) -> dict[str, list[list[str]]]:
+    """Ontology relationship allowlist for selected domains (fail-open → {})."""
+
+    try:
+        from fashion_brain.planning.domain_schema_filter import prune_live_schema_for_question
+
+        pruned = prune_live_schema_for_question(
+            platform, question, preferred_graphs=list(graph_ids or []) or None
+        )
+        allow = pruned.get("allowlist") if isinstance(pruned, dict) else None
+        if isinstance(allow, dict) and allow:
+            return allow
+    except Exception:
+        pass
+    try:
+        from knowledge_graph.ontology_registry import get_ontology_registry
+
+        return get_ontology_registry(platform).allowlist_for_domains(None)
+    except Exception:
+        return {}
+
+
+def _auto_resolve_entities(
+    platform,
+    question: str,
+    intention: Intention,
+    *,
+    extracted: dict[str, Any] | None = None,
+    graph_id: str | None = None,
+) -> dict[str, Any]:
+    """Ontology fuzzy resolve first, then Neo4j canonical/fulltext for leftovers."""
+
+    out: dict[str, Any] = {}
+
+    try:
+        from knowledge_graph.linking.fuzzy_entity_resolver import resolve_fuzzy_entities
+
+        fuzzy = resolve_fuzzy_entities(question, platform=platform)
+        payload = fuzzy.to_resolved_payload()
+        for etype, bucket in (payload.get("by_type") or {}).items():
+            if not isinstance(bucket, dict) or not bucket.get("ids"):
+                continue
+            field = str(etype).casefold()
+            out[field] = dict(bucket)
+        if payload.get("fuzzy_hits"):
+            out["_fuzzy"] = {
+                "hits": payload["fuzzy_hits"],
+                "unresolved": payload.get("unresolved") or [],
+            }
+    except Exception as exc:
+        LOGGER.debug("fuzzy resolve skipped: %s", exc)
+
+    try:
+        from knowledge_graph.linking.canonical_resolve import (
+            resolve_canonical_entity,
+            resolve_dynamic_entity,
+        )
+    except Exception:
+        return out
+
+    terms: list[tuple[str, str]] = []
+    for key, value in (intention.filters or {}).items():
+        if value in (None, ""):
+            continue
+        if key in {"brand", "buyer", "material", "color", "category", "garment", "garment_type"}:
+            for part in re.split(r"\s*\|\s*", str(value)):
+                part = part.strip()
+                if part:
+                    terms.append((key, part))
+    for key, value in (extracted or {}).items():
+        if key in {"brand", "buyer", "material", "color", "category"} and value:
+            terms.append((str(key), str(value)))
+    for match in re.finditer(r"\b(\d{6,12})\b", question or ""):
+        terms.append(("product", match.group(1)))
+    for surface in (out.get("_fuzzy") or {}).get("unresolved") or []:
+        if surface and len(str(surface)) >= 3:
+            terms.append(("entity", str(surface)))
+
+    for field, term in terms[:12]:
+        existing = out.get(field)
+        if isinstance(existing, dict) and existing.get("ids") and field != "entity":
+            continue
+        try:
+            result = resolve_dynamic_entity(platform, term, graph_id=graph_id)
+            if result.status not in {"matched", "ambiguous"} or not result.hits:
+                result = resolve_canonical_entity(platform, term, graph_id=graph_id)
+        except Exception:
+            continue
+        if result.status not in {"matched", "ambiguous"} or not result.hits:
+            continue
+        payload = result.to_dict()
+        if isinstance(existing, dict) and existing.get("ids"):
+            ids = list(dict.fromkeys([*(existing.get("ids") or []), *(payload.get("ids") or [])]))
+            names = list(dict.fromkeys([*(existing.get("names") or []), *(payload.get("names") or [])]))
+            payload["ids"] = ids
+            payload["names"] = names
+        out[field] = payload
+    return out
 
 
 def _is_empty_product_result(rows: list[dict]) -> bool:
@@ -485,7 +766,12 @@ def _llm_timeout(seconds: float | None) -> float | None:
     return min(20.0, float(seconds))
 
 
-def _parse_plans(raw: str, *, default_graph: str) -> list[CypherPlan]:
+def _parse_plans(
+    raw: str,
+    *,
+    default_graph: str,
+    allowed_graphs: list[str] | None = None,
+) -> list[CypherPlan]:
     from fashion_brain.ask import _extract_json_object
 
     data = _extract_json_object(raw or "")
@@ -500,14 +786,26 @@ def _parse_plans(raw: str, *, default_graph: str) -> list[CypherPlan]:
         for item in queries:
             if not isinstance(item, dict):
                 continue
-            plan = _plan_from_dict(item, default_graph=default_graph, explanation=explanation)
+            plan = _plan_from_dict(
+                item,
+                default_graph=default_graph,
+                explanation=explanation,
+                allowed_graphs=allowed_graphs,
+            )
             if plan is not None:
                 plans.append(plan)
+            if len(plans) >= 6:
+                break
         if plans:
             if explanation and not plans[0].explanation:
                 plans[0].explanation = explanation
-            return plans
-    plan = _plan_from_dict(data, default_graph=default_graph, explanation=explanation)
+            return plans[:6]
+    plan = _plan_from_dict(
+        data,
+        default_graph=default_graph,
+        explanation=explanation,
+        allowed_graphs=allowed_graphs,
+    )
     return [plan] if plan is not None else []
 
 
@@ -523,7 +821,10 @@ def _plan_from_dict(
     *,
     default_graph: str,
     explanation: str = "",
+    allowed_graphs: list[str] | None = None,
 ) -> CypherPlan | None:
+    from fashion_brain.planning.schema_grounding import sanitize_graph_param
+
     cypher = str(data.get("cypher") or "").strip()
     if not cypher:
         return None
@@ -536,7 +837,15 @@ def _plan_from_dict(
             clean_params[str(key)] = value
         elif isinstance(value, list) and all(isinstance(x, (str, int, float, bool)) for x in value):
             clean_params[str(key)] = value
-    clean_params.setdefault("g", default_graph)
+    allow = list(allowed_graphs or [])
+    if allow:
+        safe = sanitize_graph_param(clean_params.get("g"), allow)
+        clean_params["g"] = safe or default_graph
+        if "graph_ids" in clean_params and isinstance(clean_params["graph_ids"], list):
+            cleaned = [str(x) for x in clean_params["graph_ids"] if str(x) in allow]
+            clean_params["graph_ids"] = cleaned or list(allow)
+    else:
+        clean_params.setdefault("g", default_graph)
     return CypherPlan(
         cypher=cypher,
         params=clean_params,
@@ -545,6 +854,53 @@ def _plan_from_dict(
         source="llm",
         label=str(data.get("label") or "").strip(),
     )
+
+
+def _rewrite_graph_literals(cypher: str, allowed: list[str], *, multi: bool) -> str:
+    """Replace invented ``.graph = '…'`` / ``IN ['…']`` literals with param forms.
+
+    Only keeps string literals that exactly match an allowed product-graph id;
+    otherwise rewrites the predicate to ``$g`` or ``$graph_ids``.
+    """
+
+    text = cypher or ""
+    if not text or not allowed:
+        return text
+    allow = set(allowed)
+    text = re.sub(
+        r"(\.?graph\s*=\s*)['\"]([^'\"]+)['\"]",
+        lambda m: f"{m.group(1)}$g" if m.group(2) not in allow else m.group(0),
+        text,
+        flags=re.I,
+    )
+    if multi:
+        text = re.sub(
+            r"(\.?graph\s+IN\s*)\[[^\]]*\]",
+            r"\1$graph_ids",
+            text,
+            flags=re.I,
+        )
+    return text
+
+
+def _findings_look_empty(rows: list[dict[str, Any]] | None) -> bool:
+    if not rows:
+        return True
+    return _is_empty_product_result(rows)
+
+
+def _chunk_is_empty_table(chunk: str) -> bool:
+    text = (chunk or "").strip().casefold()
+    if not text:
+        return True
+    if "0 rows" in text or "no rows" in text:
+        return True
+    # Markdown tables whose numeric cells are all zero / em-dash.
+    if "|" in text and re.search(r"\|\s*(0|—|-|n/?a)\s*\|", text) and not re.search(
+        r"\|\s*[1-9]\d*", text
+    ):
+        return True
+    return False
 
 
 def _labels_match_schema(

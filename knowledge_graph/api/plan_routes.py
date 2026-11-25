@@ -16,6 +16,7 @@ from knowledge_graph.pipeline.build_status import build_graph, build_status
 from knowledge_graph.pipeline.kg_build import build_new_kg
 from knowledge_graph.retrieval.brain import BrainRetrieveRequest, retrieve
 from knowledge_graph.retrieval.metadata import discover_values, metadata_overview
+from knowledge_graph.retrieval.kg_stats import meta_overview
 from knowledge_graph.sources.db_connections import DbConnectionBody, get_connection, list_connections, test_connection, upsert_connection
 from knowledge_graph.sources.db_inspect import inspect_ecom_connection
 from knowledge_graph.sources.mapping_store import get_mapping, put_mapping
@@ -318,6 +319,22 @@ def register_plan_api_routes(app, current_platform, current_principal, current_j
             limit=limit,
             offset=offset,
         )
+
+    @app.get("/api/metadata/stats")
+    def api_metadata_stats(
+        graph_id: str,
+        platform=Depends(current_platform),
+        _principal=Depends(current_principal),
+    ):
+        """Persisted kg_stats metadata: name, column definitions, unique values + counts."""
+
+        generated = getattr(getattr(platform, "settings", None), "generated", None)
+        payload = meta_overview(graph_id, generated)
+        if payload is None:
+            from knowledge_graph.errors import NotFoundError
+
+            raise NotFoundError(f"No kg_stats metadata for graph '{graph_id}'.")
+        return payload
 
     @app.get("/api/db/connection")
     def api_db_connection(

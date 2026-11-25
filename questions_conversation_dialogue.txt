@@ -1,0 +1,69 @@
+================================================================================
+Fashion Brain — conversational dialogue script (one chat session)
+Natural merchant / buyer turns: basic → continuous → analysis → confirm
+Updated: 2026-11-18 (dialogue wording only)
+================================================================================
+
+How to use
+----------
+1. Open one Fashion Brain conversation (port 8000) and ask turns T1→T9 in order.
+2. Or run the automated store:
+     $env:PYTHONPATH = "."
+     python scripts/eval_conversation_questionnaire.py --script merchant_dialogue --no-llm-response --fast-fallback
+3. Live Q+A lands in:
+     data/generated/conversation_eval/merchant_dialogue_qa.json          (question + answer only)
+     data/generated/conversation_eval/merchant_dialogue_transcript.md   (readable dialogue)
+     data/generated/conversation_eval/merchant_dialogue_session.json    (full eval dump)
+     data/generated/conversation_eval/merchant_dialogue_turn_XX.json    (per turn)
+
+
+--------------------------------------------------------------------------------
+DIALOGUE (ask in this order — same conversation id)
+--------------------------------------------------------------------------------
+
+T1  [basic count]
+    You:  How many products does Primark have?
+    Want: Primark product total from catalog metadata / kg_stats (not a quiz).
+
+T2  [continuous — same brand]
+    You:  And how many of them are sweaters?
+    Want: Keep Primark; stay on prior catalog (ecom if T1 was ecom); sweater slice.
+
+T3  [continuous — same slice + color]
+    You:  Of those Primark sweaters, how many are red?
+    Want: Primark + sweater + red on the same catalog as T2. No dual ecom+PLM fan-out.
+
+T4  [basic compare — full catalog totals]
+    You:  Overall, who has more products — Primark or Zara?
+    Want: Full brand totals (not sticky red from T3). Clear winner or side-by-side.
+
+T5  [analysis opener → accuracy confirm]
+    You:  Give me a full analysis of Primark
+    Want: Preview only — basics + resolved ask + confirmed filters.
+          Ask if it looks accurate (reply yes). NOT "what would you like to explore".
+
+T6  [confirm final report]
+    You:  yes
+    Want: Full Primark analysis report (whole brand, not red-only). Session brand stays Primark.
+
+T7  [continuous after analysis — category]
+    You:  Show Primark category breakdown
+    Want: Primark category breakdown. Never invent a new brand.
+
+T8  [continuous — color focus]
+    You:  What about color breakdown for them?
+    Want: Primark color distribution; keep prior party from chat.
+
+T9  [switch brand in same session]
+    You:  How many products does Zara have?
+    Want: Zara total (new party). Do not keep Primark as the only brand.
+
+
+--------------------------------------------------------------------------------
+Expected behavior checklist
+--------------------------------------------------------------------------------
+- Continuous "of them" / "of those" / "for them" keeps Primark until a new brand is named.
+- After T1/T2 land on one product catalog, T3 must not open the other catalog unless asked.
+- Overall / full-brand asks clear sticky color/garment from earlier slices.
+- Analysis opener → final_confirm preview → yes → full report.
+- Clarification slots never become last_graph_id (e.g. scope_or_direction).

@@ -84,8 +84,6 @@ _GENERIC_SCOPE = frozenset(
         "which",
         "what",
         "we",
-        "what",
-        "which",
         # Shared-material / interconnect phrasing — never invent as category/color.
         "share",
         "shares",
@@ -625,6 +623,8 @@ class EntityExtractAgent:
 class _EmptySchema:
     filter_keys: list[str] = []
     facet_types: list[str] = []
+    entity_types: list[str] = []
+    product_properties: list[str] = []
     canonical_hints: list = []
     scope_tokens: list[str] = []
 

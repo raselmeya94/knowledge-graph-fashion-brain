@@ -9,8 +9,9 @@ class _Provider:
     def __init__(self):
         self.prompt = ""
 
-    def complete(self, prompt, *, timeout, system=None):
+    def complete(self, prompt, *, timeout, system=None, temperature=None, **_kwargs):
         self.prompt = prompt
+        self.temperature = temperature
         return json.dumps(
             {
                 "cypher": (

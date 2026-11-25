@@ -12,7 +12,7 @@ $env:PYTHONPATH = "."
 python -m knowledge_graph.cli serve
 ```
 
-That listens on http://127.0.0.1:8001.
+That listens on `0.0.0.0:8001` (LAN). Local docs: http://127.0.0.1:8001 · from another device: `http://<pc-ip>:8001`.
 
 **New device / clone → run:** see **[FRESH_DEVICE.md](FRESH_DEVICE.md)**  
 
@@ -20,6 +20,7 @@ That listens on http://127.0.0.1:8001.
 Request JSON lives in [`../postman/bodies/`](../postman/bodies/). Collection: [`../postman/knowledge_graph.postman_collection.json`](../postman/knowledge_graph.postman_collection.json).
 
 **API documentation:** see **[API.md](API.md)** (auth, routes, request/response examples).  
+**Relationships & user columns (per KG):** see **[README_RELATIONSHIP.md](README_RELATIONSHIP.md)**.  
 Interactive Swagger: http://127.0.0.1:8001/docs · OpenAPI JSON: [`openapi.json`](openapi.json).
 
 Then start Fashion Brain on port 8000 with `FASHIONGPT_KG_URL=http://127.0.0.1:8001`.

@@ -4,32 +4,34 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fashion Brain — Sign in</title>
-  <link rel="stylesheet" href="/shared/login.css" />
+  <link rel="stylesheet" href="/shared/login.css?v=chatgpt-ui-20261118" />
 </head>
 <body>
   <div class="login-shell">
-    <section class="login-hero" aria-label="Brand">
-      <p class="hero-kicker">Product knowledge</p>
-      <h1 class="brand">Fashion Brain</h1>
-      <p class="tag">Ask PLM data and the industry graph — answers that stay grounded.</p>
-    </section>
-
     <div class="login-panel">
       <div class="login-card">
-        <h1 id="headline">Sign in</h1>
-        <p class="lede" id="lede">Users open chat. Admins open the knowledge-graph console.</p>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">FB</div>
+          <h1 class="brand">Fashion Brain</h1>
+          <p class="tag">Grounded answers from your product knowledge graph.</p>
+        </div>
+
+        <h1 id="headline">Welcome back</h1>
+        <p class="lede" id="lede">Sign in to continue to chat. Admins open the KG console.</p>
+
         <div class="tabs" role="tablist">
           <button type="button" class="active" id="tab-login" data-mode="login">Sign in</button>
           <button type="button" id="tab-register" data-mode="register">Create account</button>
         </div>
+
         <form id="form">
           <div class="field">
             <label for="email">Email</label>
-            <input id="email" name="email" type="email" autocomplete="username" required />
+            <input id="email" name="email" type="email" autocomplete="username" required placeholder="you@company.com" />
           </div>
           <div class="field">
             <label for="password">Password</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" />
+            <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="••••••••" />
           </div>
           <div id="register-fields" hidden>
             <div class="row-2">
@@ -56,7 +58,7 @@
           </div>
           <button class="btn" id="submit" type="submit">Continue</button>
           <p class="msg" id="msg" aria-live="polite"></p>
-          <p class="hint">After login you are routed by role: user → chat, admin → KG console.</p>
+          <p class="hint">Users go to chat · Admins go to the knowledge-graph console</p>
         </form>
       </div>
     </div>
@@ -84,9 +86,9 @@
       document.getElementById("tab-login").classList.toggle("active", next === "login");
       document.getElementById("tab-register").classList.toggle("active", next === "register");
       registerFields.hidden = next !== "register";
-      headline.textContent = next === "login" ? "Sign in" : "Create account";
+      headline.textContent = next === "login" ? "Welcome back" : "Create your account";
       lede.textContent = next === "login"
-        ? "Users open chat. Admins open the knowledge-graph console."
+        ? "Sign in to continue to chat. Admins open the KG console."
         : "Pick a role. Admin accounts can build and review the knowledge graph.";
       submit.textContent = next === "login" ? "Continue" : "Create account";
       msg.textContent = "";

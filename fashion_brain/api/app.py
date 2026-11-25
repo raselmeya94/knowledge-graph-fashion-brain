@@ -735,16 +735,39 @@ def create_app(platform: Platform | None = None, *, ingest_on_startup: bool | No
         principal: Principal = Depends(current_principal),
         store: FashionBrainStore = Depends(current_store),
     ):
+        """Same internal catalog route as /ws/ask and /v1/conversations/.../messages."""
+
         history, conversation_id = _resolve_history(body, principal, store)
+        user_id = _user_id(principal)
         graph_id = body.graph_id
-        if graph_id is None and conversation_id:
-            conv = store.get_conversation(conversation_id, _user_id(principal))
-            graph_id = (conv or {}).get("graph_id")
-        answer = await _run(platform, answer_question, platform, body.question, principal, history, graph_id)
+        session_state: dict = {}
+        if conversation_id:
+            conv = store.get_conversation(conversation_id, user_id)
+            if graph_id is None:
+                graph_id = (conv or {}).get("graph_id")
+            # Sticky session memory — same hydrate path as WebSocket / conversation messages.
+            session_state = _hydrate_session_from_messages(
+                store, conversation_id, store.get_session_state(conversation_id)
+            )
+            if graph_id and not session_state.get("last_graph_id"):
+                session_state["last_graph_id"] = graph_id
+        answer = await _run(
+            platform,
+            answer_question,
+            platform,
+            body.question,
+            principal,
+            history,
+            graph_id,
+            session_state,
+        )
         if conversation_id:
             store.add_message(conversation_id, "user", body.question)
             store.add_message(conversation_id, "assistant", answer.answer)
-            _set_answer_title(store, conversation_id, _user_id(principal), answer.answer)
+            _persist_session_memory(
+                store, conversation_id, user_id, session_state, answer, pinned=body.graph_id
+            )
+            _set_answer_title(store, conversation_id, user_id, answer.answer)
             store.touch_conversation(conversation_id)
         return answer
 
@@ -1352,24 +1375,15 @@ def _with_memory(history: list[dict[str, str]], store: FashionBrainStore, user_i
 
 
 def _graph_from_routes(routes: list | None) -> str | None:
-    skip = {"shared", "master", "kg_system", "analytical_tool", "reuse", "insufficient_coverage", "system_meta"}
+    """Pick a real product graph id from routes — never intents or clarification slots."""
+
     for item in reversed(list(routes or [])):
         text = str(item or "").strip()
-        if not text or text in skip:
+        if not text:
             continue
-        if text in {
-            "product_count",
-            "products",
-            "specification",
-            "product_details",
-            "parent_category",
-            "shared_products",
-            "news",
-            "catalog",
-            "live_sql",
-        }:
-            continue
-        return text
+        # Only sticky real catalogs (…_products). Never clarification slots or intents.
+        if text.endswith("_products") or text in {"ecom_products", "plmex_products", "own_products"}:
+            return text
     return None
 
 
@@ -1420,18 +1434,25 @@ def _resolve_history(
     store: FashionBrainStore,
     fallback: list[dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, str]], str | None]:
-    if body.conversation_id:
-        user_id = _user_id(principal)
-        conversation = store.get_conversation(body.conversation_id, user_id)
-        if not conversation:
-            raise NotFoundError("Conversation was not found.")
-        history = store.history_for_ask(body.conversation_id)
-        history = _with_memory(history, store, user_id)
-        return history, body.conversation_id
-    history = [turn.model_dump() for turn in body.history] or list(fallback or [])
-    if principal.subject not in {"api", "anonymous"}:
-        history = _with_memory(history, store, principal.subject)
-    return history, None
+    started = time.perf_counter()
+    try:
+        if body.conversation_id:
+            user_id = _user_id(principal)
+            conversation = store.get_conversation(body.conversation_id, user_id)
+            if not conversation:
+                raise NotFoundError("Conversation was not found.")
+            history = store.history_for_ask(body.conversation_id)
+            history = _with_memory(history, store, user_id)
+            return history, body.conversation_id
+        history = [turn.model_dump() for turn in body.history] or list(fallback or [])
+        if principal.subject not in {"api", "anonymous"}:
+            history = _with_memory(history, store, principal.subject)
+        return history, None
+    finally:
+        LOGGER.info(
+            "ask_stage stage=history_retrieval ms=%.1f",
+            (time.perf_counter() - started) * 1000.0,
+        )
 
 
 async def _receive_json(websocket: WebSocket):
@@ -1461,7 +1482,13 @@ def _visible_pieces(event: dict) -> list[dict]:
         return [event]
     if kind != "answer" or len(text) <= 12:
         return [event]
-    return [{"type": "answer", "text": text[index : index + 12]} for index in range(0, len(text), 12)]
+    # Never split ```chart JSON into 12-char crumbs (UI shows {"type": "bar", "title…).
+    try:
+        from fashion_brain.agents.answer_format import chunk_preserving_charts
+
+        return [{"type": "answer", "text": piece} for piece in chunk_preserving_charts(text, 12)]
+    except Exception:
+        return [{"type": "answer", "text": text[index : index + 12]} for index in range(0, len(text), 12)]
 
 
 def _emit(send_stream, event: dict) -> bool:

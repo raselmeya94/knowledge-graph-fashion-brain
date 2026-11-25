@@ -18,7 +18,7 @@ from knowledge_graph.errors import ValidationFailed
 from knowledge_graph.ids import edge_id, register_source_identity, slug
 from knowledge_graph.logging_config import get_logger
 from knowledge_graph.models import GraphEdge, GraphNode
-from knowledge_graph.ontology import load_ontology, normalize_name
+from knowledge_graph.ontology import facet_name_fields, load_ontology, normalize_name
 
 LOGGER = get_logger("knowledge_graph.ecom_sync")
 
@@ -311,7 +311,6 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                 (start_id, rel["start_type"], rel["start_name"]),
                 (end_id, end_type, rel["end_name"]),
             ):
-                nn = normalize_name(node_name)
                 graph.upsert_node(
                     GraphNode(
                         id=node_id,
@@ -319,9 +318,8 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                         graph=GRAPH_ID,
                         properties={
                             "id": node_id,
-                            # Facet display name = normalized (lowercase); matching uses normalized_name.
-                            "name": nn or str(node_name or "").strip(),
-                            "normalized_name": nn,
+                            # Keep original display in name; match via normalized_name only.
+                            **facet_name_fields(node_name),
                             "entity_type": node_type,
                             "lifecycle": "active",
                             "prov_source_id": GRAPH_ID,
@@ -347,7 +345,6 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
             edges += 1
             continue
 
-        nn = normalize_name(rel["end_name"])
         graph.upsert_node(
             GraphNode(
                 id=end_id,
@@ -355,8 +352,7 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
                 graph=GRAPH_ID,
                 properties={
                     "id": end_id,
-                    "name": nn or str(rel.get("end_name") or "").strip(),
-                    "normalized_name": nn,
+                    **facet_name_fields(rel.get("end_name")),
                     "entity_type": end_type,
                     "lifecycle": "active",
                     "prov_source_id": GRAPH_ID,

@@ -26,7 +26,7 @@
 }
 .kg-section-title h3 {
   margin: 0;
-  font-family: "Fraunces", Georgia, serif;
+  font-family: "Outfit", ui-sans-serif, sans-serif;
   font-size: 21px;
 }
 .kg-section-title p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
@@ -57,7 +57,7 @@
   color: var(--muted);
   font-size: 13px;
 }
-.kg-inspect-tile strong { color: var(--ink); font: 700 22px "Fraunces", Georgia, serif; }
+.kg-inspect-tile strong { color: var(--ink); font: 700 22px "Outfit", ui-sans-serif, sans-serif; }
 .kg-lists { margin-top: 14px; }
 .kg-response-details { margin-top: 12px; }
 .kg-response-details summary { color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer; }

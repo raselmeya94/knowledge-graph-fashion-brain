@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from knowledge_graph.access import Principal, allows
 from knowledge_graph.models import EvidenceItem
@@ -21,6 +22,64 @@ def _cypher_token(value: str) -> str:
     text = str(value or "").strip().casefold()
     text = re.sub(r"[^a-z0-9\-]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _soft_match_needles(value: str) -> list[str]:
+    """Universal case/plural/spacing needles for ANY facet value in Neo4j.
+
+    Applies to every column (category, color, gender, brand labels, material,
+    garment_type, AI tags, …) — not garment-only. Example: Sweaters / sweater /
+    SWEATER all become searchable needles against stored ``sweater``.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    token = _cypher_token(raw).replace("-", " ")
+    compact = re.sub(r"\s+", "", token)
+    needles: list[str] = []
+
+    def _add(item: str) -> None:
+        t = str(item or "").strip().casefold()
+        t = re.sub(r"\s+", " ", t)
+        if t and t not in needles:
+            needles.append(t)
+
+    _add(token)
+    _add(normalize_name(raw))
+    if compact and compact != token:
+        _add(compact)
+
+    try:
+        from knowledge_graph.retrieval.kg_stats import _plural_forms
+
+        seeds = list(needles)
+        for seed in seeds:
+            for form in _plural_forms(seed):
+                _add(form)
+            # Also pluralize each whitespace token (navy blue → navy blues).
+            parts = seed.split()
+            if len(parts) > 1:
+                for i, part in enumerate(parts):
+                    for form in _plural_forms(part):
+                        alt = list(parts)
+                        alt[i] = form
+                        _add(" ".join(alt))
+    except Exception:
+        if token.endswith("s") and len(token) > 2:
+            _add(token[:-1])
+        else:
+            _add(token + "s")
+
+    # Optional known garment surface forms (still general needle list).
+    try:
+        from fashion_brain.ask import _GARMENT_MATCH_ALIASES
+
+        for alias in _GARMENT_MATCH_ALIASES.get(normalize_name(token), ()):
+            _add(_cypher_token(alias).replace("-", " "))
+    except Exception:
+        pass
+    return needles
 
 
 def _party_match_token(value: str) -> str:
@@ -149,6 +208,37 @@ def is_analysis_facet_attr(key: str) -> bool:
     if tokens & _META_ATTR_TOKENS:
         return False
     return True
+
+
+def _pluralize_label(label: str) -> str:
+    if label.endswith("y") and len(label) > 1 and label[-2] not in "aeiou":
+        return label[:-1] + "ies"
+    if label.endswith(("s", "x", "z", "ch", "sh")):
+        return label + "es"
+    return label + "s"
+
+
+_ANALYSIS_FIELD_LABELS = {
+    "plm_main_category": "Main category",
+    "plm_sub_category": "Product group",
+    "plm_sub_sub_category": "Product type",
+    "garment_type": "Garment type",
+    "color_family": "Colour family",
+    "care_instruction": "Care",
+    "season_year": "Season year",
+    "color": "Colour",
+}
+
+
+def _human_analysis_field_label(field: str) -> str:
+    """Buyer-friendly facet title (hide raw PLM column chrome)."""
+
+    key = str(field or "").strip().casefold().replace(" ", "_").replace("-", "_")
+    if key in _ANALYSIS_FIELD_LABELS:
+        return _ANALYSIS_FIELD_LABELS[key]
+    label = key.replace("_", " ").strip()
+    label = re.sub(r"(?i)^plm\s+", "", label)
+    return label[:1].upper() + label[1:] if label else "Attribute"
 
 
 def _facet_worth_showing(
@@ -303,12 +393,118 @@ def resolve_analysis_fields(
     return rel_order + rest
 
 
+def resolve_focused_analysis_field(
+    platform,
+    graph_id: str,
+    group_by: str | None,
+    filters: dict | None = None,
+) -> list[str]:
+    """Pick one analysis facet for focused group_by, with hierarchy role fallbacks.
+
+    LLM/user often say ``by category``; ecom/plmex store that role under different
+    columns. Try remapped primary then category-like siblings until a usable mix
+    appears (not mostly unspecified).
+    """
+
+    from fashion_brain.planning.semantic_field_map import resolve_group_by_candidates
+
+    candidates = resolve_group_by_candidates(group_by, graph_id)
+    if not candidates:
+        return []
+    clean = _align_party_filters_for_graph(
+        platform, graph_id, clean_product_filters(dict(filters or {}))
+    )
+    total = cypher_count_products(platform, graph_id, clean)
+    if total is None:
+        total = 0
+    for field in candidates:
+        grouped = cypher_group_by(platform, graph_id, str(field), clean)
+        if grouped is None:
+            continue
+        usable = _usable_ranked(grouped, str(field))
+        facet_total = int(total) if total else sum(int(n) for _, n in grouped) or 0
+        if not usable or facet_total <= 0:
+            continue
+        if not _facet_worth_showing(usable, total=max(facet_total, 1)):
+            continue
+        # Thin tails after dropping unspecified do not count as a real mix —
+        # fall through to role-similar columns (family/section/…).
+        covered = sum(int(n) for _, n in usable)
+        if covered / float(facet_total) < 0.15:
+            continue
+        return [str(field)]
+    # Last resort: keep the remapped primary so callers still run one field.
+    return [candidates[0]]
+
+
+def resolve_group_by_with_fallback(
+    platform,
+    graph_id: str,
+    group_by: str | None,
+    filters: dict | None = None,
+) -> str | None:
+    """Count/breakdown path: remap + hierarchy fallback to a facet that has data."""
+
+    picked = resolve_focused_analysis_field(platform, graph_id, group_by, filters)
+    return picked[0] if picked else (str(group_by).strip() if group_by else None)
+
+
+_GRAPH_SCOPE_FILTER_NOISE = frozenset(
+    {
+        "plm",
+        "plmex",
+        "plm-ex",
+        "ecom",
+        "ecomm",
+        "ecommerce",
+        "commerce",
+        "own",
+        "own_products",
+        "ecom_products",
+        "plmex_products",
+        "catalog",
+        "catalogue",
+        "database",
+        "graph",
+        "graphs",
+        "knowledge",
+        "kg",
+        "source",
+        "sources",
+        "system",
+        "data",
+        "are in plm",
+        "in plm",
+        "in plmex",
+    }
+)
+
+
 def clean_product_filters(filters: dict) -> dict:
     cleaned = {key: value for key, value in (filters or {}).items() if value not in (None, "")}
     cleaned.pop("parent_of", None)  # structural lookup — handled in brain, not product WHERE
     # Intention already remaps buyer→brand for brand-only graphs. Keep buyer for PLM/HAS_BUYER.
     cleaned.pop("season_code", None)
     cleaned.pop("upcoming", None)
+    # "PLM data" / graph names are scope, never brand/buyer filters.
+    _currency_noise = {
+        "usd", "gbp", "eur", "sek", "dkk", "nok", "pln", "czk", "chf", "jpy", "cny",
+        "aud", "cad", "dollar", "dollars", "pound", "pounds", "sterling", "euro",
+        "euros", "currency", "currencies", "both",
+    }
+    for key in ("brand", "buyer"):
+        raw = cleaned.get(key)
+        if raw in (None, ""):
+            continue
+        want = normalize_name(str(raw))
+        if want in _currency_noise or want in _GRAPH_SCOPE_FILTER_NOISE or any(
+            want == noise or want.startswith(noise + " ") for noise in ("plm", "plmex", "ecom", "own")
+        ):
+            cleaned.pop(key, None)
+    brand = cleaned.get("brand")
+    buyer = cleaned.get("buyer")
+    if brand and buyer and _party_match_token(str(brand)) == _party_match_token(str(buyer)):
+        cleaned.pop("buyer", None)
     # season=2028 → season_year; season=winter → season_name
     season = cleaned.pop("season", None)
     if season not in (None, ""):
@@ -352,8 +548,44 @@ def clean_product_filters(filters: dict) -> dict:
 
 
 def _session(platform):
+    """Return a session factory that logs every Cypher hit to the serve terminal."""
+
     factory = getattr(platform.graph, "_session", None)
-    return factory if callable(factory) else None
+    if not callable(factory):
+        return None
+
+    class _LoggingSession:
+        def __init__(self, session):
+            self._session = session
+
+        def run(self, query, parameters=None, **kwargs):
+            try:
+                from knowledge_graph.retrieval.cypher_log import log_cypher_hit
+
+                params = parameters if parameters is not None else kwargs.get("parameters")
+                log_cypher_hit(str(query), params if isinstance(params, dict) else None, source="template")
+            except Exception:
+                pass
+            if parameters is None:
+                return self._session.run(query, **kwargs)
+            return self._session.run(query, parameters, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._session, name)
+
+    class _LoggingSessionFactory:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            self._cm = factory()
+            self._raw = self._cm.__enter__()
+            return _LoggingSession(self._raw)
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._cm.__exit__(exc_type, exc, tb)
+
+    return _LoggingSessionFactory
 
 
 def _brand_where_cypher() -> str:
@@ -415,10 +647,30 @@ _KNOWN_FILTERS = frozenset(
 _PROP_FILTER_FIELDS = frozenset({"composition", "gsm", "weight", "unit", "cuttable_width"})
 
 
-def _rel_filter_clause(field: str, param: str) -> str:
-    """Match a facet via product property and/or its ontology relationships."""
+def _rel_filter_clause(field: str, param: str, *, needles_param: str | None = None) -> str:
+    """Match a facet via product property and/or its ontology relationships.
+
+    When ``needles_param`` is set, match any soft needle (sweater/sweaters) via
+    equality or CONTAINS against property and related entity names.
+    """
 
     rels = _REL_FIELDS.get(field) or ()
+    if needles_param:
+        prop = (
+            f"ANY(needle IN ${needles_param} WHERE toLower(coalesce(toString(p.`{field}`),'')) = needle "
+            f"OR toLower(coalesce(toString(p.`{field}`),'')) CONTAINS needle)"
+        )
+        if not rels:
+            return f"({prop})"
+        rel_alt = "|".join(rels)
+        return (
+            f"("
+            f"{prop} "
+            f"OR EXISTS {{ MATCH (p)-[:{rel_alt}]->(x:Entity) "
+            f"WHERE ANY(needle IN ${needles_param} WHERE toLower(coalesce(x.name,'')) = needle "
+            f"OR toLower(coalesce(x.name,'')) CONTAINS needle) }}"
+            f")"
+        )
     prop = (
         f"toLower(coalesce(toString(p.`{field}`),'')) = ${param} "
         f"OR toLower(coalesce(toString(p.`{field}`),'')) CONTAINS ${param}"
@@ -443,6 +695,15 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
     are accepted via `_REL_FIELDS` so specification anchoring can narrow the set.
     """
 
+    # Graph-aware aliases when caller already set params["g"] (count / retrieve paths).
+    graph_id = params.get("g")
+    if graph_id:
+        try:
+            from fashion_brain.planning.semantic_field_map import apply_semantic_field_map
+
+            filters, _ = apply_semantic_field_map(filters, str(graph_id))
+        except Exception:
+            pass
     filters = clean_product_filters(filters)
     # product_id is resolved by dedicated timeline helpers, not Product WHERE facets.
     filters.pop("product_id", None)
@@ -469,14 +730,16 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
     # so specification anchoring can apply category AND garment_type together.
     category = filters.get("category") or filters.get("garment")
     if category:
-        params["category"] = _cypher_token(str(category)).replace("-", " ")
+        needles = _soft_match_needles(str(category))
+        params["category_needles"] = needles
         where.append(
             "("
-            "toLower(coalesce(p.category_path,'')) CONTAINS $category "
-            "OR toLower(coalesce(p.name,'')) CONTAINS $category "
-            "OR EXISTS { MATCH (p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUB_CATEGORY|HAS_GARMENT_TYPE|"
-            "HAS_PLM_SUB_SUB_CATEGORY]->(c:Entity) "
-            "WHERE toLower(coalesce(c.name,'')) CONTAINS $category }"
+            "ANY(needle IN $category_needles WHERE toLower(coalesce(p.category_path,'')) CONTAINS needle) "
+            "OR ANY(needle IN $category_needles WHERE toLower(coalesce(p.name,'')) CONTAINS needle) "
+            "OR EXISTS { MATCH (p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUBFAMILY|HAS_SUB_CATEGORY|"
+            "HAS_GARMENT_TYPE|HAS_PLM_SUB_SUB_CATEGORY|HAS_PLM_MAIN_CATEGORY|HAS_PLM_SUB_CATEGORY]->(c:Entity) "
+            "WHERE ANY(needle IN $category_needles WHERE toLower(coalesce(c.name,'')) = needle "
+            "OR toLower(coalesce(c.name,'')) CONTAINS needle) }"
             ")"
         )
         handled.update({"category", "garment"})
@@ -502,23 +765,28 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
         handled.add("season_name")
     section = filters.get("section")
     if section:
-        params["section"] = _cypher_token(str(section)).replace("-", " ")
+        needles = _soft_match_needles(str(section))
+        params["section_needles"] = needles
         where.append(
             "("
-            "toLower(coalesce(p.category_path,'')) CONTAINS $section "
+            "ANY(needle IN $section_needles WHERE toLower(coalesce(p.category_path,'')) CONTAINS needle) "
             "OR EXISTS { MATCH (p)-[:HAS_SECTION]->(s:Entity) "
-            "WHERE toLower(coalesce(s.name,'')) CONTAINS $section }"
+            "WHERE ANY(needle IN $section_needles WHERE toLower(coalesce(s.name,'')) = needle "
+            "OR toLower(coalesce(s.name,'')) CONTAINS needle) }"
             ")"
         )
         handled.add("section")
     material = filters.get("material")
     if material:
-        params["material"] = _cypher_token(str(material)).replace("-", " ")
+        needles = _soft_match_needles(str(material))
+        params["material_needles"] = needles
+        mat_rels = "|".join(_REL_FIELDS.get("material") or ("USES_MATERIAL", "PRIMARY_MATERIAL"))
         where.append(
             "("
-            "toLower(coalesce(p.composition,'')) CONTAINS $material "
-            "OR EXISTS { MATCH (p)-[:USES_MATERIAL]->(m:Entity) "
-            "WHERE toLower(coalesce(m.name,'')) CONTAINS $material }"
+            "ANY(needle IN $material_needles WHERE toLower(coalesce(p.composition,'')) CONTAINS needle) "
+            f"OR EXISTS {{ MATCH (p)-[:{mat_rels}]->(m:Entity) "
+            "WHERE ANY(needle IN $material_needles WHERE toLower(coalesce(m.name,'')) = needle "
+            "OR toLower(coalesce(m.name,'')) CONTAINS needle) }"
             ")"
         )
         handled.add("material")
@@ -529,11 +797,13 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
         handled.add("availability")
     color = filters.get("color")
     if color:
-        params["color"] = _cypher_token(str(color)).replace("-", " ")
+        needles = _soft_match_needles(str(color))
+        params["color_needles"] = needles
         where.append(
             "("
-            "EXISTS { MATCH (p)-[:HAS_COLOR]->(c:Entity) "
-            "WHERE toLower(coalesce(c.name,'')) = $color }"
+            "EXISTS { MATCH (p)-[:HAS_COLOR|PRIMARY_COLOR]->(c:Entity) "
+            "WHERE ANY(needle IN $color_needles WHERE toLower(coalesce(c.name,'')) = needle "
+            "OR toLower(coalesce(c.name,'')) CONTAINS needle) }"
             ")"
         )
         handled.add("color")
@@ -566,14 +836,18 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(key)):
             return None
         param = f"f_{key}"
-        params[param] = _cypher_token(str(value)).replace("-", " ")
+        needles_param = f"f_{key}_needles"
+        needles = _soft_match_needles(str(value))
+        params[param] = needles[0] if needles else _cypher_token(str(value)).replace("-", " ")
+        params[needles_param] = needles or [params[param]]
         if key in _REL_FIELDS:
-            where.append(_rel_filter_clause(str(key), param))
+            where.append(_rel_filter_clause(str(key), param, needles_param=needles_param))
             handled.add(key)
             continue
         if key in _PROP_FILTER_FIELDS:
             where.append(
-                f"toLower(coalesce(toString(p.`{key}`),'')) CONTAINS ${param}"
+                f"ANY(needle IN ${needles_param} WHERE "
+                f"toLower(coalesce(toString(p.`{key}`),'')) CONTAINS needle)"
             )
             handled.add(key)
             continue
@@ -818,6 +1092,228 @@ def cypher_recent_availability_changes(
         return None
 
 
+def cypher_availability_transitions(
+    platform,
+    graph_id: str,
+    filters: dict | None = None,
+    *,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    limit: int = 10,
+) -> list[dict] | None:
+    """Self-join ordered AvailabilitySnapshot pairs for from→to status transitions."""
+
+    session_factory = _session(platform)
+    if not session_factory:
+        return None
+    limit = max(1, min(int(limit or 10), 50))
+    params: dict = {"g": graph_id}
+    where = _filter_where(clean_product_filters(dict(filters or {})), params)
+    if where is None:
+        return None
+    from_clause = ""
+    to_clause = ""
+    if from_status:
+        params["from_status"] = str(from_status).casefold()
+        from_clause = (
+            "AND toLower(coalesce(s1.status, s1.name, '')) CONTAINS $from_status "
+        )
+    if to_status:
+        params["to_status"] = str(to_status).casefold()
+        to_clause = "AND toLower(coalesce(s2.status, s2.name, '')) CONTAINS $to_status "
+    query = (
+        "MATCH (p:Entity:Product)-[:HAS_AVAILABILITY_SNAPSHOT]->(s1:AvailabilitySnapshot) "
+        "WHERE " + " AND ".join(where) + " "
+        "MATCH (p)-[:HAS_AVAILABILITY_SNAPSHOT]->(s2:AvailabilitySnapshot) "
+        "WHERE s2.observed_at > s1.observed_at "
+        + from_clause
+        + to_clause
+        + "OPTIONAL MATCH (p)-[:HAS_BRAND]->(b:Entity) "
+        "WITH p, b, s1, s2 "
+        "ORDER BY s2.observed_at DESC "
+        "WITH p, b, s1, s2, "
+        "coalesce(s1.status, s1.name) AS from_status, "
+        "coalesce(s2.status, s2.name) AS to_status "
+        "WHERE from_status IS NOT NULL AND to_status IS NOT NULL "
+        "AND toLower(toString(from_status)) <> toLower(toString(to_status)) "
+        "RETURN p.id AS product_id, "
+        "coalesce(p.name, p.title, p.id) AS name, "
+        "coalesce(b.name, p.brand, '(unspecified)') AS brand, "
+        "from_status AS from_status, to_status AS to_status, "
+        "s1.observed_at AS from_at, s2.observed_at AS to_at "
+        f"LIMIT {limit}"
+    )
+    try:
+        with session_factory() as session:
+            return [dict(row) for row in session.run(query, params)]
+    except Exception:
+        return None
+
+
+def cypher_entity_frequency(
+    platform,
+    graph_id: str,
+    field: str,
+    filters: dict | None = None,
+    *,
+    min_products: int = 2,
+    limit: int = 25,
+) -> list[tuple[str, int]] | None:
+    """Attribute values appearing on more than ``min_products`` products."""
+
+    rows = cypher_group_by(platform, graph_id, field, dict(filters or {}))
+    if rows is None:
+        return None
+    min_n = max(1, int(min_products or 2))
+    limit = max(1, min(int(limit or 25), 100))
+    out = [(value, count) for value, count in rows if int(count) >= min_n]
+    return out[:limit]
+
+
+def _canonical_product_url(url: Any) -> str:
+    """Collapse browse-path PDPs to ``/{locale}/p/{slug}``.
+
+    Scraped Primark links often look like
+    ``…/en-us/r/baby/explore-by-product/en-us/p/<slug>``; the stable storefront
+    URL is ``https://www.primark.com/en-us/p/<slug>``.
+    """
+
+    text = str(url or "").strip()
+    if not text or not re.match(r"^https?://", text, flags=re.I):
+        return text
+    # Prefer locale immediately before /p/, else first locale in the path.
+    near_p = re.search(
+        r"/(?P<locale>[a-z]{2}-[a-z]{2})/p/(?P<slug>[^/?#]+)",
+        text,
+        flags=re.I,
+    )
+    if not near_p:
+        return text
+    slug = near_p.group("slug")
+    first_loc = re.match(
+        r"^https?://[^/]+/(?P<locale>[a-z]{2}-[a-z]{2})(?:/|$)",
+        text,
+        flags=re.I,
+    )
+    locale = (first_loc.group("locale") if first_loc else near_p.group("locale")).casefold()
+    host_m = re.match(r"^(https?://[^/]+)", text, flags=re.I)
+    if not host_m:
+        return text
+    return f"{host_m.group(1)}/{locale}/p/{slug}"
+
+
+def _title_from_product_url(url: Any) -> str:
+    """Derive a readable title from a PDP slug (common when name is stored as 'null')."""
+
+    text = _canonical_product_url(url) or str(url or "").strip()
+    if not text:
+        return ""
+    # …/p/<slug> or last path segment
+    m = re.search(r"/p/([^/?#]+)", text, flags=re.I)
+    slug = m.group(1) if m else text.rstrip("/").rsplit("/", 1)[-1]
+    slug = re.sub(r"\.[a-z0-9]+$", "", slug, flags=re.I)
+    # Drop trailing numeric sku / style id.
+    slug = re.sub(r"[-_]?\d{8,}$", "", slug)
+    # Keep age/size hyphens (0-18mths, 7-15yrs) while spacing other slug segments.
+    slug = re.sub(
+        r"(?<![a-z0-9])(\d+)-(\d+)(mths?|yrs?|years?|months?|pk)(?![a-z0-9])",
+        r"\1_\2\3",
+        slug,
+        flags=re.I,
+    )
+    slug = slug.replace("-", " ").replace("_", "-")
+    slug = re.sub(r"\s+", " ", slug).strip(" -_")
+    if not slug or slug.casefold() in {"null", "none", "p"}:
+        return ""
+    # Title-case lightly without wrecking size tokens like 0-18mths / 2pk.
+    parts = []
+    for tok in slug.split():
+        if re.fullmatch(r"\d+[a-z]*|\d+[-/]\d+[a-z]*|\d+pk", tok, flags=re.I):
+            parts.append(tok)
+        else:
+            parts.append(tok[:1].upper() + tok[1:] if tok else tok)
+    return " ".join(parts)
+
+
+def _human_product_label(
+    name: Any,
+    product_id: Any = None,
+    *,
+    product_url: Any = None,
+) -> str:
+    """Prefer a human-readable product title; never lead with colon-prefixed ids."""
+
+    def _clean(raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text or text.casefold() in {"null", "none", "undefined", "(unspecified)"}:
+            return ""
+        return text
+
+    def _is_bare_code(text: str) -> bool:
+        if not text:
+            return True
+        if re.match(r"^[a-z0-9_]+:", text, flags=re.I):
+            return True
+        # Pure numeric / sku-like codes are not useful as the only label.
+        return bool(re.fullmatch(r"\d{6,}", text))
+
+    label = _clean(name)
+    if label and not _is_bare_code(label):
+        return label.replace("|", "\\|")
+
+    from_url = _title_from_product_url(product_url)
+    if from_url:
+        return from_url.replace("|", "\\|")
+
+    pid = _clean(product_id)
+    if pid and not _is_bare_code(pid):
+        return pid.replace("|", "\\|")
+    # Strip leading source:brand: prefixes for display when that is all we have.
+    for raw in (label, pid):
+        if not raw:
+            continue
+        parts = raw.split(":")
+        if len(parts) >= 2 and parts[-1]:
+            tail = parts[-1].strip()
+            if tail and tail.casefold() not in {"null", "none"} and not _is_bare_code(tail):
+                return tail.replace("|", "\\|")
+            if tail:
+                return tail.replace("|", "\\|")
+    return "—"
+
+
+def _format_money(price: Any, currency: Any = None, price_text: Any = None) -> str:
+    """Display current price with currency when available."""
+
+    text = str(price_text or "").strip()
+    if text and text.casefold() not in {"null", "none"}:
+        return text.replace("|", "\\|")
+    if isinstance(price, (int, float)):
+        cur = str(currency or "").strip().upper()
+        if cur in {"USD", "$"}:
+            return f"${price:.2f}"
+        if cur in {"GBP", "£"}:
+            return f"£{price:.2f}"
+        if cur in {"EUR", "€"}:
+            return f"€{price:.2f}"
+        if cur:
+            return f"{price:.2f} {cur}"
+        return f"{price:.2f}"
+    return "—"
+
+
+def _parse_status_transition(question: str) -> tuple[str | None, str | None]:
+    """Extract from/to availability phrases from ``from X to Y`` wording."""
+
+    text = normalize_name(question or "")
+    m = re.search(r"\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s+and\b|\s+with\b|$)", text)
+    if not m:
+        return None, None
+    left = _avail_token(m.group(1))
+    right = _avail_token(m.group(2))
+    return (left or None, right or None)
+
+
 def append_neo4j_availability_history_answer(
     platform,
     principal: Principal,
@@ -857,6 +1353,75 @@ def append_neo4j_availability_history_answer(
             )
         )
         return True
+    if mode == "transition":
+        from_status, to_status = _parse_status_transition(question)
+        rows = cypher_availability_transitions(
+            platform,
+            graph_id,
+            filters,
+            from_status=from_status,
+            to_status=to_status,
+            limit=max(int(limit or 10), 1),
+        )
+        if not rows:
+            lines.append(
+                "No products were found with that availability status transition in the snapshot history."
+            )
+            caveats.append(
+                "Transitions use ordered AvailabilitySnapshot pairs (earlier → later observed_at)."
+            )
+            return True
+        lines.append("Products with availability status transitions:")
+        lines.append("| Product | Brand | From | To | From when | To when |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for row in rows:
+            name = _human_product_label(row.get("name"), row.get("product_id"))
+            from_at = str(row.get("from_at") or "—")[:19]
+            to_at = str(row.get("to_at") or "—")[:19]
+            lines.append(
+                f"| {name} | {_display_label(str(row.get('brand') or '—'))} | "
+                f"{_display_label(str(row.get('from_status') or '—'))} | "
+                f"{_display_label(str(row.get('to_status') or '—'))} | "
+                f"{from_at} | {to_at} |"
+            )
+        first_id = str(rows[0].get("product_id") or "").strip()
+        if first_id:
+            hist = cypher_recent_availability_changes(
+                platform,
+                graph_id,
+                {**(filters or {}), "product_id": first_id},
+                limit=8,
+            ) or []
+            if hist:
+                lines.append("")
+                lines.append(
+                    f"Availability history for {_human_product_label(rows[0].get('name'), first_id)}:"
+                )
+                lines.append("| When | Status | In stock |")
+                lines.append("| --- | --- | ---: |")
+                for row in hist:
+                    when = str(row.get("observed_at") or "—")[:19]
+                    lines.append(
+                        f"| {when} | {_display_label(str(row.get('status') or '—'))} | "
+                        f"{row.get('in_stock_count') if row.get('in_stock_count') is not None else '—'} |"
+                    )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="availability_transition",
+                title="Availability status transition",
+                excerpt="; ".join(
+                    f"{r.get('name') or r.get('product_id')}:{r.get('from_status')}→{r.get('to_status')}"
+                    for r in rows[:5]
+                ),
+                source_path="product_change_events",
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+            )
+        )
+        return True
     if mode == "recent":
         rows = cypher_recent_availability_changes(
             platform,
@@ -879,7 +1444,7 @@ def append_neo4j_availability_history_answer(
                 when = when[:19]
             lines.append(
                 f"| {when} | {_display_label(str(row.get('brand') or '—'))} | "
-                f"{row.get('name') or row.get('product_id') or '—'} | "
+                f"{_human_product_label(row.get('name'), row.get('product_id'))} | "
                 f"{row.get('status') or '—'} | "
                 f"{row.get('in_stock_count') if row.get('in_stock_count') is not None else '—'} |"
             )
@@ -1011,8 +1576,14 @@ def cypher_price_movers(
     *,
     direction: str = "up",
     limit: int = 25,
+    min_abs_pct: float | None = None,
 ) -> list[dict] | None:
-    """Largest same-currency price moves."""
+    """Largest same-currency price moves.
+
+    ``direction``: ``up`` / ``down`` filter by event direction; ``any`` ranks by
+    absolute percentage change (volatility).
+    ``min_abs_pct``: optional floor on ``abs(delta_pct)`` (e.g. drops of more than 20%).
+    """
 
     session_factory = _session(platform)
     if not session_factory:
@@ -1022,14 +1593,25 @@ def cypher_price_movers(
     if where is None:
         return None
     direction = str(direction or "up").strip().lower()
-    if direction not in {"up", "down"}:
+    if direction not in {"up", "down", "any"}:
         direction = "up"
     params["dir"] = direction
     limit = max(1, min(int(limit or 25), 100))
+    dir_clause = (
+        ""
+        if direction == "any"
+        else "AND e.direction = $dir "
+    )
+    pct_clause = ""
+    if min_abs_pct is not None and float(min_abs_pct) > 0:
+        params["min_abs_pct"] = float(min_abs_pct)
+        pct_clause = "AND abs(coalesce(e.delta_pct, 0)) >= $min_abs_pct "
     query = (
         "MATCH (p:Entity:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
         "WHERE " + " AND ".join(where) + " "
-        "AND e.direction = $dir AND coalesce(e.currency_changed, false) = false "
+        + dir_clause
+        + pct_clause
+        + "AND coalesce(e.currency_changed, false) = false "
         "AND e.detected_at IS NOT NULL "
         "OPTIONAL MATCH (p)-[:HAS_BRAND]->(b:Brand) "
         "RETURN p.id AS product_id, p.name AS name, b.name AS brand, "
@@ -1046,6 +1628,110 @@ def cypher_price_movers(
         return None
 
 
+def cypher_trending_products(
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    limit: int = 15,
+) -> list[dict] | None:
+    """Rank products by recent catalog activity (price ups + stock snaps + events).
+
+    Score favors same-currency price increases, then availability snapshot volume,
+    then any price-change activity (including currency-label switches).
+    """
+
+    session_factory = _session(platform)
+    if not session_factory:
+        return None
+    params: dict = {"g": graph_id}
+    where = _filter_where(filters, params)
+    if where is None:
+        return None
+    limit = max(1, min(int(limit or 15), 50))
+    # Aggregate activity first; enrichment via pattern comprehensions (one row / product).
+    query = (
+        "MATCH (p:Entity:Product) "
+        "WHERE " + " AND ".join(where) + " "
+        "OPTIONAL MATCH (p)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "OPTIONAL MATCH (p)-[:HAS_AVAILABILITY_SNAPSHOT]->(a:AvailabilitySnapshot) "
+        "WITH p, "
+        "count(DISTINCT e) AS price_events, "
+        "sum(CASE WHEN e.direction = 'up' AND coalesce(e.currency_changed,false) = false "
+        "THEN 1 ELSE 0 END) AS price_ups, "
+        "sum(CASE WHEN e.direction = 'down' AND coalesce(e.currency_changed,false) = false "
+        "THEN 1 ELSE 0 END) AS price_downs, "
+        "sum(CASE WHEN coalesce(e.currency_changed,false) = true THEN 1 ELSE 0 END) AS currency_switches, "
+        "count(DISTINCT a) AS avail_snaps, "
+        "max(e.detected_at) AS last_price_at, "
+        "max(a.observed_at) AS last_avail_at "
+        "WITH p, price_events, price_ups, price_downs, currency_switches, avail_snaps, "
+        "last_price_at, last_avail_at, "
+        "(price_ups * 5 + avail_snaps * 2 + price_events + currency_switches) AS score "
+        "WHERE score > 0 "
+        "RETURN p.id AS product_id, "
+        "coalesce(nullif(p.name, 'null'), nullif(p.title, 'null'), p.display_reference, "
+        "p.reference, p.source_id, p.id) AS name, "
+        "p.product_url AS product_url, "
+        "p.price AS price_text, p.price_num AS price_num, p.currency AS currency, "
+        "coalesce(head([(p)-[:HAS_BRAND]->(b:Brand) | b.name]), p.brand) AS brand, "
+        "head([(p)-[:HAS_SECTION]->(sec) | sec.name]) AS section, "
+        "head([(p)-[:HAS_FAMILY]->(fam) | fam.name]) AS family, "
+        "coalesce("
+        "head([(p)-[:HAS_SUBFAMILY]->(sub) | sub.name]), "
+        "head([(p)-[:BELONGS_TO_CATEGORY]->(cat) | cat.name])"
+        ") AS subcategory, "
+        "coalesce(p.category_path, '(unspecified)') AS category_path, "
+        "coalesce("
+        "head([(p)-[:PRIMARY_COLOR]->(c) | c.name]), "
+        "head([(p)-[:HAS_COLOR]->(c) | c.name])"
+        ") AS color, "
+        "coalesce("
+        "head([(p)-[:HAS_AVAILABILITY]->(av) | av.name]), "
+        "p.availability"
+        ") AS availability, "
+        "price_events, price_ups, price_downs, currency_switches, avail_snaps, "
+        "last_price_at, last_avail_at, score "
+        "ORDER BY score DESC, last_price_at DESC, last_avail_at DESC "
+        f"LIMIT {limit}"
+    )
+    try:
+        with session_factory() as session:
+            return [dict(row) for row in session.run(query, params)]
+    except Exception:
+        return None
+
+
+def _price_pct_threshold(question: str) -> float | None:
+    """Parse 'more than 20%' / '>20%' style floors from the ask."""
+
+    # Keep raw % before normalize_name strips punctuation.
+    raw = str(question or "")
+    match = re.search(
+        r"(?:more than|over|above|at least|greater than|>)\s*(\d+(?:\.\d+)?)\s*%",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return float(match.group(1))
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%", raw)
+    if match and re.search(
+        r"\b(drop|drops|decrease|decreases|increase|increases)\b",
+        raw,
+        flags=re.IGNORECASE,
+    ):
+        return float(match.group(1))
+    # normalize_name drops '%'; still catch "more than 20 percent/pct".
+    text = normalize_name(raw)
+    match = re.search(
+        r"(?:more than|over|above|at least|greater than)\s*(\d+(?:\.\d+)?)\s*(?:percent|pct|pc)?\b",
+        text,
+    )
+    if match and re.search(r"\b(drop|drops|decrease|decreases|increase|increases)\b", text):
+        return float(match.group(1))
+    return None
+
+
 def price_history_mode(question: str) -> str | None:
     """Classify catalog price-history asks.
 
@@ -1060,6 +1746,18 @@ def price_history_mode(question: str) -> str | None:
     """
 
     text = normalize_name(question or "")
+    # Current-state average / list price asks are NOT historical (avoid matching
+    # the word "history" inside "not history" / "current-state").
+    if re.search(
+        r"\b(right now|current[- ]state|current average|avg price now|average price of|"
+        r"average prices?(?:\s+by|\s+for)?|current price)\b",
+        text,
+    ) and not re.search(
+        r"\b(change|changes|changed|trend|trends|history|historical|over time|"
+        r"fluctuation|mover|movers|decrease|increase|drop|rise)\b",
+        re.sub(r"\bnot\s+history\b", " ", text),
+    ):
+        return None
     try:
         from fashion_brain.ask import product_ref_from_question, temporal_count_entity
 
@@ -1075,36 +1773,92 @@ def price_history_mode(question: str) -> str | None:
     cheaper_or_currency = bool(
         re.search(r"\b(cheaper|currency\s+switch|currency\s+switches|same[- ]currency)\b", text)
     )
-    if not re.search(r"\bprices?\b", text) and not cheaper_or_currency and not re.search(
-        r"\bpricechangeevent\b", text
+    trending_product_ask = False
+    try:
+        from fashion_brain.ask import is_price_trend_analysis_ask, is_trending_product_ask
+
+        bare_trend_ask = is_price_trend_analysis_ask(question)
+        trending_product_ask = is_trending_product_ask(question)
+    except Exception:
+        bare_trend_ask = bool(
+            re.search(r"\b(trending\s+analysis|trend\s+analysis|make\s+trending)\b", text)
+        )
+        trending_product_ask = bool(
+            re.search(r"\b(products?|items?)\b", text)
+            and re.search(r"\b(trending|hot|popular)\b", text)
+        )
+    if (
+        not re.search(r"\bprices?\b", text)
+        and not cheaper_or_currency
+        and not re.search(r"\bpricechangeevent\b", text)
+        and not bare_trend_ask
+        and not trending_product_ask
     ):
         return None
+    if trending_product_ask:
+        return "trending_products"
+    # Strip negated "not history" so it does not trigger history mode.
+    change_text = re.sub(r"\bnot\s+history\b", " ", text)
     has_change = bool(
         re.search(
             r"\b(change|changes|changed|trend|trends|trending|history|historical|"
-            r"fluctuation|fluctuations|move|moves|moved|mover|movers|"
+            r"fluctuation|fluctuations|swing|swings|swinging|volatil|volatile|"
+            r"move|moves|moved|moving|mover|movers|"
             r"decrease|decreases|decreased|"
             r"increase|increases|increased|drop|drops|dropped|rise|rises|rose|rising|"
             r"fallen|falling|cheaper|expensive|over time)\b",
-            text,
+            change_text,
         )
     )
-    if not has_change and not re.search(r"\b(largest|biggest|highest|lowest)\s+price\b", text):
+    # Current catalog "highest/lowest price products" is a listing — not PriceChangeEvent.
+    try:
+        from fashion_brain.ask import is_ranked_product_listing_ask
+
+        if is_ranked_product_listing_ask(question):
+            return None
+    except Exception:
+        pass
+    if not has_change:
         return None
     # Unsupported geo/time scopes stay trend-mode; answer path emits an honest caveat.
     if re.search(r"\b(most|largest|biggest|highest)\b", text) and re.search(
         r"\b(brands?|buyers?)\b", text
     ) and re.search(r"\b(events?|changes?|moves?)\b", text):
         return "events_by_brand"
-    if re.search(r"\b(categor(?:y|ies))\b", text) and re.search(
-        r"\b(trend|trends|decreasing|decrease|drop|dropping)\b", text
+    if re.search(r"\b(categor(?:y|ies)|family|families|section|department)\b", text) and re.search(
+        r"\b(trend|trends|decreasing|decrease|drop|dropping|cheaper|cheapening|"
+        r"getting cheaper|price drop|price drops)\b",
+        text,
     ):
         return "trend_by_category"
+    # Multi-brand historical compare ("Zara and Primark … price moves compare").
+    if re.search(r"\b(compare|comparison|versus|vs\.?|similar|side by side)\b", text) and (
+        re.search(r"\b\w+\s+and\s+\w+\b", text) or " | " in (question or "")
+    ):
+        return "brand_compare"
+    # Volatility / swinging: rank by absolute delta magnitude (both directions).
+    if re.search(
+        r"\b(swing|swings|swinging|volatil|fluctuat|up and down|most (volatile|unstable)|"
+        r"price (moves?|movement|movements|fluctuations?))\b",
+        text,
+    ):
+        return "volatility"
+    # "which product is trending" → per-product activity (stock + price), not brand avg.
+    try:
+        from fashion_brain.ask import is_trending_product_ask
+
+        if is_trending_product_ask(question):
+            return "trending_products"
+    except Exception:
+        if re.search(r"\b(which|what|more|most)\b", text) and re.search(
+            r"\b(products?|items?)\b", text
+        ) and re.search(r"\b(trending|hot|popular)\b", text):
+            return "trending_products"
     # Aggregate / average trend asks take priority over mover ranking.
     if re.search(r"\b(average|avg|mean|median|overall|typical|aggregate|summary)\b", text):
         return "trend"
     if re.search(r"\b(trend|trends|trending)\b", text) and not re.search(
-        r"\b(largest|biggest|highest|lowest|top|most)\b", text
+        r"\b(largest|biggest|highest|lowest|top|most|which|what|products?|items?)\b", text
     ):
         return "trend"
     if re.search(
@@ -1131,6 +1885,164 @@ def price_mover_direction(question: str) -> str | None:
     if mode == "movers_down":
         return "down"
     return None
+
+
+def _price_trend_scope_options(platform, graph_id: str, *, limit: int = 6) -> list[dict]:
+    """Concrete brand / category choices for an unscoped price-trend clarify ask."""
+
+    options: list[dict] = []
+    seen: set[str] = set()
+
+    def add(field: str, value: str, *, kind: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = f"{field}:{normalize_name(text)}"
+        if key in seen:
+            return
+        seen.add(key)
+        options.append(
+            {
+                "field": field,
+                "value": text,
+                "label": f"{kind}: {text}",
+                "filters": {field: text},
+            }
+        )
+
+    # Prefer parties that actually have PriceChangeEvent volume.
+    try:
+        brands = cypher_price_events_by_brand(platform, graph_id, limit=max(int(limit or 6), 3)) or []
+        for row in brands[:4]:
+            add("brand", str(row.get("brand") or ""), kind="Brand")
+    except Exception:
+        pass
+    try:
+        cats = cypher_price_trend_by_category(platform, graph_id, limit=4) or []
+        for row in cats[:3]:
+            add("category", str(row.get("category") or ""), kind="Category")
+    except Exception:
+        pass
+    if len(options) >= 2:
+        return options[: max(int(limit or 6), 2)]
+
+    # Fallback: live metadata values.
+    try:
+        from knowledge_graph.retrieval.metadata import discover_values
+
+        for field, kind in (("brand", "Brand"), ("buyer", "Buyer"), ("category", "Category")):
+            payload = discover_values(platform, graph_id=graph_id, attribute=field, q="", limit=4)
+            for value in payload.get("values") or []:
+                add(field, str(value), kind=kind)
+                if len(options) >= limit:
+                    return options
+    except Exception:
+        pass
+    return options[: max(int(limit or 6), 0)]
+
+
+def cypher_price_trend_facet_series(
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    facet: str = "category",
+    top_n: int = 4,
+    limit: int = 24,
+) -> list[dict]:
+    """Per-facet time series under the current filters (for multi-line charts).
+
+    Returns ``[{"name": str, "points": [{"period", "avg_delta_pct", "events"}, …]}, …]``.
+    """
+
+    session_factory = _session(platform)
+    if not session_factory:
+        return []
+    params: dict = {"g": graph_id}
+    where = _filter_where(filters, params)
+    if where is None:
+        return []
+    facet_key = str(facet or "category").casefold()
+    if facet_key in {"brand", "buyer"} and (filters.get("brand") or filters.get("buyer")):
+        # Already scoped to one party — break down by category instead.
+        facet_key = "category"
+    top_n = max(1, min(int(top_n or 4), 6))
+    limit = max(8, min(int(limit or 24), 40))
+
+    if facet_key == "section":
+        facet_expr = "coalesce(p.section, head([(p)-[:HAS_SECTION]->(s:Entity) | s.name]), '(unspecified)')"
+    elif facet_key == "family":
+        facet_expr = (
+            "coalesce(head([(p)-[:HAS_FAMILY]->(f:Entity) | f.name]), "
+            "p.family, '(unspecified)')"
+        )
+    elif facet_key == "brand":
+        facet_expr = (
+            "coalesce(head([(p)-[:HAS_BRAND]->(b:Entity) | b.name]), "
+            "p.brand, '(unspecified)')"
+        )
+    else:
+        facet_expr = (
+            "coalesce(head([(p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUB_CATEGORY|"
+            "HAS_PLM_SUB_SUB_CATEGORY]->(c:Entity) | c.name]), "
+            "p.category_path, '(unspecified)')"
+        )
+
+    # Rank facets by event volume under the current filter, then pull weekly averages.
+    rank_q = (
+        "MATCH (p:Entity:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "WHERE " + " AND ".join(where) + " "
+        "AND coalesce(e.currency_changed, false) = false AND e.delta_pct IS NOT NULL "
+        f"WITH {facet_expr} AS facet, count(e) AS events "
+        "WHERE facet IS NOT NULL AND facet <> '' "
+        "RETURN facet, events ORDER BY events DESC "
+        f"LIMIT {top_n}"
+    )
+    series_q = (
+        "MATCH (p:Entity:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "WHERE " + " AND ".join(where) + " "
+        "AND coalesce(e.currency_changed, false) = false "
+        "AND e.delta_pct IS NOT NULL AND e.detected_at IS NOT NULL "
+        f"AND {facet_expr} = $facet "
+        "WITH date(datetime(e.detected_at)) AS d, e.delta_pct AS pct "
+        "WITH d.year AS y, d.week AS w, avg(pct) AS avg_delta_pct, count(*) AS events "
+        "RETURN y + '-W' + (CASE WHEN w < 10 THEN '0' ELSE '' END) + toString(w) AS period, "
+        "avg_delta_pct, events "
+        "ORDER BY y ASC, w ASC "
+        f"LIMIT {limit}"
+    )
+    out: list[dict] = []
+    try:
+        with session_factory() as session:
+            facets = [str(row.get("facet") or "").strip() for row in session.run(rank_q, params)]
+            facets = [f for f in facets if f and f.casefold() != "(unspecified)"]
+            for name in facets[:top_n]:
+                sp = dict(params)
+                sp["facet"] = name
+                points: list[dict] = []
+                try:
+                    for row in session.run(series_q, sp):
+                        avg = row.get("avg_delta_pct")
+                        try:
+                            avg_f = float(avg) if avg is not None else None
+                        except (TypeError, ValueError):
+                            avg_f = None
+                        if avg_f is None:
+                            continue
+                        points.append(
+                            {
+                                "period": str(row.get("period") or ""),
+                                "avg_delta_pct": round(avg_f, 3),
+                                "events": int(row.get("events") or 0),
+                            }
+                        )
+                except Exception:
+                    points = []
+                if len(points) >= 2:
+                    out.append({"name": name, "points": points})
+    except Exception:
+        return []
+    return out
 
 
 def cypher_price_trend_timeseries(
@@ -1341,6 +2253,454 @@ def cypher_price_currency_switch_summary(platform, graph_id: str, filters: dict)
         return None
 
 
+def _currencies_from_switch_pairs(switches: dict) -> list[str]:
+    """Unique currency codes from pairs like USD→GBP."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for pair in switches.get("pairs") or []:
+        text = str(pair.get("pair") or "")
+        for part in re.split(r"[→><\-]+", text):
+            code = re.sub(r"[^A-Za-z]", "", part).upper()
+            if len(code) == 3 and code not in seen and code not in {"NAN", "NULL"}:
+                seen.add(code)
+                found.append(code)
+    return found
+
+
+def _currency_preference_from_question(question: str) -> str | None:
+    """Return USD / GBP / BOTH when the user named a currency preference."""
+    text = normalize_name(question or "")
+    if not text:
+        return None
+    if re.search(r"\b(both|all currencies|each currency|compare currencies)\b", text):
+        return "BOTH"
+    # Prefer explicit ISO codes; also accept "us dollar" / "pound".
+    if re.search(r"\b(usd|us\s*dollars?|dollar)\b", text):
+        return "USD"
+    if re.search(r"\b(gbp|pounds?|sterling)\b", text):
+        return "GBP"
+    if re.search(r"\b(eur|euros?)\b", text):
+        return "EUR"
+    m = re.search(r"\b([a-z]{3})\b", text)
+    if m and m.group(1).upper() in {"USD", "GBP", "EUR", "SEK", "DKK", "NOK", "PLN", "CZK"}:
+        return m.group(1).upper()
+    return None
+
+
+def cypher_price_level_timeseries(
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    currency: str,
+    limit: int = 24,
+) -> list[dict]:
+    """Avg new_price_num over time for events landing in one currency (incl. after switches)."""
+
+    session_factory = _session(platform)
+    if not session_factory:
+        return []
+    params: dict = {"g": graph_id, "currency": str(currency or "").upper()}
+    where = _filter_where(filters, params)
+    if where is None or not params["currency"]:
+        return []
+    limit = max(8, min(int(limit or 24), 40))
+    # Prefer numeric props; fall back to toFloat(new_price) when new_price_num is sparse.
+    query = (
+        "MATCH (p:Entity:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "WHERE " + " AND ".join(where) + " "
+        "AND e.detected_at IS NOT NULL "
+        "AND toUpper(coalesce(e.new_currency, e.currency, '')) = $currency "
+        "WITH date(datetime(e.detected_at)) AS d, "
+        "coalesce(e.new_price_num, toFloat(e.new_price)) AS price "
+        "WHERE price IS NOT NULL "
+        "WITH d.year AS y, d.week AS w, avg(price) AS avg_price, "
+        "min(price) AS min_price, max(price) AS max_price, count(*) AS events "
+        "RETURN y + '-W' + (CASE WHEN w < 10 THEN '0' ELSE '' END) + toString(w) AS period, "
+        "avg_price, min_price, max_price, events "
+        "ORDER BY y ASC, w ASC "
+        f"LIMIT {limit}"
+    )
+    out: list[dict] = []
+    try:
+        with session_factory() as session:
+            for row in session.run(query, params):
+                try:
+                    avg = float(row.get("avg_price"))
+                except (TypeError, ValueError):
+                    continue
+                def _f(key: str) -> float | None:
+                    raw = row.get(key)
+                    try:
+                        return float(raw) if raw is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                out.append(
+                    {
+                        "period": str(row.get("period") or ""),
+                        "avg_price": round(avg, 3),
+                        "min_price": round(_f("min_price"), 3) if _f("min_price") is not None else round(avg, 3),
+                        "max_price": round(_f("max_price"), 3) if _f("max_price") is not None else round(avg, 3),
+                        "events": int(row.get("events") or 0),
+                    }
+                )
+    except Exception:
+        return []
+    return out
+
+
+def cypher_currency_switch_timeseries(
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    currency: str | None = None,
+    limit: int = 24,
+) -> list[dict]:
+    """Weekly currency-switch event counts (optionally involving one currency)."""
+
+    session_factory = _session(platform)
+    if not session_factory:
+        return []
+    params: dict = {"g": graph_id}
+    where = _filter_where(filters, params)
+    if where is None:
+        return []
+    limit = max(8, min(int(limit or 24), 40))
+    cur_clause = ""
+    if currency:
+        params["currency"] = str(currency).upper()
+        cur_clause = (
+            "AND (toUpper(coalesce(e.old_currency, '')) = $currency "
+            "OR toUpper(coalesce(e.new_currency, e.currency, '')) = $currency) "
+        )
+    query = (
+        "MATCH (p:Entity:Product)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "WHERE " + " AND ".join(where) + " "
+        "AND coalesce(e.currency_changed, false) = true AND e.detected_at IS NOT NULL "
+        + cur_clause
+        + "WITH date(datetime(e.detected_at)) AS d "
+        "WITH d.year AS y, d.week AS w, count(*) AS events "
+        "RETURN y + '-W' + (CASE WHEN w < 10 THEN '0' ELSE '' END) + toString(w) AS period, "
+        "events ORDER BY y ASC, w ASC "
+        f"LIMIT {limit}"
+    )
+    try:
+        with session_factory() as session:
+            return [
+                {"period": str(row.get("period") or ""), "events": int(row.get("events") or 0)}
+                for row in session.run(query, params)
+            ]
+    except Exception:
+        return []
+
+
+def _append_currency_preference_clarify(
+    who: str,
+    switches: dict,
+    graph_id: str,
+    filters: dict,
+    lines: list[str],
+    evidence: list[EvidenceItem],
+    caveats: list[str],
+) -> bool:
+    """Ask USD / GBP / both when only currency-switch events exist."""
+
+    switch_n = int(switches.get("events") or 0)
+    codes = _currencies_from_switch_pairs(switches)
+    if switch_n <= 0 or len(codes) < 2:
+        return False
+    products = int(switches.get("products") or 0)
+    pairs = switches.get("pairs") or []
+    lines.append(
+        f"For {_display_label(who)}, the {switch_n} recorded price events across {products} products "
+        "are currency-label changes (not same-currency % moves). "
+        "Which currency should I trend?"
+    )
+    options = []
+    for code in codes[:4]:
+        options.append(
+            {
+                "label": f"{code} only",
+                "restated_question": (
+                    f"Summarize average price change trends for {who} in {code}"
+                ),
+                "filters": dict(filters or {}),
+                "currency": code,
+            }
+        )
+    options.append(
+        {
+            "label": "Both currencies",
+            "restated_question": (
+                f"Summarize average price change trends for {who} in both currencies"
+            ),
+            "filters": dict(filters or {}),
+            "currency": "BOTH",
+        }
+    )
+    for i, opt in enumerate(options, 1):
+        lines.append(f"{i}. {opt['label']}")
+    lines.append("Reply with the number, or say USD / GBP / both.")
+    if pairs:
+        lines.append("Observed currency changes:")
+        lines.append("| Currency change | Events | Products |")
+        lines.append("| --- | ---: | ---: |")
+        for pair in pairs[:5]:
+            lines.append(
+                f"| {pair.get('pair') or 'Unspecified'} | "
+                f"{int(pair.get('events') or 0)} | "
+                f"{int(pair.get('products') or 0)} |"
+            )
+    evidence.append(
+        EvidenceItem(
+            source_id=graph_id,
+            record_id="price_trend_needs_currency",
+            title=f"Price trend needs currency · {_display_label(who)}",
+            excerpt=json.dumps(
+                {
+                    "options": [o["label"] for o in options],
+                    "interpretations": [
+                        {
+                            "restated_question": o["restated_question"],
+                            "filters": o["filters"],
+                            "currency": o["currency"],
+                        }
+                        for o in options
+                    ],
+                    "who": who,
+                    "currencies": codes,
+                },
+                ensure_ascii=False,
+            ),
+            source_path="product_change_events",
+            verification_status="observed",
+            graph=graph_id,
+            node_id=None,
+            synthetic=False,
+        )
+    )
+    caveats.append(
+        "Awaiting currency preference (USD / GBP / both) before building the price trend chart."
+    )
+    try:
+        from fashion_brain.agents.query_understanding import QueryUnderstandingAgent
+
+        caveats.append(QueryUnderstandingAgent.AWAITING_CAVEAT)
+    except Exception:
+        caveats.append("Awaiting clarification before retrieval.")
+    return True
+
+
+def _append_currency_scoped_trend(
+    platform,
+    graph_id: str,
+    filters: dict,
+    who: str,
+    currency_pref: str,
+    switches: dict,
+    lines: list[str],
+    evidence: list[EvidenceItem],
+    caveats: list[str],
+    *,
+    limit: int | None = None,
+) -> bool:
+    """Build absolute-price (and switch-volume) charts for one currency or both."""
+
+    codes = (
+        _currencies_from_switch_pairs(switches)
+        if currency_pref == "BOTH"
+        else [currency_pref]
+    )
+    codes = [c for c in codes if c][:4]
+    if not codes:
+        return False
+
+    series_payload: list[dict] = []
+    labels: list[str] = []
+    label_index: dict[str, int] = {}
+
+    def _ensure_labels(periods: list[str]) -> None:
+        nonlocal labels, label_index
+        for p in periods:
+            if p not in label_index:
+                label_index[p] = len(labels)
+                labels.append(p)
+
+    level_notes: list[str] = []
+    for code in codes:
+        pts = cypher_price_level_timeseries(
+            platform, graph_id, filters, currency=code, limit=max(int(limit or 24), 16)
+        )
+        if len(pts) < 2:
+            continue
+        _ensure_labels([str(p.get("period") or "") for p in pts])
+        aligned = [None] * len(labels)
+        for pt in pts:
+            idx = label_index.get(str(pt.get("period") or ""))
+            if idx is None:
+                continue
+            aligned[idx] = float(pt.get("avg_price") or 0.0)
+        last = None
+        filled: list[float] = []
+        for v in aligned:
+            if v is not None:
+                last = v
+            filled.append(float(last if last is not None else 0.0))
+        series_payload.append({"name": f"Avg price · {code}", "values": filled})
+        vals = [float(p.get("avg_price") or 0.0) for p in pts]
+        level_notes.append(
+            f"- {code}: avg {sum(vals)/len(vals):.2f}, "
+            f"min {min(vals):.2f}, max {max(vals):.2f} "
+            f"({sum(int(p.get('events') or 0) for p in pts)} events)"
+        )
+
+    sw_chart = None
+    # Always try switch-volume series — useful when absolute price levels are sparse.
+    if currency_pref == "BOTH":
+        multi_sw: list[dict] = []
+        shared_labels: list[str] = []
+        shared_index: dict[str, int] = {}
+        for code in codes:
+            sw_pts = cypher_currency_switch_timeseries(
+                platform, graph_id, filters, currency=code, limit=max(int(limit or 24), 16)
+            )
+            if len(sw_pts) < 2:
+                continue
+            for p in sw_pts:
+                per = str(p.get("period") or "")
+                if per and per not in shared_index:
+                    shared_index[per] = len(shared_labels)
+                    shared_labels.append(per)
+            aligned = [0.0] * len(shared_labels)
+            for pt in sw_pts:
+                idx = shared_index.get(str(pt.get("period") or ""))
+                if idx is not None:
+                    aligned[idx] = float(pt.get("events") or 0.0)
+            # Pad earlier series if label axis grew.
+            for series in multi_sw:
+                if len(series["values"]) < len(shared_labels):
+                    series["values"] = series["values"] + [0.0] * (
+                        len(shared_labels) - len(series["values"])
+                    )
+            if len(aligned) < len(shared_labels):
+                aligned = aligned + [0.0] * (len(shared_labels) - len(aligned))
+            multi_sw.append({"name": f"Switch events · {code}", "values": aligned})
+        if multi_sw and shared_labels:
+            sw_chart = {
+                "type": "line",
+                "smooth": True,
+                "analytics": True,
+                "title": f"Currency-switch volume · {_display_label(who)}",
+                "labels": shared_labels,
+                "values": multi_sw[0]["values"],
+                "series": multi_sw,
+                "yLabel": "Events",
+            }
+    elif codes:
+        sw_pts = cypher_currency_switch_timeseries(
+            platform, graph_id, filters, currency=codes[0], limit=max(int(limit or 24), 16)
+        )
+        if len(sw_pts) >= 2:
+            sw_chart = {
+                "type": "line",
+                "smooth": True,
+                "analytics": True,
+                "title": f"Currency-switch volume · {codes[0]} · {_display_label(who)}",
+                "labels": [str(p.get("period") or "") for p in sw_pts],
+                "values": [float(p.get("events") or 0.0) for p in sw_pts],
+                "series": [
+                    {
+                        "name": f"Switch events · {codes[0]}",
+                        "values": [float(p.get("events") or 0.0) for p in sw_pts],
+                    }
+                ],
+                "yLabel": "Events",
+            }
+
+    # No absolute prices AND no switch volume → cannot chart.
+    if not series_payload and not sw_chart:
+        return False
+
+    # Price-level chart when available; otherwise lead with switch-volume analysis.
+    if series_payload:
+        all_vals = [v for s in series_payload for v in s["values"]]
+        lines.append(
+            f"Price level trend for {_display_label(who)} "
+            f"({'both currencies' if currency_pref == 'BOTH' else currency_pref}):"
+        )
+        lines.extend(level_notes)
+        lines.append(
+            "These are average listed prices in the chosen currency over time "
+            "(includes post-switch listings). Same-currency % deltas were not present."
+        )
+        chart = {
+            "type": "line",
+            "smooth": True,
+            "analytics": True,
+            "title": f"Price levels · {_display_label(who)} · {currency_pref}",
+            "labels": labels,
+            "values": series_payload[0]["values"],
+            "series": series_payload,
+            "avg": round(sum(all_vals) / len(all_vals), 3) if all_vals else 0.0,
+            "min": round(min(all_vals), 3) if all_vals else 0.0,
+            "max": round(max(all_vals), 3) if all_vals else 0.0,
+            "yLabel": "Price",
+        }
+        lines.append("```chart")
+        lines.append(json.dumps(chart, ensure_ascii=False))
+        lines.append("```")
+    else:
+        lines.append(
+            f"No same-currency % price moves for {_display_label(who)} in "
+            f"{'both currencies' if currency_pref == 'BOTH' else currency_pref}. "
+            "Showing currency-switch activity over time as the recorded change pattern."
+        )
+
+    if sw_chart:
+        lines.append("Currency-switch event volume over time:")
+        lines.append("```chart")
+        lines.append(json.dumps(sw_chart, ensure_ascii=False))
+        lines.append("```")
+
+    # Keep the switch mix table for context.
+    pairs = switches.get("pairs") or []
+    if pairs:
+        lines.append("Currency-label changes in this scope:")
+        lines.append("| Currency change | Events | Products |")
+        lines.append("| --- | ---: | ---: |")
+        for pair in pairs[:5]:
+            lines.append(
+                f"| {pair.get('pair') or 'Unspecified'} | "
+                f"{int(pair.get('events') or 0)} | "
+                f"{int(pair.get('products') or 0)} |"
+            )
+
+    evidence.append(
+        EvidenceItem(
+            source_id=graph_id,
+            record_id="price_trend_currency_scoped",
+            title=f"Price change trend · {_display_label(who)} · {currency_pref}",
+            excerpt=(
+                f"currency={currency_pref}; price_series={len(series_payload)}; "
+                f"switch_chart={bool(sw_chart)}; "
+                f"switch_events={int(switches.get('events') or 0)}"
+            ),
+            source_path="product_change_events",
+            verification_status="observed",
+            graph=graph_id,
+            node_id=None,
+            synthetic=False,
+        )
+    )
+    caveats.append(
+        "Same-currency % deltas were absent; chart uses absolute price levels and/or "
+        "currency-switch volume for the chosen currency."
+    )
+    return True
+
+
 def _append_currency_switch_only_summary(
     who: str,
     switches: dict,
@@ -1396,6 +2756,53 @@ def _append_currency_switch_only_summary(
     return True
 
 
+def _price_history_source_label(graph_id: str) -> str:
+    low = str(graph_id or "").casefold()
+    if "plm" in low:
+        return "PLM records"
+    if "ecom" in low or low in {"master_products", "master"}:
+        return "e-commerce listings"
+    return str(graph_id or "this catalog")
+
+
+def append_price_history_unavailable(
+    graph_id: str,
+    lines: list[str],
+    evidence: list[EvidenceItem],
+    caveats: list[str],
+    *,
+    question: str | None = None,
+) -> None:
+    """Polite closed answer when PriceChangeEvent data is missing on this graph."""
+
+    label = _price_history_source_label(graph_id)
+    lines.append(
+        f"Price change history is not available in {label} "
+        f"(no PriceChangeEvent data on this catalog)."
+    )
+    lines.append(
+        "Assortment, materials, colors, and other product attributes are still available here — "
+        "ask about those, or ask the same price question against e-commerce listings."
+    )
+    evidence.append(
+        EvidenceItem(
+            source_id=graph_id,
+            record_id="price_history_unavailable",
+            title="Price history unavailable",
+            excerpt=f"graph={graph_id}; events=0; ask={str(question or '')[:120]}",
+            source_path="product_change_events",
+            verification_status="observed",
+            graph=graph_id,
+            node_id=None,
+            synthetic=False,
+        )
+    )
+    caveats.append(
+        f"Price trends use PriceChangeEvent nodes; {label} has none. "
+        "Other catalog facets on this source remain queryable."
+    )
+
+
 def append_neo4j_price_history_answer(
     platform,
     principal: Principal,
@@ -1412,7 +2819,47 @@ def append_neo4j_price_history_answer(
     mode = price_history_mode(question)
     if mode is None:
         return False
+    # PLM (and any graph without change events) must not fall through to assortment.
+    # Trending-product ranking can still use availability snapshots when price events=0.
+    try:
+        event_n = cypher_count_nodes(platform, graph_id, "PriceChangeEvent")
+    except Exception:
+        event_n = None
+    if (
+        event_n is not None
+        and int(event_n) <= 0
+        and mode not in {"count_events", "trending_products"}
+    ):
+        append_price_history_unavailable(
+            graph_id, lines, evidence, caveats, question=question
+        )
+        return True
+    if mode == "count_events" and event_n is not None and int(event_n) <= 0:
+        lines.append(
+            f"There are 0 PriceChangeEvent nodes in {_price_history_source_label(graph_id)}. "
+            "Price-drop / trend rankings need e-commerce change events."
+        )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="price_change_event_count",
+                title="PriceChangeEvent count",
+                excerpt="count=0",
+                source_path="product_change_events",
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+            )
+        )
+        return True
     filters = clean_product_filters(filters)
+    try:
+        from fashion_brain.ask import sanitize_party_filters
+
+        filters = sanitize_party_filters(filters)
+    except Exception:
+        pass
     # Metric wording must never become a garment/category filter (e.g. price→"special prices").
     _noise = {
         "special prices",
@@ -1430,16 +2877,80 @@ def append_neo4j_price_history_answer(
         val = normalize_name(str(filters.get(key) or ""))
         if val in _noise or any(tok in val for tok in ("special price", "trend")):
             filters.pop(key, None)
+    # Drop brand/buyer ghosts from fuzzy measure words (price→Prince) only.
+    # Keep sticky/deixis brands (e.g. prior Zara) that are not near-matches of metric tokens.
+    qn = normalize_name(question or "")
+    _measure_toks = {
+        "price",
+        "prices",
+        "cost",
+        "costs",
+        "change",
+        "changes",
+        "trend",
+        "trends",
+        "drop",
+        "drops",
+        "increase",
+        "increases",
+        "decrease",
+        "decreases",
+        "more",
+        "getting",
+        "recorded",
+        "than",
+        "ignoring",
+        "actually",
+        "similar",
+        "satin",
+    }
+    for key in ("brand", "buyer"):
+        raw = str(filters.get(key) or "").strip()
+        if not raw:
+            continue
+        val = normalize_name(raw)
+        if not val:
+            filters.pop(key, None)
+            continue
+        if re.search(rf"(?<![a-z0-9]){re.escape(val)}(?![a-z0-9])", qn):
+            continue
+        from difflib import SequenceMatcher
+
+        for tok in qn.split():
+            if tok not in _measure_toks and tok not in _noise:
+                continue
+            if SequenceMatcher(None, tok, val).ratio() >= 0.88:
+                filters.pop(key, None)
+                break
     # Geo/time scopes not modeled yet — fail closed instead of inventing a global trend.
     qn = normalize_name(question or "")
-    if re.search(r"\b(region|regions|country|countries)\b", qn) and re.search(
-        r"\b(uk|eu|us|usa|europe|asia)\b", qn
-    ):
-        lines.append(
-            "Regional / country-scoped price trends are not available yet "
-            "(Domain/Country nodes are not wired into PriceChangeEvent)."
+    geo_hit = bool(
+        re.search(r"\b(uk|eu|us|usa|europe|asia)\b", qn)
+        or (
+            re.search(r"\b(region|regions|country|countries)\b", qn)
+            and re.search(r"\b(uk|eu|us|usa|europe|asia)\b", qn)
         )
-        caveats.append("No Region dimension on price-history events; refusing global substitute.")
+    )
+    time_window = bool(
+        re.search(
+            r"\b(last\s+\d+\s+(days?|weeks?|months?|years?)|six\s+months|"
+            r"over the last|past\s+\d+\s+(days?|weeks?|months?|years?))\b",
+            qn,
+        )
+    )
+    if geo_hit or time_window:
+        if geo_hit:
+            lines.append(
+                "Regional / country-scoped price trends are not available yet "
+                "(Domain/Country nodes are not wired into PriceChangeEvent)."
+            )
+            caveats.append("No Region dimension on price-history events; refusing global substitute.")
+        if time_window:
+            lines.append(
+                "Fixed calendar windows (e.g. last six months) are not filtered on "
+                "PriceChangeEvent yet — refusing an unscoped global substitute."
+            )
+            caveats.append("No event-time window filter for 'last N months'; refusing global substitute.")
         return True
 
     if mode == "count_events":
@@ -1490,6 +3001,37 @@ def append_neo4j_price_history_answer(
                 f"{row.get('new_price') if row.get('new_price') is not None else '—'} | {pct_s} | "
                 f"{row.get('direction') or '—'} | {cur} |"
             )
+        # Line plot of price level over time (start at first old_price, then each new_price).
+        chart_labels: list[str] = []
+        chart_values: list[float] = []
+        first_old = rows[0].get("old_price")
+        first_at = str(rows[0].get("at") or "")[:10]
+        if isinstance(first_old, (int, float)):
+            chart_labels.append(first_at or "start")
+            chart_values.append(float(first_old))
+        for row in rows:
+            new_p = row.get("new_price")
+            if not isinstance(new_p, (int, float)):
+                continue
+            chart_labels.append(str(row.get("at") or "")[:19] or "—")
+            chart_values.append(float(new_p))
+        if len(chart_values) >= 2:
+            lines.append("```chart")
+            lines.append(
+                json.dumps(
+                    {
+                        "type": "line",
+                        "smooth": True,
+                        "title": f"Price over time · {_human_product_label(name, pid)}",
+                        "labels": chart_labels,
+                        "values": chart_values,
+                        "series": [{"name": "Price", "values": chart_values}],
+                        "yLabel": "Price",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            lines.append("```")
         evidence.append(
             EvidenceItem(
                 source_id=graph_id,
@@ -1502,6 +3044,127 @@ def append_neo4j_price_history_answer(
                 node_id=str(pid),
                 synthetic=False,
             )
+        )
+        return True
+
+    if mode == "trending_products":
+        who = (
+            filters.get("brand")
+            or filters.get("buyer")
+            or filters.get("category")
+            or "this selection"
+        )
+        show_n = max(int(limit or 10), 1)
+        rows = cypher_trending_products(platform, graph_id, filters, limit=show_n) or []
+        if not rows:
+            lines.append(
+                f"No recent stock/price activity was found to rank trending products for {who}."
+            )
+            caveats.append(
+                "Trending products use PriceChangeEvent + AvailabilitySnapshot activity scores."
+            )
+            return True
+        ups_total = sum(int(r.get("price_ups") or 0) for r in rows)
+        who_label = _display_label(str(who))
+        lines.append(
+            f"Most active / trending products for {who_label} right now "
+            "(higher score = more recent stock updates and price-change activity — "
+            "not sales/traffic):"
+        )
+        lines.append(
+            "| Product | Brand | Price | Category | Color | Availability | Score | "
+            "Stock snaps | Price ups | Last activity | Product link |"
+        )
+        lines.append(
+            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |"
+        )
+        for row in rows:
+            name = _human_product_label(
+                row.get("name"),
+                row.get("product_id"),
+                product_url=row.get("product_url"),
+            )
+            price = _format_money(
+                row.get("price_num"), row.get("currency"), row.get("price_text")
+            )
+            category = (
+                str(row.get("category_path") or "").strip()
+                or " > ".join(
+                    x
+                    for x in (
+                        str(row.get("section") or "").strip(),
+                        str(row.get("family") or "").strip(),
+                        str(row.get("subcategory") or "").strip(),
+                    )
+                    if x and x.casefold() not in {"null", "none"}
+                )
+                or "—"
+            ).replace("|", "\\|")
+            color = str(row.get("color") or "—").strip() or "—"
+            if color.casefold() in {"null", "none"}:
+                color = "—"
+            color = color.replace("|", "\\|")
+            avail = str(row.get("availability") or "—").strip() or "—"
+            if avail.casefold() in {"null", "none"}:
+                avail = "—"
+            avail = avail.replace("|", "\\|")
+            last_at = str(row.get("last_price_at") or row.get("last_avail_at") or "—")[:19]
+            raw_url = str(row.get("product_url") or "").strip()
+            canon_url = _canonical_product_url(raw_url)
+            if (
+                canon_url
+                and canon_url.casefold() not in {"null", "none"}
+                and canon_url.startswith(("http://", "https://"))
+            ):
+                link = f"[Open on site]({canon_url})"
+            else:
+                link = "—"
+            lines.append(
+                f"| {name} | {_display_label(str(row.get('brand') or '—'))} | {price} | "
+                f"{category} | {color} | {avail} | "
+                f"{int(row.get('score') or 0)} | {int(row.get('avail_snaps') or 0)} | "
+                f"{int(row.get('price_ups') or 0)} | {last_at} | {link} |"
+            )
+            evidence.append(
+                EvidenceItem(
+                    source_id=graph_id,
+                    record_id=str(row.get("product_id") or ""),
+                    title=str(name),
+                    excerpt=(
+                        f"price={price}; category={category}; color={color}; "
+                        f"url={canon_url or '—'}; score={row.get('score')} "
+                        f"ups={row.get('price_ups')} avail_snaps={row.get('avail_snaps')} "
+                        f"events={row.get('price_events')}"
+                    ),
+                    source_path="product_change_events",
+                    verification_status="observed",
+                    graph=graph_id,
+                    node_id=str(row.get("product_id") or "") or None,
+                    synthetic=False,
+                )
+            )
+        if ups_total <= 0:
+            lines.append(
+                "Note: no same-currency price *increases* were recorded in this scope — "
+                "ranking leans on stock/availability updates and other price-change activity "
+                "(including currency-label switches)."
+            )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="trending_products",
+                title=f"Trending products · {_display_label(str(who))}",
+                excerpt=f"products={len(rows)}; same_currency_ups={ups_total}",
+                source_path="product_change_events",
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+            )
+        )
+        caveats.append(
+            "Trending score = (same-currency price ups × 5) + (availability snapshots × 2) "
+            "+ price events + currency switches. Not a sales/traffic rank."
         )
         return True
 
@@ -1533,8 +3196,193 @@ def append_neo4j_price_history_answer(
         )
         return True
 
+    # Multi-brand compare before volatility/movers so "Zara and Primark … compare"
+    # is not swallowed by the swing/moves classifier.
+    parties: list[str] = []
+    try:
+        from fashion_brain.ask import live_brands_mentioned, live_brand_names, split_multi_party_filter
+
+        parties = split_multi_party_filter(str(filters.get("brand") or filters.get("buyer") or ""))
+        if len(parties) < 2 and mode == "brand_compare":
+            parties = live_brands_mentioned(question, live_brand_names(platform, graph_id))[:4]
+    except Exception:
+        parties = []
+    if len(parties) >= 2 or mode == "brand_compare":
+        if len(parties) < 2:
+            lines.append(
+                "I can compare historical price moves once two brands are in scope "
+                "(e.g. Zara and Primark)."
+            )
+            caveats.append("Brand comparison needs at least two named brands.")
+            return True
+        lines.append("Comparing historical price moves by brand:")
+        lines.append(
+            "| Brand | Avg change | Events | Products | Up | Down | Unchanged |"
+        )
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+        excerpts: list[str] = []
+        any_events = False
+        switch_summaries: list[tuple[str, dict]] = []
+        chart_labels: list[str] = []
+        chart_series: list[dict] = []
+        for party in parties:
+            party_filters = {**{k: v for k, v in filters.items() if k not in {"brand", "buyer"}}, "brand": party}
+            summary = cypher_price_trend_summary(platform, graph_id, party_filters) or {}
+            events = int(summary.get("change_events") or 0)
+            any_events = any_events or events > 0
+            switches = cypher_price_currency_switch_summary(platform, graph_id, party_filters) or {}
+            if events == 0 and int(switches.get("events") or 0) > 0:
+                switch_summaries.append((party, switches))
+            avg = summary.get("avg_delta_pct")
+            avg_s = f"{avg:.2f}%" if isinstance(avg, float) else "—"
+            lines.append(
+                f"| {_display_label(party)} | {avg_s} | {events} | "
+                f"{int(summary.get('products_changed') or 0)} | "
+                f"{int(summary.get('ups') or 0)} | {int(summary.get('downs') or 0)} | "
+                f"{int(summary.get('unchanged') or 0)} |"
+            )
+            excerpts.append(f"{party} avg={avg_s} events={events}")
+            series = cypher_price_trend_timeseries(
+                platform, graph_id, party_filters, limit=max(int(limit or 24), 16)
+            ) or []
+            if len(series) >= 2:
+                if not chart_labels:
+                    chart_labels = [str(r.get("period") or "") for r in series]
+                label_index = {lab: i for i, lab in enumerate(chart_labels)}
+                aligned = [None] * len(chart_labels)
+                for pt in series:
+                    idx = label_index.get(str(pt.get("period") or ""))
+                    if idx is None:
+                        continue
+                    aligned[idx] = float(pt.get("avg_delta_pct") or 0.0)
+                last = None
+                filled: list[float] = []
+                for v in aligned:
+                    if v is not None:
+                        last = v
+                    filled.append(float(last if last is not None else 0.0))
+                if sum(1 for v in aligned if v is not None) >= 2:
+                    chart_series.append(
+                        {"name": _display_label(party), "values": filled}
+                    )
+            sample_n = min(max(int(limit or 3), 1), 3)
+            sample = cypher_price_movers(
+                platform, graph_id, party_filters, direction="down", limit=sample_n
+            )
+            if sample:
+                lines.append(f"Example {_display_label(party)} moves:")
+                for row in sample:
+                    pct = row.get("delta_pct")
+                    pct_s = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "—"
+                    lines.append(
+                        f"- {row.get('name') or row.get('product_id')}: "
+                        f"{row.get('old_price')} → {row.get('new_price')} ({pct_s})"
+                    )
+        if len(chart_series) >= 1 and len(chart_labels) >= 2:
+            lines.append("```chart")
+            lines.append(
+                json.dumps(
+                    {
+                        "type": "line",
+                        "smooth": True,
+                        "analytics": True,
+                        "title": "Historical price moves · brand compare",
+                        "labels": chart_labels,
+                        "values": chart_series[0]["values"],
+                        "series": chart_series,
+                        "yLabel": "Change %",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            lines.append("```")
+        for party, switches in switch_summaries:
+            _append_currency_switch_only_summary(
+                party,
+                switches,
+                graph_id,
+                lines,
+                evidence,
+                caveats,
+            )
+        if not any_events and not switch_summaries:
+            lines.append(
+                "No same-currency price change events were found for these brands "
+                "(currency switches are excluded)."
+            )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="price_trend_brand_compare",
+                title="Price trend brand comparison",
+                excerpt="; ".join(excerpts),
+                source_path="product_change_events",
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+            )
+        )
+        caveats.append(
+            "Brand comparison uses same-currency PriceChangeEvent deltas; "
+            "paired similar-product matching across brands is not applied yet."
+        )
+        return True
+
+    if mode == "volatility":
+        rows = cypher_price_movers(
+            platform,
+            graph_id,
+            filters,
+            direction="any",
+            limit=max(int(limit or 15), 1),
+        )
+        if not rows:
+            lines.append("No same-currency price swings were found to rank by volatility.")
+            return True
+        lines.append("Products with the largest absolute price swings (same currency):")
+        lines.append("| Product | Brand | Old | New | Change % | Direction |")
+        lines.append("| --- | --- | ---: | ---: | ---: | --- |")
+        for row in rows:
+            pct = row.get("delta_pct")
+            pct_s = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "—"
+            direction = "down" if isinstance(pct, (int, float)) and pct < 0 else (
+                "up" if isinstance(pct, (int, float)) and pct > 0 else (row.get("direction") or "—")
+            )
+            name = _human_product_label(row.get("name"), row.get("product_id"))
+            lines.append(
+                f"| {name} | {_display_label(str(row.get('brand') or '—'))} | "
+                f"{row.get('old_price') if row.get('old_price') is not None else '—'} | "
+                f"{row.get('new_price') if row.get('new_price') is not None else '—'} | "
+                f"{pct_s} | {direction} |"
+            )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="price_volatility",
+                title="Price volatility ranking",
+                excerpt="; ".join(
+                    f"{r.get('name') or r.get('product_id')}={r.get('delta_pct')}" for r in rows[:5]
+                ),
+                source_path="product_change_events",
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+            )
+        )
+        return True
+
     if mode == "trend_by_category":
         rows = cypher_price_trend_by_category(platform, graph_id, limit=max(int(limit or 10), 1))
+        # Prefer categories that are getting cheaper when the ask is about cheapening.
+        if rows and re.search(r"\b(cheaper|cheapening|getting cheaper|decrease|drop|dropping)\b", qn):
+            cheaper = [
+                row
+                for row in rows
+                if isinstance(row.get("avg_delta_pct"), (int, float)) and float(row["avg_delta_pct"]) < 0
+            ]
+            rows = cheaper or rows
         if not rows:
             switches = cypher_price_currency_switch_summary(platform, graph_id, {}) or {}
             if not _append_currency_switch_only_summary(
@@ -1575,95 +3423,116 @@ def append_neo4j_price_history_answer(
         )
         return True
 
-    # "Zara | Primark" must never be treated as a single brand name.
-    parties: list[str] = []
-    try:
-        from fashion_brain.ask import split_multi_party_filter
-
-        parties = split_multi_party_filter(str(filters.get("brand") or filters.get("buyer") or ""))
-    except Exception:
-        parties = []
-    if len(parties) >= 2:
-        lines.append("Comparing historical price moves by brand:")
-        lines.append(
-            "| Brand | Avg change | Events | Products | Up | Down | Unchanged |"
+    if mode == "trend":
+        scope_keys = (
+            "brand",
+            "buyer",
+            "category",
+            "garment",
+            "garment_type",
+            "family",
+            "subfamily",
+            "section",
+            "plm_main_category",
+            "subcategory",
+            "plm_sub_sub_category",
         )
-        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
-        excerpts: list[str] = []
-        any_events = False
-        switch_summaries: list[tuple[str, dict]] = []
-        for party in parties:
-            party_filters = {**filters, "brand": party}
-            party_filters.pop("buyer", None)
-            summary = cypher_price_trend_summary(platform, graph_id, party_filters) or {}
-            events = int(summary.get("change_events") or 0)
-            any_events = any_events or events > 0
-            switches = cypher_price_currency_switch_summary(platform, graph_id, party_filters) or {}
-            if events == 0 and int(switches.get("events") or 0) > 0:
-                switch_summaries.append((party, switches))
-            avg = summary.get("avg_delta_pct")
-            avg_s = f"{avg:.2f}%" if isinstance(avg, float) else "—"
+        if not any(filters.get(k) for k in scope_keys):
+            # Refuse unscoped global trend — ask which brand / buyer / category.
+            options = _price_trend_scope_options(platform, graph_id)
             lines.append(
-                f"| {_display_label(party)} | {avg_s} | {events} | "
-                f"{int(summary.get('products_changed') or 0)} | "
-                f"{int(summary.get('ups') or 0)} | {int(summary.get('downs') or 0)} | "
-                f"{int(summary.get('unchanged') or 0)} |"
+                "I can run a price trend analysis once I know the scope. "
+                "Which brand, buyer, or category should I track?"
             )
-            excerpts.append(f"{party} avg={avg_s} events={events}")
-            sample_n = min(max(int(limit or 3), 1), 3)
-            if mode in {"movers_up", "movers_down"}:
-                direction = "up" if mode == "movers_up" else "down"
-            else:
-                direction = "down" if isinstance(avg, float) and avg < 0 else "up"
-            sample = cypher_price_movers(
-                platform, graph_id, party_filters, direction=direction, limit=sample_n
+            for i, opt in enumerate(options, 1):
+                lines.append(f"{i}. {opt['label']}")
+            if options:
+                lines.append("Reply with the number, or name a brand / buyer / category.")
+            evidence.append(
+                EvidenceItem(
+                    source_id=graph_id,
+                    record_id="price_trend_needs_scope",
+                    title="Price trend needs scope",
+                    excerpt=json.dumps(
+                        {
+                            "options": [o.get("label") for o in options],
+                            "interpretations": [
+                                {
+                                    "restated_question": (
+                                        f"Summarize average price change trends for {o.get('value')}"
+                                    ),
+                                    "filters": dict(o.get("filters") or {}),
+                                }
+                                for o in options
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    source_path="product_change_events",
+                    verification_status="observed",
+                    graph=graph_id,
+                    node_id=None,
+                    synthetic=False,
+                )
             )
-            if sample:
-                lines.append(f"Example {_display_label(party)} moves:")
-                for row in sample:
-                    pct = row.get("delta_pct")
-                    pct_s = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "—"
-                    lines.append(
-                        f"- {row.get('name') or row.get('product_id')}: "
-                        f"{row.get('old_price')} → {row.get('new_price')} ({pct_s})"
-                    )
-        for party, switches in switch_summaries:
-            _append_currency_switch_only_summary(
-                party,
+            caveats.append("Price trend requires a brand, buyer, or category filter.")
+            return True
+
+        summary = cypher_price_trend_summary(platform, graph_id, filters)
+        who = (
+            filters.get("brand")
+            or filters.get("buyer")
+            or filters.get("category")
+            or filters.get("garment")
+            or filters.get("section")
+            or filters.get("family")
+            or "this selection"
+        )
+        if not summary or not summary.get("change_events"):
+            # Drop currency codes wrongly stored as buyer/brand before trending.
+            scoped_filters = dict(filters or {})
+            for key in ("brand", "buyer"):
+                if str(scoped_filters.get(key) or "").casefold() in {
+                    "usd", "gbp", "eur", "both", "dollar", "dollars", "pound", "pounds",
+                }:
+                    scoped_filters.pop(key, None)
+            switches = cypher_price_currency_switch_summary(
+                platform, graph_id, scoped_filters
+            ) or {}
+            currency_pref = _currency_preference_from_question(question)
+            codes = _currencies_from_switch_pairs(switches)
+            who_scoped = (
+                scoped_filters.get("brand")
+                or scoped_filters.get("buyer")
+                or who
+            )
+            # Multi-currency switch mix and no preference yet → ask USD / GBP / both.
+            if not currency_pref and len(codes) >= 2 and _append_currency_preference_clarify(
+                str(who_scoped),
                 switches,
                 graph_id,
+                scoped_filters,
                 lines,
                 evidence,
                 caveats,
-            )
-        if not any_events and not switch_summaries:
-            lines.append(
-                "No same-currency price change events were found for these brands "
-                "(currency switches are excluded)."
-            )
-        evidence.append(
-            EvidenceItem(
-                source_id=graph_id,
-                record_id="price_trend_brand_compare",
-                title="Price trend brand comparison",
-                excerpt="; ".join(excerpts),
-                source_path="product_change_events",
-                verification_status="observed",
-                graph=graph_id,
-                node_id=None,
-                synthetic=False,
-            )
-        )
-        caveats.append(
-            "Brand comparison uses same-currency PriceChangeEvent deltas; "
-            "paired similar-product matching across brands is not applied yet."
-        )
-        return True
-    if mode == "trend":
-        summary = cypher_price_trend_summary(platform, graph_id, filters)
-        who = filters.get("brand") or filters.get("buyer") or "this selection"
-        if not summary or not summary.get("change_events"):
-            switches = cypher_price_currency_switch_summary(platform, graph_id, filters) or {}
+            ):
+                return True
+            # User already named a currency (or only one exists) → absolute price-level trend.
+            if not currency_pref and len(codes) == 1:
+                currency_pref = codes[0]
+            if currency_pref and _append_currency_scoped_trend(
+                platform,
+                graph_id,
+                scoped_filters,
+                str(who_scoped),
+                currency_pref,
+                switches,
+                lines,
+                evidence,
+                caveats,
+                limit=limit,
+            ):
+                return True
             if _append_currency_switch_only_summary(
                 str(who),
                 switches,
@@ -1738,20 +3607,83 @@ def append_neo4j_price_history_answer(
                 )
             if len(series) > 12:
                 lines.append(f"| … | ({len(series)} points plotted) | … |")
+            # Align multi-facet lines onto the overall period axis.
+            labels = [str(r.get("period") or "") for r in series]
+            chart_series: list[dict] = [
+                {"name": f"Overall · {_display_label(str(who))}", "values": values}
+            ]
+            # Min / max envelope as soft guide lines when present on the buckets.
+            min_line = [
+                float(r["min_delta_pct"])
+                if isinstance(r.get("min_delta_pct"), (int, float))
+                else float(r.get("avg_delta_pct") or 0.0)
+                for r in series
+            ]
+            max_line = [
+                float(r["max_delta_pct"])
+                if isinstance(r.get("max_delta_pct"), (int, float))
+                else float(r.get("avg_delta_pct") or 0.0)
+                for r in series
+            ]
+            if any(a != b for a, b in zip(min_line, max_line)):
+                chart_series.append({"name": "Period min %", "values": min_line, "style": "dashed"})
+                chart_series.append({"name": "Period max %", "values": max_line, "style": "dashed"})
+
+            facet_key = "category"
+            if filters.get("category") or filters.get("garment") or filters.get("family"):
+                facet_key = "section" if not filters.get("section") else "brand"
+            facet_rows = cypher_price_trend_facet_series(
+                platform,
+                graph_id,
+                filters,
+                facet=facet_key,
+                top_n=4,
+                limit=max(len(series), 16),
+            )
+            label_index = {lab: i for i, lab in enumerate(labels)}
+            for facet in facet_rows[:4]:
+                aligned = [None] * len(labels)
+                for pt in facet.get("points") or []:
+                    idx = label_index.get(str(pt.get("period") or ""))
+                    if idx is None:
+                        continue
+                    aligned[idx] = float(pt.get("avg_delta_pct") or 0.0)
+                # Forward-fill gaps so the line stays continuous.
+                last = None
+                filled: list[float] = []
+                for v in aligned:
+                    if v is not None:
+                        last = v
+                    filled.append(float(last if last is not None else 0.0))
+                if sum(1 for v in aligned if v is not None) >= 2:
+                    chart_series.append(
+                        {
+                            "name": _display_label(str(facet.get("name") or "facet")),
+                            "values": filled,
+                        }
+                    )
+
             chart = {
                 "type": "line",
                 "smooth": True,
                 "analytics": True,
-                "title": f"Price trend · {who}",
-                "labels": [str(r.get("period") or "") for r in series],
+                "title": f"Price change trends · {_display_label(str(who))}",
+                "labels": labels,
                 "values": values,
+                "series": chart_series,
                 "avg": round(float(overall_avg), 3),
                 "min": round(float(overall_min), 3),
                 "max": round(float(overall_max), 3),
+                "yLabel": "Change %",
             }
             lines.append("```chart")
             lines.append(json.dumps(chart, ensure_ascii=False))
             lines.append("```")
+            if len(chart_series) > 1:
+                lines.append(
+                    "Chart lines: overall average under your filters, period min/max envelope, "
+                    "and the busiest categories/sections inside that scope."
+                )
 
         # Grounded drivers only — never invent market narratives.
         lines.append("Probable drivers (from recorded events only):")
@@ -1838,14 +3770,17 @@ def append_neo4j_price_history_answer(
 
     direction = "up" if mode == "movers_up" else "down"
     show_n = max(int(limit or 10), 1)
+    min_abs = _price_pct_threshold(question)
     rows = cypher_price_movers(
         platform,
         graph_id,
         filters,
         direction=direction,
         limit=show_n,
+        min_abs_pct=min_abs,
     )
     label = "decreases" if direction == "down" else "increases"
+    thresh_note = f" of {min_abs:g}% or more" if min_abs else ""
     if not rows:
         switches = cypher_price_currency_switch_summary(platform, graph_id, filters) or {}
         if not _append_currency_switch_only_summary(
@@ -1857,12 +3792,15 @@ def append_neo4j_price_history_answer(
             caveats,
         ):
             lines.append(
-                f"No same-currency price {label} were found in the product knowledge graph "
+                f"No same-currency price {label}{thresh_note} were found in the product knowledge graph "
                 "(currency switches are excluded)."
             )
             caveats.append("Price movers use PriceChangeEvent nodes from product_change_events.")
         return True
-    lines.append(f"Largest same-currency price {label} (from catalog change events):")
+    heading = f"Largest same-currency price {label}"
+    if min_abs:
+        heading = f"Same-currency price {label} of {min_abs:g}% or more"
+    lines.append(f"{heading} (from catalog change events):")
     lines.append("| Product | Brand | Old | New | Change % | When |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
     for row in rows:
@@ -2129,10 +4067,11 @@ def cypher_group_by(
             if field in {"category", "family", "subfamily"}
             else f"p.`{field}`"
         )
+        rel_alt = "|".join(rel)
         query = (
             "MATCH (p:Entity:Product) WHERE "
             + " AND ".join(where)
-            + f" OPTIONAL MATCH (p)-[:{rel[0]}]->(x:Entity) "
+            + f" OPTIONAL MATCH (p)-[:{rel_alt}]->(x:Entity) "
             "WHERE coalesce(x.lifecycle,'active') <> 'deleted' "
             f"WITH p, coalesce(x.name, {prop_fallback}, '(unspecified)') AS value "
             "RETURN value, count(DISTINCT p) AS n "
@@ -2166,7 +4105,13 @@ def cypher_group_by(
 
 
 def cypher_sample_products(
-    platform, graph_id: str, filters: dict, *, limit: int = 5, offset: int = 0
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    limit: int = 5,
+    offset: int = 0,
+    order_by_price: str | None = None,
 ) -> list:
     """Fetch a few matching product nodes via Cypher (full filter support)."""
 
@@ -2182,7 +4127,14 @@ def cypher_sample_products(
     if where is None:
         return []
     order = "ORDER BY p.id ASC"
-    if filters.get("price_max") is not None or filters.get("price_min") is not None:
+    price_dir = str(order_by_price or "").casefold().strip()
+    if price_dir in {"desc", "asc"}:
+        direction = "DESC" if price_dir == "desc" else "ASC"
+        order = (
+            f"ORDER BY {_price_num_cypher()} IS NULL ASC, "
+            f"{_price_num_cypher()} {direction}, p.id ASC"
+        )
+    elif filters.get("price_max") is not None or filters.get("price_min") is not None:
         order = f"ORDER BY {_price_num_cypher()} ASC, p.id ASC"
     query = (
         "MATCH (p:Entity:Product) WHERE "
@@ -2277,17 +4229,31 @@ def match_neo4j_products(platform, principal: Principal, graph_id: str, filters:
     return matched
 
 
-def search_neo4j_products(platform, principal: Principal, graph_id: str, filters: dict, *, limit: int = 5) -> tuple[list, int]:
+def search_neo4j_products(
+    platform,
+    principal: Principal,
+    graph_id: str,
+    filters: dict,
+    *,
+    limit: int = 5,
+    order_by_price: str | None = None,
+) -> tuple[list, int]:
     filters = clean_product_filters(filters)
-    total = cypher_count_products(platform, graph_id, filters)
-    sample = cypher_sample_products(platform, graph_id, filters, limit=limit)
-    if total is not None and sample is not None:
+    # Sample first for the row dump; always count separately so "There are N products"
+    # never collapses to the LIMIT size (was: total=len(sample) when limit<=25).
+    sample = cypher_sample_products(
+        platform, graph_id, filters, limit=limit, order_by_price=order_by_price
+    )
+    if sample is not None:
         sample = [
             node
             for node in sample
             if allows(principal, node.properties.get("classification") or "internal")
-        ]
-        return sample[:limit], int(total)
+        ][:limit]
+        total = cypher_count_products(platform, graph_id, filters)
+        if total is None:
+            total = len(sample)
+        return sample, int(total)
     matched = match_neo4j_products(platform, principal, graph_id, filters)
     return matched[:limit], len(matched)
 
@@ -2719,9 +4685,54 @@ def append_neo4j_product_details_answer(
 ) -> None:
     """Return user-facing properties for a small sample of matching products."""
 
-    products, _total = search_neo4j_products(
-        platform, principal, graph_id, filters, limit=max(1, min(int(limit), 10))
-    )
+    filters = dict(filters or {})
+    # Style / SKU tokens must resolve via id ENDS WITH — not be dropped as a facet.
+    pref = str(
+        filters.get("product_id")
+        or filters.get("style_reference")
+        or filters.get("sku")
+        or ""
+    ).strip()
+    products: list = []
+    if pref:
+        resolved = cypher_resolve_product_id(platform, graph_id, pref)
+        if resolved:
+            session_factory = _session(platform)
+            if session_factory:
+                try:
+                    with session_factory() as session:
+                        row = session.run(
+                            "MATCH (p:Entity:Product) WHERE p.graph = $g AND p.id = $id "
+                            "AND coalesce(p.lifecycle,'active') <> 'deleted' "
+                            "RETURN p",
+                            {"g": graph_id, "id": resolved},
+                        ).single()
+                    if row and row.get("p"):
+                        node = row["p"]
+                        # Adapt neo4j node to the shape search_neo4j_products returns.
+                        from types import SimpleNamespace
+
+                        try:
+                            props = dict(node)
+                        except Exception:
+                            props = {k: node.get(k) for k in node.keys()} if hasattr(node, "keys") else {}
+                        if not props.get("id"):
+                            props["id"] = resolved
+                        products = [
+                            SimpleNamespace(
+                                id=str(props.get("id") or resolved),
+                                properties=props,
+                            )
+                        ]
+                except Exception:
+                    products = []
+        filters.pop("product_id", None)
+        filters.pop("style_reference", None)
+        filters.pop("sku", None)
+    if not products:
+        products, _total = search_neo4j_products(
+            platform, principal, graph_id, filters, limit=max(1, min(int(limit), 10))
+        )
     if not products:
         lines.append("No matching product specifications were found in the selected product catalog.")
         return
@@ -3014,14 +5025,151 @@ def append_neo4j_count_answer(
     *,
     question: str = "",
     count_entity: str | None = None,
+    meta_result: dict | None = None,
+    include_optional_metadata: bool = True,
 ) -> None:
     filters = clean_product_filters(filters)
+    try:
+        from fashion_brain.planning.semantic_field_map import apply_semantic_field_map
+
+        filters, group_by = apply_semantic_field_map(
+            filters, graph_id, group_by=group_by
+        )
+        filters = clean_product_filters(filters)
+    except Exception:
+        pass
+    filters = _align_party_filters_for_graph(platform, graph_id, filters)
+    if group_by:
+        resolved_gb = resolve_group_by_with_fallback(
+            platform, graph_id, group_by, filters
+        )
+        if resolved_gb and resolved_gb != str(group_by):
+            caveats.append(
+                f"Grouped by {resolved_gb.replace('_', ' ')} "
+                f"(role-similar to {str(group_by).replace('_', ' ')} on this catalog)."
+            )
+            group_by = resolved_gb
+        elif resolved_gb:
+            group_by = resolved_gb
+    generated = getattr(getattr(platform, "settings", None), "generated", None)
+    try:
+        from knowledge_graph.retrieval.kg_stats import answer_simple_count, stats_available
+
+        has_stats = stats_available(graph_id, generated)
+    except Exception:
+        has_stats = False
+        answer_simple_count = None  # type: ignore[assignment]
+
+    # Ranked product lists (top-N / highest price) must never collapse to a meta count.
+    ranked_listing = False
+    price_sort = None
+    try:
+        from fashion_brain.ask import (
+            is_ranked_product_listing_ask,
+            product_price_sort_direction,
+        )
+
+        ranked_listing = bool(is_ranked_product_listing_ask(question)) or (
+            limit is not None and bool(product_price_sort_direction(question))
+        )
+        price_sort = product_price_sort_direction(question)
+    except Exception:
+        ranked_listing = False
+        price_sort = None
+
+    # Metadata-first: 0–1 filter simple counts never hit Cypher when kg_stats exists.
+    # Multi-filter / uncached dimension → answer_simple_count returns None (cache_miss).
+    if (
+        has_stats
+        and answer_simple_count is not None
+        and not group_by
+        and len(filters) <= 1
+        and not ranked_listing
+        and limit is None
+    ):
+        # Skip meta short-circuit for intentional multi-party compare ("Primark | Zara").
+        compare_raw = str(filters.get("brand") or filters.get("buyer") or "")
+        if "|" not in compare_raw:
+            meta = meta_result
+            if meta is None:
+                meta = answer_simple_count(
+                    graph_id,
+                    filters=filters,
+                    count_entity=count_entity,
+                    generated=generated,
+                )
+            if meta is not None:
+                from knowledge_graph.retrieval.kg_stats import filters_match, normalize_filter_dict
+
+                requested = normalize_filter_dict(
+                    meta.get("requested_filters") if meta.get("requested_filters") is not None else filters
+                )
+                applied = normalize_filter_dict(meta.get("applied_filters") or {})
+                # Guard: never accept an unfiltered global hit for a filtered ask.
+                if requested and not filters_match(requested, applied):
+                    meta = None
+                else:
+                    label = _graph_label(platform, graph_id)
+                    n = int(meta["n"])
+                    kind = str(meta.get("kind") or "")
+                    if kind == "distinct_facet":
+                        noun = str(meta.get("attribute") or "value").replace("_", " ")
+                        lines.append(f"There are {n:,} distinct {noun}s in {label}.")
+                        title = f"{label} distinct {noun} count"
+                        excerpt = f"{meta.get('attribute')}s={n}"
+                    elif kind == "value_count":
+                        phrase = _filter_phrase(filters)
+                        lines.append(f"There are {n:,} products{phrase}.")
+                        title = f"{label} {meta.get('attribute')}={meta.get('value')}"
+                        filter_label = str(
+                            meta.get("filter")
+                            or f"filter: {meta.get('attribute')}={meta.get('value')}"
+                        )
+                        excerpt = f"{filter_label} → {n} (from generated/kg_stats)"
+                    else:
+                        lines.append(f"There are {n:,} products.")
+                        title = f"{label} product total"
+                        excerpt = f"products={n}"
+                    evidence.append(
+                        EvidenceItem(
+                            source_id=graph_id,
+                            record_id="kg_stats",
+                            title=title,
+                            excerpt=excerpt,
+                            source_path=f"kg_stats/{graph_id}.json",
+                            verification_status="observed",
+                            graph=graph_id,
+                            node_id=None,
+                            synthetic=False,
+                            requested_filters=requested,
+                            applied_filters=applied,
+                        )
+                    )
+                    # Optional facet facts for ResponseAgent — not forced into the answer.
+                    if (
+                        include_optional_metadata
+                        and kind in {"value_count", "product_total", ""}
+                        and n > 0
+                    ):
+                        _attach_optional_facet_metadata(
+                            platform,
+                            graph_id,
+                            filters,
+                            total=n,
+                            evidence=evidence,
+                            question=question,
+                        )
+                    return
+            # Cache-miss with filters present: do NOT fall through to a global total.
+            if filters:
+                # Continue to Cypher / multi-filter path below — never invent products=total.
+                pass
+
     # "how many <facet>s" → distinct values of that graph facet, never the product total.
     entity = resolve_count_facet(platform, graph_id, count_entity, question=question)
     if entity and entity != "product" and not filters and not group_by:
         label = _graph_label(platform, graph_id)
         noun = entity.replace("_", " ")
-        generated = getattr(getattr(platform, "settings", None), "generated", None)
         n: int | None = None
         source = "cypher"
         try:
@@ -3032,7 +5180,8 @@ def append_neo4j_count_answer(
                 source = "kg_stats"
         except Exception:
             n = None
-        if n is None:
+        # When stats exist, never fall back to Cypher for bare facet counts.
+        if n is None and not has_stats:
             groups = cypher_group_by(platform, graph_id, entity, {})
             if groups is not None:
                 n = sum(
@@ -3042,6 +5191,9 @@ def append_neo4j_count_answer(
                     and str(name).strip().casefold() not in {"(empty)", "(unspecified)"}
                 )
                 source = "cypher"
+        elif n is None and has_stats:
+            n = 0
+            source = "kg_stats"
         if n is not None:
             lines.append(f"There are {n:,} distinct {noun}s in {label}.")
             evidence.append(
@@ -3103,7 +5255,7 @@ def append_neo4j_count_answer(
             if n is None:
                 n = cypher_count_products(platform, graph_id, {**other_facets, "buyer": party})
             rows.append((_display_label(party), int(n or 0)))
-        scope = _filter_phrase(other_facets) or "matching products"
+        scope = (_filter_phrase(other_facets) or " matching products").strip()
         lines.append(f"Comparing product counts ({scope}):")
         lines.append("| Brand | Products |")
         lines.append("| --- | ---: |")
@@ -3163,7 +5315,6 @@ def append_neo4j_count_answer(
 
     phrase = _filter_phrase(filters)
     label = _graph_label(platform, graph_id)
-    generated = getattr(getattr(platform, "settings", None), "generated", None)
     stats_file = (
         str(Path(generated) / "kg_stats" / f"{graph_id}.json")
         if generated
@@ -3187,24 +5338,37 @@ def append_neo4j_count_answer(
         except Exception:
             return None
 
-    # Plain unfiltered total — no automatic brand mix (ask "by brand" for that).
+    # Plain unfiltered total — metadata first; Cypher only when stats file is missing.
     if not filters and not group_by:
-        total = neo4j_product_count(platform, graph_id)
-        cached = _stats_breakdown("brand")
-        if cached:
-            total, _groups = cached
+        total: int | None = None
+        from_stats = False
+        try:
+            from knowledge_graph.retrieval.kg_stats import product_total
+
+            total = product_total(graph_id, generated)
+            if total is not None:
+                from_stats = True
+        except Exception:
+            total = None
+        if total is None and not has_stats:
+            total = neo4j_product_count(platform, graph_id)
+        if total is None:
+            total = 0
+            from_stats = has_stats
         lines.append(f"There are {total:,} products.")
         evidence.append(
             EvidenceItem(
                 source_id=graph_id,
-                record_id="kg_stats" if cached else "count",
+                record_id="kg_stats" if from_stats else "count",
                 title=f"{label} product total",
                 excerpt=f"products={total}",
-                source_path=stats_file if cached else graph_id,
+                source_path=stats_file if from_stats else graph_id,
                 verification_status="observed",
                 graph=graph_id,
                 node_id=None,
                 synthetic=False,
+                requested_filters={},
+                applied_filters={},
             )
         )
         return
@@ -3213,13 +5377,25 @@ def append_neo4j_count_answer(
         if cached:
             total, groups = cached
             lines.append(f"There are {total:,} products.")
-            lines.extend(_dimension_breakdown_lines(str(group_by), groups, total, limit))
+            breakdown_lines = _dimension_breakdown_lines(
+                str(group_by),
+                groups,
+                total,
+                limit,
+                graph_id=graph_id,
+                platform=platform,
+                generated=generated,
+            )
+            lines.extend(breakdown_lines)
             evidence.append(
                 EvidenceItem(
                     source_id=graph_id,
                     record_id="kg_stats",
                     title=f"{label} {group_by} breakdown",
-                    excerpt=f"products={total}; {group_by} values={len(groups)} (from generated/kg_stats)",
+                    excerpt=(
+                        f"products={total}; {group_by} values={len(groups)} "
+                        f"(from generated/kg_stats)\n" + "\n".join(breakdown_lines)
+                    ),
                     source_path=stats_file,
                     verification_status="observed",
                     graph=graph_id,
@@ -3228,39 +5404,82 @@ def append_neo4j_count_answer(
                 )
             )
             return
-    if len(filters) == 1 and not group_by:
+        # Stats exist but this facet shard is missing (e.g. ecom color/material) —
+        # fall through to live Cypher instead of inventing an empty catalog.
+    if len(filters) == 1 and not group_by and limit is None:
+        # Single-filter: use kg_stats only when that dimension is pre-computed.
+        # Uncached dimension → fall through to live Cypher (never fake a global/zero meta hit).
         attr, value = next(iter(filters.items()))
         try:
-            from knowledge_graph.retrieval.kg_stats import value_count
+            from knowledge_graph.retrieval.kg_stats import has_dimension, normalize_filter_dict, value_count
 
-            generated = getattr(getattr(platform, "settings", None), "generated", None)
-            cached = value_count(graph_id, str(attr), str(value), generated)
-            if cached is not None:
-                lines.append(f"There are {cached:,} products{phrase}.")
+            if has_dimension(graph_id, str(attr), generated):
+                cached = value_count(graph_id, str(attr), str(value), generated)
+                n = int(cached if cached is not None else 0)
+                applied = normalize_filter_dict({str(attr): str(value)})
+                lines.append(f"There are {n:,} products{phrase}.")
                 evidence.append(
                     EvidenceItem(
                         source_id=graph_id,
                         record_id="kg_stats",
                         title=f"{label} {attr}={value}",
-                        excerpt=f"{attr}={value} → {cached} (from generated/kg_stats)",
+                        excerpt=f"filter: {attr}={value} → {n} (from generated/kg_stats)",
                         source_path=f"kg_stats/{graph_id}.json",
                         verification_status="observed",
                         graph=graph_id,
                         node_id=None,
                         synthetic=False,
+                        requested_filters=applied,
+                        applied_filters=applied,
                     )
                 )
+                if n > 0:
+                    _attach_optional_facet_metadata(
+                        platform,
+                        graph_id,
+                        filters,
+                        total=n,
+                        evidence=evidence,
+                        question=question,
+                    )
                 return
         except Exception:
             pass
-    # Filtered (+ optional group_by): Cypher aggregates — never scan all Product nodes.
+    # Multi-filter / filtered+group_by: Cypher aggregates — never scan all Product nodes.
     if group_by:
         groups = cypher_group_by(platform, graph_id, str(group_by), filters)
+        if groups is None:
+            groups = _count_by(platform, principal, graph_id, str(group_by), filters)
         total = cypher_count_products(platform, graph_id, filters)
         if groups is not None and total is not None:
             usable = _usable_ranked(groups, str(group_by))
-            lines.append(f"There are {total:,} products" + (f" {phrase}." if phrase else "."))
-            lines.extend(_dimension_breakdown_lines(str(group_by), usable, total, limit))
+            lines.append(f"There are {total:,} products" + (f"{phrase}." if phrase else "."))
+            breakdown_lines = _dimension_breakdown_lines(
+                str(group_by),
+                usable,
+                total,
+                limit,
+                graph_id=graph_id,
+                platform=platform,
+                generated=generated,
+            )
+            lines.extend(breakdown_lines)
+            # Structured evidence so answer cards do not depend on prose parsing alone.
+            evidence.append(
+                EvidenceItem(
+                    source_id=graph_id,
+                    record_id="group_by",
+                    title=f"{label} {group_by} breakdown",
+                    excerpt=f"products={total}\n" + "\n".join(breakdown_lines),
+                    source_path=graph_id,
+                    verification_status="observed",
+                    graph=graph_id,
+                    node_id=None,
+                    synthetic=False,
+                    requested_filters=dict(filters or {}),
+                    applied_filters=dict(filters or {}),
+                )
+            )
             sample = cypher_sample_products(platform, graph_id, filters, limit=5)
             for node in sample:
                 if not allows(principal, node.properties.get("classification") or "internal"):
@@ -3281,13 +5500,20 @@ def append_neo4j_count_answer(
             return
 
     # Open listings (no user top-N): short sample. Explicit limit: honour it, still capped.
-    open_listing = limit is None
+    open_listing = limit is None and not ranked_listing
     show_n = max(int(limit or 5), 1)
     if open_listing:
         show_n = min(show_n, 5)
     else:
         show_n = min(show_n, 25)
-    sample, total = search_neo4j_products(platform, principal, graph_id, filters, limit=show_n)
+    sample, total = search_neo4j_products(
+        platform,
+        principal,
+        graph_id,
+        filters,
+        limit=show_n,
+        order_by_price=price_sort,
+    )
     try:
         from fashion_brain.trace import trace_step
 
@@ -3301,51 +5527,89 @@ def append_neo4j_count_answer(
             label=label,
             open_listing=open_listing,
             show_n=show_n,
+            ranked_listing=ranked_listing,
+            price_sort=price_sort,
         )
     except Exception:
         pass
     if not total and not filters:
         lines.append("There are 0 visible products for this ask.")
+    elif ranked_listing:
+        order_label = (
+            "highest price first"
+            if price_sort == "desc"
+            else "lowest price first"
+            if price_sort == "asc"
+            else "ranked"
+        )
+        lines.append(
+            f"Top {min(len(sample), show_n)} products{phrase} by price ({order_label}) "
+            f"from {total:,} matching."
+        )
+        table = _product_table_lines(
+            sample, filters, question, limit=show_n, force_price=True
+        )
+        if table:
+            lines.extend(table)
+        else:
+            lines.append("No priced products matched this scope.")
     else:
-        lines.append(f"There are {total:,} products" + (f" {phrase}." if phrase else "."))
+        lines.append(f"There are {total:,} products" + (f"{phrase}." if phrase else "."))
         if group_by:
             grouped = cypher_group_by(platform, graph_id, str(group_by), filters)
             if grouped is None:
                 grouped = _count_by(platform, principal, graph_id, group_by, filters)
             groups = _usable_ranked(grouped or [], str(group_by))
-            lines.extend(_dimension_breakdown_lines(group_by, groups, total, limit))
+            lines.extend(
+                _dimension_breakdown_lines(
+                    group_by,
+                    groups,
+                    total,
+                    limit,
+                    graph_id=graph_id,
+                    platform=platform,
+                    generated=generated,
+                )
+            )
         elif filters:
             # Prefer count-wise description over dumping every matching name.
             brand_groups = cypher_group_by(platform, graph_id, "brand", filters)
             if brand_groups:
                 usable_brands = _usable_ranked(brand_groups, "brand")
-                if usable_brands:
+                brand_lines = _dimension_breakdown_lines(
+                    "brand",
+                    usable_brands,
+                    total,
+                    8,
+                    graph_id=graph_id,
+                    platform=platform,
+                    generated=generated,
+                )
+                if brand_lines:
                     lines.append("By brand:")
-                    lines.extend(
-                        _dimension_breakdown_lines("brand", usable_brands, total, 8)
-                    )
+                    lines.extend(brand_lines)
             if "material" in filters or "color" in filters:
                 cat_groups = cypher_group_by(platform, graph_id, "category", filters)
                 if cat_groups:
                     usable_cats = _usable_ranked(cat_groups, "category")
-                    if usable_cats:
-                        lines.append("By category:")
-                        lines.extend(
-                            _dimension_breakdown_lines("category", usable_cats, total, 8)
-                        )
-            if sample:
-                lines.append(
-                    f"Example products ({min(len(sample), show_n)} of {total}):"
-                )
-                lines.append("| Brand | Name | Price | Availability |")
-                lines.append("| --- | --- | --- | --- |")
-                for node in sample[:show_n]:
-                    props = node.properties or {}
-                    lines.append(
-                        f"| {_display_label(str(props.get('brand') or '—'))} | "
-                        f"{props.get('name') or node.id} | {props.get('price') or '—'} | "
-                        f"{props.get('availability') or '—'} |"
+                    cat_lines = _dimension_breakdown_lines(
+                        "category",
+                        usable_cats,
+                        total,
+                        8,
+                        graph_id=graph_id,
+                        platform=platform,
+                        generated=generated,
                     )
+                    if cat_lines:
+                        lines.append("By category:")
+                        lines.extend(cat_lines)
+            table = _product_table_lines(sample, filters, question, limit=show_n)
+            if table:
+                lines.append(
+                    f"Example products ({min(len(table) - 2, show_n)} of {total}):"
+                )
+                lines.extend(table)
             if open_listing and int(total or 0) > show_n:
                 caveats.append(
                     "Open product listing: total + brand/category mix + a few examples. "
@@ -3385,6 +5649,32 @@ def append_neo4j_analysis_answer(
     """
 
     filters = _align_party_filters_for_graph(platform, graph_id, clean_product_filters(filters))
+    # Multi-party "Primark | Zara" cannot be one brand token — analyse each side.
+    try:
+        from fashion_brain.ask import split_multi_party_filter
+
+        parties = split_multi_party_filter(str(filters.get("brand") or filters.get("buyer") or ""))
+    except Exception:
+        parties = []
+    if len(parties) >= 2:
+        party_key = "brand" if filters.get("brand") else "buyer"
+        for party in parties:
+            side = {k: v for k, v in filters.items() if k not in {"brand", "buyer"}}
+            side[party_key] = party
+            lines.append(f"### {_display_label(party)}")
+            append_neo4j_analysis_answer(
+                platform,
+                principal,
+                graph_id,
+                side,
+                limit,
+                lines,
+                evidence,
+                caveats,
+                analysis_fields=analysis_fields,
+            )
+            lines.append("")
+        return
     overview = cypher_price_overview(platform, graph_id, filters)
     total = int((overview or {}).get("total_products") or 0) if overview else None
     if total is None:
@@ -3408,9 +5698,14 @@ def append_neo4j_analysis_answer(
             for node in (sample or [])
             if allows(principal, node.properties.get("classification") or "internal")
         ]
-    top_n = max(int(limit or 5), 1)
+    # Full analysis: show many unique values per field. Focused (1 field): deeper cut.
+    focused = bool(analysis_fields) and len(list(analysis_fields)) == 1
+    if limit is not None:
+        top_n = max(int(limit), 1)
+    else:
+        top_n = 20 if focused else 12
     who_raw = filters.get("brand") or filters.get("buyer") or "this selection"
-    who = _display_label(str(who_raw))
+    who = _display_label(str(who_raw), graph_id=graph_id, platform=platform)
     fields = resolve_analysis_fields(platform, graph_id, analysis_fields)
     try:
         from fashion_brain.trace import trace_step
@@ -3467,17 +5762,22 @@ def append_neo4j_analysis_answer(
         )
         if usable and _facet_worth_showing(usable, total=total):
             label = field.replace("_", " ")
-            uniqueness.append(f"{len(usable)} {label}{'s' if not label.endswith('s') else ''}")
+            uniqueness.append(f"{len(usable)} {_pluralize_label(label)}")
     if uniqueness:
-        lines.append("Distinct values: " + ", ".join(uniqueness[:8]) + ".")
+        # Full analysis should surface every facet that has distinct values.
+        lines.append("Distinct values: " + ", ".join(uniqueness) + ".")
 
-    lines.append(f"Attribute rankings (top {top_n} each). One visualization per attribute.")
+    scope = "focused attribute" if focused else "all attributes"
+    lines.append(
+        f"Field-wise analysis ({scope}; up to {top_n} unique values per field with counts and shares)."
+    )
     # Skip facets the ask already fixed to one value (self-echo breakdowns).
     fixed_filters = {
         normalize_name(str(k)): normalize_name(str(v))
         for k, v in (filters or {}).items()
         if v not in (None, "")
     }
+    generated = getattr(getattr(platform, "settings", None), "generated", None)
     for field in fields:
         if not is_analysis_facet_attr(str(field)):
             continue
@@ -3504,22 +5804,42 @@ def append_neo4j_analysis_answer(
             continue
         if not _facet_worth_showing(choices, total=total):
             continue
-        field_label = field.replace("_", " ").title()
-        display_choices = [(_display_label(name), count) for name, count in choices]
-        # One chart per attribute — UI renders ```chart; markers are for merge only.
+        field_label = _human_analysis_field_label(str(field))
+        display_choices = [
+            (
+                _display_label(
+                    name,
+                    graph_id=graph_id,
+                    attribute=str(field),
+                    generated=generated,
+                    platform=platform,
+                ),
+                count,
+            )
+            for name, count in choices
+        ]
+        # Field-wise block: heading + leader + full value table (+ optional chart).
         lines.append(f"<!--fb:viz:{field}-->")
         lines.append(f"### {field_label}")
         top_name, top_count = display_choices[0]
         share = round(100.0 * top_count / total, 1) if total else 0.0
         lines.append(f"Leading value: {top_name} ({top_count}, {share}%).")
-        lines.extend(
-            _chart_lines(
-                "bar",
-                field_label,
-                [name for name, _ in display_choices],
-                [int(count) for _, count in display_choices],
+        lines.append(f"{len(display_choices)} unique values shown (of this field).")
+        lines.append("| Value | Count | Share % |")
+        lines.append("| --- | ---: | ---: |")
+        for name, count in display_choices:
+            row_share = round(100.0 * int(count) / total, 1) if total else 0.0
+            lines.append(f"| {name} | {int(count)} | {row_share} |")
+        # Chart for denser mixes (skip 1-row noise).
+        if len(display_choices) >= 2:
+            lines.extend(
+                _chart_lines(
+                    "bar",
+                    field_label,
+                    [name for name, _ in display_choices[:12]],
+                    [int(count) for _, count in display_choices[:12]],
+                )
             )
-        )
     for node in (sample or [])[:5]:
         evidence.append(
             EvidenceItem(
@@ -3574,51 +5894,138 @@ def _user_facing_source_name(name: str) -> str:
     return text or "our products"
 
 
-def _display_label(value: str) -> str:
-    """User-facing label from stored/normalized facet values."""
+# Tiny universal fixes only — catalog surfaces live in kg_stats display_values / Neo4j name.
+_FACET_DISPLAY_CANON: dict[str, str] = {
+    "instock": "In stock",
+    "outofstock": "Out of stock",
+    "comingsoon": "Coming soon",
+    "lowonstock": "Low on stock",
+    "coordsets": "Co-ord sets",
+    "coord": "Co-ord",
+    "canda": "C&A",
+    "handm": "H&M",
+}
+
+
+def _title_case_facet(text: str) -> str:
+    """Title-case a facet phrase; keep small words lower mid-phrase; preserve & / - segments."""
+
+    small = {"and", "or", "of", "the", "a", "an", "for", "to", "in", "on"}
+
+    def _one_word(part: str, *, first: bool) -> str:
+        if not part:
+            return part
+        low = part.casefold()
+        if low in {"t-shirt", "tshirt"}:
+            return "T-Shirt"
+        if "'" in part:
+            head, _, tail = part.partition("'")
+            return head.capitalize() + "'" + tail
+        if not first and low in small:
+            return low
+        if len(part) <= 3 and part.isupper():
+            return part
+        return part.capitalize()
+
+    out_words: list[str] = []
+    for i, word in enumerate(text.split()):
+        if "/" in word:
+            segs = [_one_word(seg, first=(i == 0 and j == 0)) for j, seg in enumerate(word.split("/"))]
+            out_words.append("/".join(segs))
+        elif "-" in word and not word.startswith("-"):
+            segs = [_one_word(seg, first=(i == 0 and j == 0)) for j, seg in enumerate(word.split("-"))]
+            out_words.append("-".join(segs))
+        else:
+            out_words.append(_one_word(word, first=i == 0))
+    return " ".join(out_words)
+
+
+def _neo4j_facet_display(
+    platform,
+    graph_id: str,
+    value: str,
+) -> str | None:
+    """Restore real ``name`` from Neo4j via ``normalized_name`` match key."""
+
+    session_factory = _session(platform) if platform is not None else None
+    if not session_factory or not graph_id:
+        return None
+    from knowledge_graph.ontology import normalize_name
+
+    nn = normalize_name(value)
+    if not nn:
+        return None
+    try:
+        with session_factory() as session:
+            row = session.run(
+                "MATCH (e:Entity {graph: $g}) "
+                "WHERE coalesce(e.lifecycle,'active') <> 'deleted' "
+                "AND coalesce(e.normalized_name, '') = $nn "
+                "AND coalesce(e.name, '') <> '' "
+                "RETURN e.name AS name "
+                "LIMIT 1",
+                {"g": str(graph_id), "nn": nn},
+            ).single()
+        if row and row.get("name"):
+            return str(row["name"]).strip() or None
+    except Exception:
+        return None
+    return None
+
+
+def _display_label(
+    value: str,
+    *,
+    graph_id: str | None = None,
+    attribute: str | None = None,
+    generated=None,
+    platform=None,
+) -> str:
+    """User-facing label: kg_stats display_values → Neo4j name → light title-case.
+
+    Matching stays on normalized keys; answers never invent catalog-specific maps.
+    """
 
     raw = str(value or "").strip()
     if not raw:
         return raw
-    folded = re.sub(r"\s+", " ", raw.casefold().replace("&", " and "))
-    compact = re.sub(r"[^a-z0-9]+", "", folded)
-    fixes = {
-        "instock": "In stock",
-        "outofstock": "Out of stock",
-        "comingsoon": "Coming soon",
-        "lowonstock": "Low on stock",
-        "mixed": "Mixed",
-        "multicoloured": "Multicoloured",
-        "multicolored": "Multicolored",
-        "greymarl": "Grey marl",
-        "navyblue": "Navy blue",
-        "cowleather": "Cow leather",
-        "fauxsuede": "Faux suede",
-        "fauxleather": "Faux leather",
-        "coordsets": "Co-ord sets",
-        "coord": "Co-ord",
-        "canda": "C&A",
-        "handm": "H&M",
-    }
-    if compact in fixes:
-        return fixes[compact]
-    # "women s shoes" / "men s tops" → Women's / Men's
-    text = re.sub(r"\b(women|men)\s+s\b", r"\1's", folded, flags=re.IGNORECASE)
-    text = text.replace("_", " ")
-    # Keep small words lower inside a title-cased phrase.
-    small = {"and", "or", "of", "the", "a", "an", "for", "to", "in", "on"}
-    words = []
-    for i, part in enumerate(text.split()):
-        if "'" in part:
-            # women's → Women's
-            head, _, tail = part.partition("'")
-            part = head.capitalize() + "'" + tail
-        elif i > 0 and part in small:
-            pass
-        else:
-            part = part.capitalize()
-        words.append(part)
-    return " ".join(words)
+    compact = re.sub(r"[^a-z0-9]+", "", raw.casefold())
+    if compact in _FACET_DISPLAY_CANON:
+        return _FACET_DISPLAY_CANON[compact]
+
+    # 1) Meta shard mapping (normalized → real) written at stats build time.
+    try:
+        from knowledge_graph.retrieval.kg_stats import resolve_facet_display
+
+        mapped = resolve_facet_display(
+            raw,
+            graph_id=graph_id,
+            attribute=attribute,
+            generated=generated,
+        )
+        if mapped:
+            return mapped
+    except Exception:
+        pass
+
+    # 2) Neo4j entity.name restored via normalized_name.
+    if platform is not None and graph_id:
+        neo = _neo4j_facet_display(platform, str(graph_id), raw)
+        if neo and (any(ch.isupper() for ch in neo) or any(ch in neo for ch in "&/-")):
+            return neo
+        if neo and neo != raw:
+            # Even if Neo also stored scrubbed text, prefer its surface then title-case.
+            raw = neo
+
+    # Already well-formed — keep punctuation, light title-case.
+    has_mark = any(ch in raw for ch in "&/-")
+    has_upper = any(ch.isupper() for ch in raw)
+    if has_mark and has_upper and raw != raw.casefold():
+        return _title_case_facet(re.sub(r"\s+", " ", raw))
+
+    folded = re.sub(r"\s+", " ", raw.casefold().replace("_", " "))
+    folded = re.sub(r"\b(women|men)\s+s\b", r"\1's", folded, flags=re.IGNORECASE)
+    return _title_case_facet(folded)
 
 
 def _material_display_label(value: str) -> str:
@@ -3775,7 +6182,8 @@ _REL_FIELDS = {
     "brand": ("HAS_BRAND",),
     "buyer": ("HAS_BUYER",),
     "garment_type": ("HAS_GARMENT_TYPE",),
-    "gender": ("HAS_GENDER",),
+    # PLM uses HAS_GENDER; ecom ontology uses FOR_TARGET_GROUP — accept both.
+    "gender": ("HAS_GENDER", "FOR_TARGET_GROUP"),
     "gauge": ("HAS_GAUGE",),
     "sample_collection_type": ("HAS_SAMPLE_TYPE",),
     "plm_main_category": ("HAS_PLM_MAIN_CATEGORY",),
@@ -4034,6 +6442,10 @@ def _dimension_breakdown_lines(
     groups: list[tuple[str, int]],
     total: int,
     limit: int | None,
+    *,
+    graph_id: str | None = None,
+    platform=None,
+    generated=None,
 ) -> list[str]:
     """Breakdown with one best-fit visualization (chart XOR table)."""
 
@@ -4042,12 +6454,22 @@ def _dimension_breakdown_lines(
     if not shown:
         return [f"No {field.replace('_', ' ')} breakdown."]
     field_label = field.replace("_", " ")
-    labeler = (
-        _material_display_label
-        if normalize_name(str(field)) in {"material", "materials", "composition"}
-        else _display_label
-    )
-    display_shown = [(labeler(name), count) for name, count in shown]
+
+    def _label(name: str) -> str:
+        if normalize_name(str(field)) in {"material", "materials", "composition"}:
+            return _material_display_label(name)
+        return _display_label(
+            name,
+            graph_id=graph_id,
+            attribute=str(field),
+            generated=generated,
+            platform=platform,
+        )
+
+    display_shown = [(_label(name), count) for name, count in shown]
+    # Skip trivial single-value 100% slices (e.g. By brand after filtering to Primark).
+    if len(display_shown) == 1 and total and int(display_shown[0][1]) == int(total):
+        return []
     top_name, top_count = display_shown[0]
     share = round(100.0 * top_count / total, 1) if total else 0.0
     lines = [
@@ -4066,7 +6488,235 @@ def _dimension_breakdown_lines(
 def _filter_phrase(filters: dict) -> str:
     if not filters:
         return ""
-    return "with " + " and ".join(f"{key} {value}" for key, value in filters.items())
+    # Leading space so callers can write ``products{phrase}`` without "productswith".
+    return " with " + " and ".join(
+        f"{key} {_display_label(str(value))}" for key, value in filters.items()
+    )
+
+
+_TABLE_COLUMNS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # key: (header, property keys to try in order)
+    "brand": ("Brand", ("brand", "buyer")),
+    "name": ("Name", ("name", "title")),
+    "price": ("Price", ("price", "retail_price")),
+    "availability": ("Availability", ("availability", "stock_status")),
+    "category": ("Category", ("category", "product_type", "category_path", "garment_type")),
+    "color": ("Color", ("color", "colour")),
+    "material": ("Material", ("material", "fabric", "composition")),
+    "season": ("Season", ("season", "season_name", "season_year")),
+    "size": ("Size", ("size", "sizes")),
+}
+_DEFAULT_COLUMNS = ["brand", "name", "price", "availability"]
+_QUESTION_HINTS: dict[str, tuple[str, ...]] = {
+    "category": ("category", "categories", "type", "garment", "sweater", "shirt", "dress"),
+    "color": ("color", "colour", "colors", "colours"),
+    "material": ("material", "fabric", "cotton", "linen", "wool", "composition"),
+    "season": ("season", "ss", "aw", "summer", "winter"),
+    "size": ("size", "sizes"),
+}
+# Filter keys that pin the same display column (drop redundant column).
+_PINNED_COLUMN_ALIASES: dict[str, str] = {
+    "buyer": "brand",
+    "colour": "color",
+    "colors": "color",
+    "colours": "color",
+    "composition": "material",
+    "fabric": "material",
+    "garment": "category",
+    "garment_type": "category",
+    "subfamily": "category",
+    "product_type": "category",
+}
+
+
+def _table_cell(node, keys: tuple[str, ...], *, column: str = "") -> str:
+    """Read the first usable property; polish brand/availability labels."""
+
+    props = getattr(node, "properties", None) or {}
+    for key in keys:
+        raw = props.get(key)
+        if raw in (None, "", [], "(empty)", "(unspecified)"):
+            continue
+        text = str(raw).replace("|", "/").strip()
+        if not text or text.casefold() in {"null", "none", "—", "-", "n/a"}:
+            continue
+        if column == "price" and re.search(r"(?i)(?:£|€|\$)\s*(?:19|20)\d{2}\b", text):
+            continue
+        if column in {"brand", "availability"}:
+            return _display_label(text)
+        if column == "name" and (re.fullmatch(r"\d{6,}", text) or re.fullmatch(r"[A-Z]{0,3}\d{5,}", text)):
+            continue
+        return text
+    return ""
+
+
+def _product_table_lines(
+    sample,
+    filters: dict,
+    question: str,
+    *,
+    limit: int,
+    force_price: bool = False,
+) -> list[str]:
+    """Header + rows with columns chosen per answer. Empty list → caller falls back."""
+
+    if not sample:
+        return []
+    q = (question or "").casefold()
+    pinned: set[str] = set()
+    for key, value in (filters or {}).items():
+        if value in (None, ""):
+            continue
+        # Multi-party compare ("Primark | Zara") is not a single pinned brand.
+        if "|" in str(value):
+            continue
+        folded = str(key).casefold().replace(" ", "_").replace("-", "_")
+        col = _PINNED_COLUMN_ALIASES.get(folded, folded)
+        if col in _TABLE_COLUMNS:
+            pinned.add(col)
+
+    cols = [c for c in _DEFAULT_COLUMNS if c not in pinned]
+    for key, hints in _QUESTION_HINTS.items():
+        if key not in pinned and key not in cols and any(h in q for h in hints):
+            cols.append(key)
+
+    cap = max(1, min(int(limit or 25), 25))
+    usable_nodes = []
+    for node in sample or []:
+        name = _table_cell(node, _TABLE_COLUMNS["name"][1], column="name")
+        if not name:
+            continue
+        usable_nodes.append(node)
+        if len(usable_nodes) >= cap:
+            break
+    if not usable_nodes:
+        return []
+
+    data = {
+        c: [_table_cell(n, _TABLE_COLUMNS[c][1], column=c) for n in usable_nodes]
+        for c in cols
+        if c in _TABLE_COLUMNS
+    }
+    # Drop columns with no data at all (keep name; keep price when ranking by price).
+    cols = [
+        c
+        for c in cols
+        if c in data and (c == "name" or any(data[c]) or (c == "price" and force_price))
+    ]
+    if "name" not in cols:
+        cols.insert(0, "name")
+        data["name"] = [_table_cell(n, _TABLE_COLUMNS["name"][1], column="name") for n in usable_nodes]
+    if len(cols) < 2:
+        return []
+
+    out = [
+        "| " + " | ".join(_TABLE_COLUMNS[c][0] for c in cols) + " |",
+        "| " + " | ".join("---" for _ in cols) + " |",
+    ]
+    for i in range(len(usable_nodes)):
+        out.append("| " + " | ".join((data[c][i] or "—") for c in cols) + " |")
+    return out
+
+
+def _example_product_table_rows(nodes: list, *, limit: int = 25) -> list[str]:
+    """Back-compat body rows for Brand|Name|Price|Availability (tests / older callers)."""
+
+    table = _product_table_lines(nodes, {}, "", limit=limit)
+    # Drop header + separator; keep body only when defaults survived.
+    return table[2:] if len(table) > 2 else []
+
+
+def _attach_optional_facet_metadata(
+    platform,
+    graph_id: str,
+    filters: dict,
+    *,
+    total: int,
+    evidence: list,
+    question: str = "",
+) -> None:
+    """Attach optional facet facts as evidence — never as forced answer text.
+
+    Prefer filter-wise ``kg_stats/<kg>/<filter>.json`` shards (selected dims only).
+    Fall back to live Cypher group_by only when shards are missing.
+    Findings stay the count; ResponseAgent uses findings + these facts together.
+    """
+
+    if total <= 0:
+        return
+    if any(str(getattr(item, "record_id", "") or "") == "optional_metadata" for item in evidence):
+        return
+    # Party / empty / single catalog facet — attach same-dimension + totals context.
+    # Multi-filter asks already carry their own focus; skip to avoid noise.
+    keys = {str(k).casefold() for k in (filters or {})}
+    if len(keys) >= 2:
+        return
+
+    generated = getattr(getattr(platform, "settings", None), "generated", None)
+    facts: list[str] = []
+    source_path = f"kg_stats/{graph_id}"
+    try:
+        from knowledge_graph.retrieval.kg_stats import build_meta_reference_lines
+
+        facts = build_meta_reference_lines(
+            graph_id,
+            filters=dict(filters or {}),
+            question=question or "",
+            generated=generated,
+            max_filters=4,
+            top_n=3,
+        )
+        # Drop the global products_total line when we already stated ``total``.
+        facts = [line for line in facts if not str(line).startswith("products_total=")]
+        if facts:
+            source_path = f"kg_stats/{graph_id}/filters"
+    except Exception:
+        facts = []
+
+    if not facts:
+        dims = [dim for dim in ("section", "category", "family", "garment_type") if dim not in keys]
+        for dim in dims:
+            try:
+                groups = cypher_group_by(platform, graph_id, dim, dict(filters or {}))
+            except Exception:
+                groups = None
+            if not groups:
+                continue
+            usable = _usable_ranked(groups, dim, limit=3)
+            if not usable:
+                continue
+            top_name, top_count = usable[0]
+            top_label = _display_label(str(top_name))
+            share = round(100.0 * int(top_count) / int(total), 1) if total else 0.0
+            line = f"{dim.replace('_', ' ')}: {top_label} ({int(top_count):,}; {share}%)"
+            if dim == "category" and len(usable) > 1:
+                nxt = ", ".join(
+                    f"{_display_label(str(n))} ({int(c):,})" for n, c in usable[1:3]
+                )
+                line = f"{line}; next: {nxt}"
+            facts.append(line)
+            if len(facts) >= 3:
+                break
+        source_path = f"neo4j/{graph_id}/facet_context"
+
+    if not facts:
+        return
+
+    evidence.append(
+        EvidenceItem(
+            source_id=graph_id,
+            record_id="optional_metadata",
+            title="optional facet context",
+            excerpt="; ".join(facts),
+            source_path=source_path,
+            verification_status="observed",
+            graph=graph_id,
+            node_id=None,
+            synthetic=False,
+            requested_filters=dict(filters or {}),
+            applied_filters=dict(filters or {}),
+        )
+    )
 
 
 def _excerpt(node) -> str:

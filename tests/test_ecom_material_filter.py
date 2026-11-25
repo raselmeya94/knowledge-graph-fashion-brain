@@ -22,7 +22,8 @@ def test_cotton_every_brand_wise_plan():
 def test_analysis_material_wise_keeps_group_by():
     plan = resolve_catalog_plan("analysis all products with material wise")
     assert plan["group_by"] == "material"
-    assert plan["analysis"] is False
+    # Focused analysis uses the same analytical engine (one facet).
+    assert plan["analysis"] is True
     assert plan["filters"] == {}
 
 

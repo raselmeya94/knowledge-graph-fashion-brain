@@ -1,13 +1,13 @@
 ================================================================================
-Fashion Brain — evaluation questions for the multi-table / price-history KG
+Fashion Brain — evaluation questions (natural user phrasing)
 Aligned with improvement.txt capabilities A–D
-Generated: 2026-11-10
+Updated: 2026-11-15 — ask like a real merchant / buyer, not system IDs
 ================================================================================
 
 How to use
 ----------
 Ask these in Fashion Brain chat (port 8000) with the ecom KG running.
-Mark each: PASS / PARTIAL / FAIL + brief note (Cypher path, wrong number, empty).
+Mark each: PASS / PARTIAL / FAIL + brief note.
 
 Brands in live data: zara, primark, matalan, c-and-a, walmart, calvin-klein
 Note: in ecom, “buyer” usually means Brand/retailer. Season/region are weak or PLM-only.
@@ -20,73 +20,73 @@ A. BASIC QUESTION ANSWERING
 A1. How many products does Primark have?
 A2. How many products does Zara have?
 A3. How many products does C&A have?
-A4. Which products belong to brand Matalan? Show 10 examples.
-A5. What products are in the category t-shirts?
-A6. What are the specifications of product ecom:zara:zara:04786296?
-A7. What materials are used in Zara product 08965901?
-A8. Which colors are available for Primark products?
-A9. How many products are currently InStock?
-A10. List products from Walmart with their current price.
+A4. Can you show me about 10 Matalan products as examples?
+A5. What t-shirts do we have?
+A6. Tell me more about Zara style 04786296 — materials, colour, price, availability.
+A7. What is the Zara style 08965901 made of?
+A8. What colours does Primark sell most?
+A9. How many products are in stock right now?
+A10. Do we have any Walmart products, and what do they cost?
 
 
 --------------------------------------------------------------------------------
 B. ADVANCED DATA ANALYSIS
 --------------------------------------------------------------------------------
 
-B1. Analyze product distribution by brand.
-B2. Show product counts by category for Primark.
-B3. What are the most common materials across all products?
-B4. Compare the number of products between Primark and Zara.
-B5. Which brand has the most products in sweaters or knitwear?
-B6. Analyze color distribution for Zara.
+B1. How is the assortment split across brands?
+B2. For Primark, how do products break down by category?
+B3. What materials show up most often across the range?
+B4. Who has more products — Primark or Zara?
+B5. Which brand has the most sweaters or knitwear?
+B6. How do Zara colours break down?
 B7. What is the average price by brand?
-B8. Compare average prices between Primark and Zara.
+B8. How do Primark and Zara compare on average price?
 B9. Which categories have the most products overall?
-B10. Break down Matalan products by family or category.
+B10. Break down Matalan’s range by family or category.
 
 
 --------------------------------------------------------------------------------
 C. PRODUCT SPECIFICATION ANALYSIS
 --------------------------------------------------------------------------------
 
-C1. Give me the full specification for a Primark sweater: composition, construction, fit, care, colors, and price.
-C2. What materials and percentages are used most often in Zara tops?
-C3. Compare composition of similar t-shirts across Primark and Zara.
-C4. Which products use cotton as the primary material?
-C5. Find products with construction details and summarize common constructions.
+C1. I need a full Primark sweater brief — composition, construction, fit, care, colours, and price.
+C2. In Zara tops, which material mixes are most common?
+C3. How do Primark and Zara t-shirt compositions compare?
+C4. Which products are mainly cotton?
+C5. What construction details do we usually see, and what is most common?
 C6. What care instructions appear most often?
-C7. List products made in a specific country of origin (if available).
-C8. Generate a product specification outline based on typical Primark sweater attributes in the catalog.
+C7. Can you list products by country of origin, if we have that?
+C8. Based on typical Primark sweaters, sketch a product specification outline.
 
 
 --------------------------------------------------------------------------------
-D. PRICE TREND & HISTORICAL ANALYSIS  (HIGH PRIORITY — Phase 1a)
+D. PRICE TREND & HISTORICAL ANALYSIS
 --------------------------------------------------------------------------------
 
-D1. How has the price of Zara product 04786296 changed over time?
-D2. How has the price of Zara product 08965901 changed?
-D3. Which products had the largest price decreases?
-D4. Which products had the largest price increases?
-D5. What are the average price change trends for Zara?
-D6. What are the average price change trends for Primark?
-D7. Which categories are seeing decreasing price trends?
-D8. Which brands have the most price change events?
-D9. Show products with significant price fluctuations (multiple changes or large % moves).
-D10. Compare historical price moves for similar Zara and Primark products in the same category.
-D11. What is the price trend for brand C&A?
-D12. List recent same-currency price drops greater than 20%.
-D13. For product ecom:zara:zara:05919713, show old price, new price, and percent change.
-D14. How many price change events are in the knowledge graph?
-D15. Ignore currency switches — which products actually got cheaper in the same currency?
+D1. How has the price of Zara style 04786296 changed?
+D2. How has the price of Zara style 08965901 changed?
+D3. Which products had the biggest price drops?
+D4. Which products had the biggest price increases?
+D5. Overall, how are Zara prices moving?
+D6. Overall, how are Primark prices moving?
+D7. Which categories are getting cheaper?
+D8. Which brands have the most price changes?
+D9. Which products are swinging a lot on price?
+D10. For similar Zara and Primark items in the same category, how do historical price moves compare?
+D11. What is the price trend for C&A?
+D12. Show recent same-currency price drops of more than 20%.
+D13. For Zara Satin Shorts with Lace Trim (05919713), what was the old price, new price, and % change?
+D14. How many price change events do we have recorded?
+D15. Ignoring currency label switches, which products actually got cheaper in the same currency?
 
 
 --------------------------------------------------------------------------------
-E. AVAILABILITY HISTORY (also synced in Phase 1a)
+E. AVAILABILITY HISTORY
 --------------------------------------------------------------------------------
 
 E1. Which products recently changed availability?
-E2. Show availability history for a Primark product that went from InStock to Mixed.
-E3. How many availability change snapshots are stored?
+E2. Show a Primark product that went from in stock to mixed, and its availability history.
+E3. How many availability changes are stored?
 E4. Which brands have the most availability changes?
 
 
@@ -94,61 +94,57 @@ E4. Which brands have the most availability changes?
 F. BOUNDARY / SHOULD-NOT-HALLUCINATE
 --------------------------------------------------------------------------------
 
-F1. Which products belong to buyer Tesco?
-    (Expect: no Tesco in ecom, or remap guidance — do not invent.)
-F2. What is the price trend for the UK region last six months?
-    (Expect: no Region node yet — Domain/Country only; honest empty/partial.)
-F3. What is the season breakdown for Zara products?
-    (Expect: weak/empty unless derived Season exists — do not invent seasons.)
-F4. Show supplier list for Primark.
+F1. Do we have any Tesco products?
+    (Expect: honest empty / not in ecom — do not invent. PLMEX may differ.)
+F2. What was the UK price trend over the last six months?
+    (Expect: no region filter yet — honest empty/partial.)
+F3. How do Zara products break down by season?
+    (Expect: weak/empty unless Season exists — do not invent seasons.)
+F4. Who are Primark’s suppliers?
     (Expect: not in ecom schema — fail closed.)
 
 
 --------------------------------------------------------------------------------
-G. GOLDEN CHECKS (ground against Neo4j after Phase 1a sync)
+G. GOLDEN CHECKS (ground against live Neo4j)
 --------------------------------------------------------------------------------
 
-These should be answerable with non-empty grounded numbers after events sync:
-
-G1. How many PriceChangeEvent nodes exist?
+G1. How many price change events are there?
     Expected ≈ 902
-G2. How many AvailabilitySnapshot nodes exist?
+G2. How many availability snapshots are there?
     Expected ≈ 2743
-G3. What was the price change for Zara SATIN SHORTS WITH LACE TRIM (05919713)?
+G3. What happened to the price of Zara Satin Shorts with Lace Trim (05919713)?
     Expected ≈ 85.9 → 39.95 (about −53%)
 G4. Name a few products with the largest same-currency price decreases.
-G5. Average price of Primark products right now (current-state, not history).
+G5. What is the average price of Primark products right now?
 
 
 --------------------------------------------------------------------------------
-H. SHARED INTERCONNECT (route → shared / shared_products)
+H. SHARED MATERIALS ACROSS CATALOGS
 --------------------------------------------------------------------------------
 
-These should select the shared interconnect (not only ecom or plmex alone).
-Triggers: share / shared / same material / interconnect / canonical materials.
-Expect: routes include shared; materials linked via RESOLVES_TO across sources.
+Ask like a merchant comparing ranges — not “graph interconnect” jargon.
 
-H1. Which materials are shared by more than one product?
+H1. Which materials show up on more than one product?
 H2. Show products that share the same material.
-H3. What materials are on the shared interconnect?
-H4. List canonical materials in the shared graph.
-H5. Which products share cotton across the knowledge graphs?
-H6. Which products share polyester material?
-H7. Show materials shared across ecom and plmex.
-H8. What is on the shared interconnect?
-H9. Find products with the same material interconnect.
-H10. Which materials are shared the most across products?
+H3. What materials are shared across our catalogs?
+H4. What common / canonical materials do we have across sources?
+H5. Which products share cotton across ecom and PLMEX?
+H6. Which products share polyester?
+H7. What materials are shared between the ecom and PLMEX ranges?
+H8. What do the ecom and PLMEX catalogs have in common on materials?
+H9. Find products linked by the same material across catalogs.
+H10. Which shared materials appear most often across products?
 
 
 --------------------------------------------------------------------------------
 SUGGESTED ASK ORDER
 --------------------------------------------------------------------------------
 
-1. A1, B1, B7          — confirm basic + current-state still work
-2. D3, D13, D15, G3    — confirm new price-history path
-3. E3, E1              — confirm availability snapshots
-4. C1, C4              — specs still connected
-5. F1–F4               — ensure no hallucination on missing entities
-6. H1, H3, H5, H7      — confirm shared interconnect (after shared build)
+1. A1, B1, B7          — basic + current-state
+2. D3, D13, D15, G3    — price history
+3. E3, E1              — availability
+4. C1, C4              — specs
+5. F1–F4               — no hallucination
+6. H1, H5, H7          — shared materials across catalogs
 
 END

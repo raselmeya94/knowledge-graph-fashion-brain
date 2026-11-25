@@ -47,17 +47,54 @@ def _words(text: str) -> frozenset[str]:
 _COLOR_WORDS = _words("red blue green black white yellow pink purple grey gray brown orange beige navy burgundy")
 _COLOR_MARKERS = _words("color colour colors colours")
 _MATERIAL_WORDS = _words("cotton linen elastane polyester nylon wool viscose acrylic silk")
+# Product-type words — never brand/buyer parties in "A or B" compare / party filters.
+_GARMENT_TYPE_WORDS = _words(
+    """
+    sweater sweaters jumper jumpers cardigan cardigans dress dresses jacket jackets
+    coat coats shirt shirts tshirt tshirts hoodie hoodies jean jeans trouser trousers
+    pant pants knitwear knit knits top tops blouse blouses skirt skirts tee tees
+    polo polos short shorts sock socks scarf scarves bag bags shoe shoes sneaker sneakers
+    blazer blazers swimwear loungewear pyjama pyjamas pajama pajamas
+    """
+)
+# Singular query tokens used in CONTAINS matching (tops↔top cardigan on PLMEX).
+_GARMENT_MATCH_ALIASES: dict[str, tuple[str, ...]] = {
+    "top": ("top", "tops"),
+    "tops": ("top", "tops"),
+    "dress": ("dress", "dresses"),
+    "dresses": ("dress", "dresses"),
+    "dresse": ("dress", "dresses"),  # bad stem guard
+    "blouse": ("blouse", "blouses"),
+    "blouses": ("blouse", "blouses"),
+    "blous": ("blouse", "blouses"),  # bad stem guard
+    "jacket": ("jacket", "jackets"),
+    "jackets": ("jacket", "jackets"),
+    "skirt": ("skirt", "skirts"),
+    "skirts": ("skirt", "skirts"),
+    "jumper": ("jumper", "jumpers"),
+    "jumpers": ("jumper", "jumpers"),
+    "sweater": ("sweater", "sweaters"),
+    "sweaters": ("sweater", "sweaters"),
+    "hoodie": ("hoodie", "hoodies"),
+    "hoodies": ("hoodie", "hoodies"),
+}
 
 # Words that can never be a filter value (question grammar, field names, polite filler).
 _COUNT_STOPWORDS = _words(
     """
     how many product products are is a an the of in our catalog catalogue plm data synthetic demo there do we have
     with and or for from at that this be any all every each number count total visible clearance by gender wise per
-    breakdown analysis analyze grouped distribution split brands brand buyer buyers season seasons category
+    breakdown analysis analyze analyzing analyse summary summarize summarise summarization summarisation
+    grouped distribution split brands brand buyer buyers season seasons category
     categories material materials department departments designer designers year now can you your make me
     please could would them those these their same also just show give want let us again still instead about
+    possible possibly impossible maybe perhaps able unable capability capable feasible
+    tell tells telling told say says saying said ask asks asking asked explain explains explaining
+    explore exploring explored focus focusing focused narrow narrowing confirm confirming confirmed
+    accurate accuracy reply report reports dimension dimensions aspect aspects complete
+    yes yeah yep ok okay sure proceed correct fine alright y
     what which who when where list has have had was were been contain contains containing made using use uses top bottom
-    highest lowest leading rank ranking first last garments type types kind kinds normally usually typical
+    name names named naming highest lowest leading rank ranking first last garments type types kind kinds normally usually typical
     typically often frequently frequent frequency common commonly mostly making makes does did produce produces producing manufacture
     manufactures if then upcomming upcoming coming coming seasion sesion suggest suggestion suggestions
     specification specifications spec specs recommend recommendation recommendations sample samples new
@@ -66,16 +103,19 @@ _COUNT_STOPWORDS = _words(
     unique values description descriptions knowledge graph graphs kg kgs source sources system basic info
     information overview stored inside within ecommerce ecommerces commerce commerces ecom ecomm
     node nodes event events snapshot snapshots exist exists
+    up range ranges assortment assortments catalog catalogs catalogue catalogues
+    break breaks broke down dominate dominates mix mixes mixture mixtures blend blends
+    see seen seeing detail details detailled construction constructions fit fits
     """
 )
-_RANK_WORDS = _words("top bottom highest lowest leading most largest biggest smallest fewest")
+_RANK_WORDS = _words("top bottom highest lowest leading most more largest biggest smallest fewest")
 # Comparison / change language — never a catalog facet VALUE (garment/category/…).
 _METRIC_OPERATOR_WORDS = _words(
     """
     decrease decreases decreased decreasing increase increases increased increasing
     drop drops dropped dropping rise rises rose rising fall falls fallen falling
     change changes changed changing trend trends trending history historical historically
-    fluctuation fluctuations mover movers move moves moved cheaper expensive costly
+    fluctuation fluctuations mover movers move moves moved moving cheaper expensive costly
     percent percentage delta difference diff vs versus compared compare comparing comparison
     over time window period months month weeks week days day ago since until
     average avg mean median overall typical aggregate aggregates summary
@@ -90,12 +130,27 @@ _TASK_WORDS = _words(
     compare compared comparing comparison similar similarly same across against
     between among amongst side beside relative relatively respectively
     historical historically recent recently prior previous past
-    move moves moved mover movers
+    move moves moved moving mover movers
     appear appears appeared appearing often frequently frequent frequency common commonly typical typically
     exist exists existing stored store storage node nodes event events snapshot snapshots
     instruction instructions detail details composition compositions outline outlines
     region regions country countries area areas uk eu us
     decide decides deciding decision study studies studying studies
+    sell sells selling sold buy buys buying
+    tell tells telling told say says saying said ask asks asking asked
+    explain explains explaining explained
+    explore exploring explored focus focusing focused narrow narrowing
+    confirm confirming confirmed accurate reply report dimension dimensions
+    aspect aspects yes yeah yep ok okay sure proceed correct fine alright
+    getting got gone recorded recording ignore ignoring than actually
+    """
+)
+# Modal / capability language — never a brand or buyer ("is that possible…?").
+_MODAL_WORDS = _words(
+    """
+    possible possibly impossible maybe perhaps perhapsly able unable capability
+    capable capabilities feasible feasibly feasibility potential potentially
+    might maybe can could would should may
     """
 )
 # Measure / property names that are not garment types when used alone in ranking asks.
@@ -126,23 +181,53 @@ _GRAPH_SCORE_STOPWORDS = _words(
     every each number count total what which who when where list has have had was were
     been contain contains containing do we you your me please could would them those
     these their same also just show give want let us again still about product products
+    tell tells telling told say says saying said ask asks asking asked explain explains
+    explore exploring explored focus focusing focused narrow narrowing confirm confirming
+    accurate reply report dimension dimensions aspect aspects
     catalog catalogue data information info overview knowledge graph graphs kg source
     sources system database node nodes available visible there here inside within
+    example examples sample samples as can could around roughly approx approximately
     """
 )
 # A filter value containing any of these is the question pasted back, not a catalog value.
 _FILTER_NOISE = _words(
     "normally usually typical typically making make makes made type types kind kinds which what "
     "product products does new sample samples suggest specification specifications "
+    "generate generates generating build builds building write writes writing draft drafts "
+    "create creates creating provide provides propose proposes invent invents formulate "
     "found matched match result results currently available total number count "
     "largest biggest highest lowest most least fewest smallest top "
     "decrease decreases decreased increase increases increased drop drops rise rose "
     "change changes trend trends trending history historical fluctuation fluctuations "
     "analyse analyze analysis attribute wise breakdown takeaway leading "
-    "cheaper expensive mover movers"
+    "cheaper expensive mover movers more than getting recorded "
+    "mix mixes mixture mixtures blend blends common commonly often "
+    "break breaks broke down dominate dominates "
+    "tell tells telling told say says saying said ask asks asking asked "
+    "explore exploring explored focus focusing focused narrow narrowing "
+    "confirm confirming confirmed accurate reply report dimension dimensions "
+    "yes yeah yep ok okay sure proceed correct fine alright "
+    "possible possibly impossible maybe perhaps able unable capability capable "
+    "feasible feasibility potential potentially might "
+    "toward relationship relationships use used using via label labels "
+    "garmentcategory required schema hint hints filter filters key keys"
 )
 _SUGGEST_WORDS = _words(
     "suggest suggestion suggestions recommend recommendation recommendations"
+)
+# Verbs that mean "build / invent a sample-ready sheet" (paired with spec terms).
+# Keep separate from _MAKE_VERBS (assortment "what do they make") so we do not broaden counts.
+_SPEC_CREATE_VERBS = _words(
+    """
+    make makes create creates design designs develop develops prepare prepares draft drafts
+    generate generates generating build builds building write writes writing
+    propose proposes proposing provide provides providing produce produces producing
+    invent invents inventing formulate formulates
+    """
+)
+# Mode-of-catalog cues: user wants a *typical* sheet, not one SKU's stored props.
+_SPEC_MODE_CUES = _words(
+    "typical typically usual usually common commonly sample samples new"
 )
 _ANALYSIS_WORDS = _words("analysis analyze analysing analyzing analyse profile review overview study")
 _HISTORY_WORDS = _words("past previous prior historic historical history earlier old existing")
@@ -236,6 +321,11 @@ _PLAN_SYSTEM = (
     '"specification" (suggest a new product spec) or "unsupported". '
     "Use analysis when the user says analysis, analyze, profile, breakdown, review, or overview of a buyer's products. "
     "Do not use specification for analysis questions. "
+    'Use intent "specification" when the user wants a product/sample specification sheet suggested from '
+    "catalog modes — any wording (generate/create/make/draft/build/write/provide/propose a spec, "
+    "typical/usual/common sweater spec, product specification for a brand+garment without a style/SKU id). "
+    'Use intent "unsupported" never for those; do not treat them as count. '
+    "Only avoid specification when they ask for the full/exact stored details of a named style/SKU. "
     "Filter values must be concrete catalog names (brands, materials, colors, categories) — never verbs or metric words. "
     "When the user asks for price/positioning by family or brand, set group_by to that dimension and leave filters empty. "
     "For garment or product-type words such as sweater, jumper, dress, or cardigan, put the value in "
@@ -258,28 +348,156 @@ _PLAN_SYSTEM = (
 # --------------------------------------------------------------------------------------
 
 
+def is_trending_product_ask(question: str) -> bool:
+    """Which products are hot/trending now (activity ranking) — not brand avg trend.
+
+    Examples: "which product is more trending on Primark", "hot products now".
+    """
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    # "which color is most running" is a facet ranking — not product hotness.
+    if is_dominant_facet_ask(question):
+        return False
+    if not re.search(r"\b(trend|trends|trending|hot|popular|buzzing)\b", text):
+        return False
+    # Explicit analysis / overall brand trend language stays on PriceChangeEvent avg path.
+    if re.search(r"\b(analysis|analyse|analyze|overall|average|avg|summary)\b", text):
+        return False
+    if re.search(r"\bprice\s+trend\b", text):
+        return False
+    productish = bool(re.search(r"\b(products?|items?|styles?|skus?)\b", text))
+    whichish = bool(re.search(r"\b(which|what|top|most|more|currently|now|present|right now)\b", text))
+    if productish and whichish:
+        return True
+    if re.search(r"\b(trending|hot|popular)\s+(products?|items?|styles?)\b", text):
+        return True
+    return False
+
+
+_FACET_RANK_TOKEN = (
+    r"colou?rs?|materials?|fabrics?|categor(?:y|ies)|famil(?:y|ies)|"
+    r"sections?|brands?|buyers?|garment(?:\s+types?)?"
+)
+
+
+def dominant_facet_from_question(question: str) -> str | None:
+    """Return facet key for 'which color is most…' asks, else None."""
+
+    text = normalize_name(question or "")
+    if not text:
+        return None
+    mapping = (
+        ("color", r"colou?rs?"),
+        ("material", r"materials?|fabrics?"),
+        ("category", r"categor(?:y|ies)"),
+        ("family", r"famil(?:y|ies)"),
+        ("section", r"sections?"),
+        ("brand", r"brands?"),
+        ("buyer", r"buyers?"),
+        ("garment_type", r"garment(?:\s+types?)?"),
+    )
+    for key, pat in mapping:
+        if re.search(
+            rf"\bwhich\s+(?:{pat})\b.{{0,60}}\b(most|top|popular|common|running|dominant|frequent)\b",
+            text,
+        ):
+            return key
+        if re.search(rf"\b(most|top|popular|common|dominant|frequent)\s+(?:{pat})\b", text):
+            return key
+        if re.search(rf"\bgrouped by\s+(?:{pat})\b", text) or re.search(
+            rf"\bby\s+(?:{pat})\b.{{0,40}}\b(count|share|breakdown)\b", text
+        ):
+            return key
+    return None
+
+
+def is_dominant_facet_ask(question: str) -> bool:
+    """True for 'which color is most running' / 'most common material'."""
+
+    return dominant_facet_from_question(question) is not None
+
+
+def is_price_trend_analysis_ask(question: str) -> bool:
+    """True for 'make trending analysis', 'trend analysis', 'price trend', etc.
+
+    In Fashion Brain catalog chat these mean PriceChangeEvent trends — not a
+    static product-mix / attribute-wise assortment profile.
+    """
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    # "which product is trending" is product hotness — not brand average trend.
+    if is_trending_product_ask(question):
+        return False
+    # Explicit price + trend/history language.
+    if re.search(r"\bprices?\b", text) and re.search(
+        r"\b(trend|trends|trending|history|historical|change|changes|over time)\b",
+        text,
+    ):
+        return True
+    # "make trending analysis" / "do a trend analysis" — no "price" word required.
+    if re.search(
+        r"\b("
+        r"(?:make|run|do|show|give|want|need|please)?\s*"
+        r"(?:a\s+|the\s+)?"
+        r"(?:price\s+)?"
+        r"(?:trend|trends|trending)"
+        r"(?:\s+analysis|\s+analyse|\s+analyze)"
+        r"|"
+        r"trending\s+analysis|trend\s+analysis|price\s+trend"
+        r")\b",
+        text,
+    ):
+        return True
+    return False
+
+
 def _is_price_history_question(question: str) -> bool:
     """Catalog price movers / trends / history (ecom PriceChangeEvent path)."""
 
     text = normalize_name(question)
+    # Current catalog ranking ("top 10 highest prices") is a product list, not history.
+    if is_ranked_product_listing_ask(question):
+        return False
+    # "not history" / "current-state" are current-price asks, not PriceChangeEvent.
+    text = re.sub(r"\bnot\s+history\b", " ", text)
+    if re.search(
+        r"\b(right now|current[- ]state|current average|current price|average price of)\b",
+        text,
+    ) and not re.search(
+        r"\b(change|changes|changed|trend|trends|history|historical|over time|"
+        r"decrease|increase|drop|rise|mover|movers|fluctuation)\b",
+        text,
+    ):
+        return False
     if re.search(r"\bpricechangeevent\b", text):
         return True
     # "got cheaper" / currency-switch asks may omit the word "price".
     if re.search(r"\b(cheaper|currency\s+switch|currency\s+switches|same[- ]currency)\b", text):
         return True
+    # "which product is trending" → product activity ranking (still temporal path).
+    if is_trending_product_ask(question):
+        return True
+    # "make trending analysis" → price-change trends (not assortment profile).
+    if is_price_trend_analysis_ask(question):
+        return True
     if not re.search(r"\bprices?\b", text):
         return False
+    # Explicit change/history language only — not "highest price" product rankings.
     return bool(
         re.search(
             r"\b(decrease|decreases|decrease[sd]|increase|increases|increased|"
             r"drop|drops|dropped|rise|rises|rose|rising|fallen|falling|"
             r"change|changes|changed|trend|trends|history|historical|"
-            r"fluctuation|fluctuations|move|moves|moved|mover|movers|"
-            r"cheaper|expensive|"
+            r"fluctuation|fluctuations|move|moves|moved|moving|mover|movers|"
+            r"cheaper|"
             r"over time|last\s+\d+\s+(day|days|month|months|week|weeks))\b",
             text,
         )
-    ) or bool(re.search(r"\b(largest|biggest|highest|lowest)\s+price\b", text))
+    )
 
 
 def temporal_count_entity(question: str) -> str | None:
@@ -290,7 +508,11 @@ def temporal_count_entity(question: str) -> str | None:
         return None
     if re.search(r"\b(price\s*change\s*events?|pricechangeevent)\b", text):
         return "PriceChangeEvent"
-    if re.search(r"\b(availability\s*(change\s*)?(snapshots?|events?)|availabilitysnapshot)\b", text):
+    # "availability changes/snapshots/events" and AvailabilitySnapshot label forms.
+    if re.search(
+        r"\b(availability\s*(changes?|snapshots?|events?)|availabilitysnapshot)\b",
+        text,
+    ):
         return "AvailabilitySnapshot"
     return None
 
@@ -333,6 +555,11 @@ def availability_history_mode(question: str) -> str | None:
     text = normalize_name(question)
     if temporal_count_entity(question) == "AvailabilitySnapshot":
         return "count_snapshots"
+    # State transition: "from <state> to <state>" over snapshot history.
+    if re.search(r"\bfrom\b.+\bto\b", text) and re.search(
+        r"\b(availability|stock|instock|in stock|mixed|outofstock|out of stock)\b", text
+    ):
+        return "transition"
     # Product listing / recent-change asks win over brand-ranking phrasing that
     # conversation refine may carry forward from a prior turn.
     if re.search(r"\b(products?|items?|skus?)\b", text) and re.search(
@@ -371,11 +598,13 @@ def garment_type_from_question(question: str) -> str | None:
         r"\b(crop[\s-]?tops?)\b",
         r"\b(tank[\s-]?tops?)\b",
         r"\b(hoodies?)\b",
-        r"\b(sweaters?|jumpers?|cardigans?)\b",
+        r"\b(sweaters?|jumpers?|cardigans?|knitwear)\b",
         r"\b(dresses?)\b",
         r"\b(jackets?|coats?)\b",
         r"\b(jeans|trousers|pants)\b",
-        # Never bare "top"/"tops" — ranking language ("top counts") is not a garment.
+        r"\b(skirts?)\b",
+        r"\b(blouses?)\b",
+        r"\b(blazers?)\b",
         r"\b(shirts?)\b",
     )
     for pattern in patterns:
@@ -385,11 +614,29 @@ def garment_type_from_question(question: str) -> str | None:
         raw = re.sub(r"\s+", "-", match.group(1).strip())
         if raw in {"jeans", "pants", "trousers"}:
             return raw
+        # Irregular / -es plurals (do not strip "ses" from blouses → blou).
+        irregular = {
+            "dresses": "dress",
+            "blouses": "blouse",
+            "skies": "sky",
+        }
+        if raw in irregular:
+            return irregular[raw]
         if raw.endswith("ss"):
             return raw
         if raw.endswith("s") and len(raw) > 3:
             return raw[:-1]
         return raw
+    # Bare "tops" / contextual "top" is a garment — not ranking ("top 10", "top brands").
+    # Keep plural "tops" so CONTAINS matching stays reliable (singular "top" is a rank stopword).
+    if re.search(r"\btops\b", text):
+        return "tops"
+    if re.search(r"\btop\b", text) and not re.search(
+        r"\btop\s+(\d+|brands?|buyers?|counts?|products?|items?|movers?|categories)\b",
+        text,
+    ):
+        if re.search(r"\b(in|for|among|across|of)\s+\w[\w&'-]*\s+top\b|\b\w[\w&'-]*\s+top\b", text):
+            return "tops"
     return None
 
 
@@ -425,13 +672,12 @@ def _is_average_price_question(question: str) -> bool:
     """Current-state average price (not historical delta %)."""
 
     text = normalize_name(question)
+    text = re.sub(r"\bnot\s+history\b", " ", text)
     if not re.search(r"\b(average|avg|mean)\b", text):
         return False
     if not re.search(r"\bprices?\b", text):
         return False
-    if _is_price_history_question(question) and re.search(
-        r"\b(change|changes|trend|trends|history|historical|delta|mover|movers)\b", text
-    ):
+    if _is_price_history_question(question):
         return False
     return True
 
@@ -447,6 +693,210 @@ def _is_unsupported_ecom_facet_question(question: str) -> str | None:
     return None
 
 
+def is_product_count_ask(question: str) -> bool:
+    """True when the user is asking for a quantity (not a listing or analysis).
+
+    Fallback helper for Query Understanding when the LLM path did not run or
+    failed, and for listing guards. LLM Query Understanding is authoritative
+    for long/narrative asks; this classifier must not be the primary gate in
+    the orchestrator.
+    """
+
+    text = normalize_name(question)
+    if not text:
+        return False
+    # Explicit quantity cues (including paraphrases of "how many").
+    if re.search(
+        r"\b("
+        r"how many|number of|count of|total number|how much|"
+        r"how large|how big|size of|volume of|quantity of|"
+        r"product count|item count|sku count|"
+        r"total (?:products?|items?|skus?|styles?|brands?|categories)|"
+        r"(?:products?|items?|skus?|styles?|brands?|categories) total"
+        r")\b",
+        text,
+    ):
+        return True
+    if re.search(r"\b(count|total|quantity)\b", text) and re.search(
+        r"\b(products?|items?|skus?|styles?|brands?|categories|buyers?)\b",
+        text,
+    ):
+        return True
+    return False
+
+
+def is_capability_followup_ask(question: str) -> bool:
+    """True for 'is that possible…?', 'can you…?' — capability, not a new party name."""
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"\b("
+            r"is that possible|is it possible|possible to|"
+            r"can you|could you|would you|are you able|"
+            r"able to|feasible to"
+            r")\b",
+            text,
+        )
+    )
+
+
+def is_catalog_dataset_total_ask(question: str) -> bool:
+    """Whole catalog/dataset product total — must not inherit a prior brand/buyer.
+
+    Examples: "How many products are in the e-comm data?",
+    "How many products are in the PLM data?"
+    Not: "How many products does Primark have?"
+    """
+
+    if not is_product_count_ask(question):
+        return False
+    text = normalize_name(question)
+    return bool(
+        re.search(
+            r"\b(?:in|across|from|within)\s+(?:the\s+)?(?:"
+            r"e[\s-]?comm(?:erce)?|ecom|plm(?:ex)?|catalog|assortment|"
+            r"data(?:set|base)?|product\s+(?:data|catalog|graph|source)|"
+            r"knowledge\s+graph"
+            r")\b",
+            text,
+        )
+    )
+
+
+def is_facet_value_ranking_ask(question: str, graph_id: str | None = None) -> tuple[str, int] | None:
+    """'list top 10 brand names' / 'top 10 buyers' → (facet_key, n), else None.
+
+    These are kg_stats filter rankings, not ranked product price listings.
+    """
+
+    text = normalize_name(question or "")
+    if not text:
+        return None
+    # Must look like a top-N ask (allow "garment type(s)" multi-word facets).
+    m = re.search(
+        r"\b(?:list|show|give|name|what(?:'s| is| are)?)\s+(?:me\s+)?(?:the\s+)?"
+        r"top\s+(\d+)\s+([a-z][a-z0-9_]*(?:\s+[a-z][a-z0-9_]*){0,2})(?:\s+names?)?\b",
+        text,
+    )
+    if not m:
+        m = re.search(
+            r"\btop\s+(\d+)\s+([a-z][a-z0-9_]*(?:\s+[a-z][a-z0-9_]*){0,2})(?:\s+names?)?\b",
+            text,
+        )
+    if not m:
+        return None
+    n = max(1, min(int(m.group(1)), 50))
+    raw = str(m.group(2) or "").strip().casefold()
+    # Drop trailing filler words that are not part of the facet name.
+    raw = re.sub(r"\b(name|names|value|values|in|on|from|for)\b.*$", "", raw).strip()
+    if raw in {"product", "products", "item", "items", "sku", "skus", "style", "styles", "price", "prices"}:
+        return None
+    try:
+        from knowledge_graph.retrieval.ecom import _fold_facet_token
+
+        folded = _fold_facet_token(raw.replace(" ", "_")) or raw.replace(" ", "_")
+    except Exception:
+        folded = raw.replace(" ", "_")
+        if folded.endswith("s") and len(folded) > 3:
+            folded = folded[:-1]
+    # Confirm the facet exists in kg_stats (prefer sticky/named graph).
+    keys = _facet_keys_from_kg_stats(graph_id)
+    token_set = {
+        folded,
+        raw,
+        raw.replace(" ", "_"),
+        folded + "s",
+        raw + "s",
+        *raw.split(),
+        *folded.split("_"),
+    }
+    hit = _match_facet_in_tokens(token_set, keys) if keys else folded
+    if not hit or hit in {"product", "products"}:
+        # Still accept common party facets even if stats temporarily unavailable.
+        if folded in {"brand", "buyer", "category", "family", "section", "garment_type"}:
+            return folded, n
+        if "garment" in token_set and "type" in token_set:
+            return "garment_type", n
+        return None
+    return hit, n
+
+
+def question_has_catalog_deixis(question: str) -> bool:
+    """True when the ask points at prior catalog scope ('of them', 'those', 'same'…)."""
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    if re.search(r"\b(of them|among them|from them|in them|those|these|same (one|catalog|source|graph|data)|that (catalog|source|graph|data))\b", text):
+        return True
+    return bool(re.search(r"\b(them|those|these)\b", text))
+
+
+def is_ranked_product_listing_ask(question: str) -> bool:
+    """True for 'top 10 products…' / 'highest prices among them' — a ranked product list.
+
+    Not a product count, not PriceChangeEvent history, and not 'top 10 brand names'.
+    """
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    # Facet value rankings ("top 10 brands") stay on kg_stats — never product price lists.
+    if is_facet_value_ranking_ask(question) is not None:
+        return False
+    has_products = bool(re.search(r"\b(products?|items?|skus?|styles?)\b", text))
+    if re.search(r"\b(top|bottom|first|last)\s+\d+\b", text) and has_products:
+        return True
+    if has_products and re.search(
+        r"\b(highest|lowest|most\s+expensive|cheapest)\s+prices?\b",
+        text,
+    ):
+        return True
+    if has_products and re.search(
+        r"\bproducts?\b.+\b(highest|lowest|most\s+expensive|cheapest)\b",
+        text,
+    ):
+        return True
+    # "list top 10 …" only counts as a product listing when products/prices are named.
+    if re.search(r"\b(show|list|give)\s+(?:me\s+)?(?:the\s+)?top\s+\d+\b", text):
+        return bool(re.search(r"\b(products?|items?|skus?|styles?|prices?)\b", text))
+    return False
+
+
+def ranked_product_listing_limit(question: str) -> int | None:
+    """Top-N for a ranked product listing, capped for retrieval."""
+
+    text = normalize_name(question or "")
+    m = re.search(r"\b(?:top|bottom|first|last|show|list)\s+(\d+)\b", text)
+    if m:
+        return max(1, min(int(m.group(1)), 50))
+    if is_ranked_product_listing_ask(question):
+        return 10
+    return None
+
+
+def product_price_sort_direction(question: str) -> str | None:
+    """'desc' / 'asc' when the user ranks products by current price."""
+
+    if not is_ranked_product_listing_ask(question):
+        text = normalize_name(question or "")
+        if not (
+            re.search(r"\bprices?\b", text)
+            and re.search(r"\b(highest|lowest|expensive|cheap)\b", text)
+            and re.search(r"\b(products?|items?)\b", text)
+        ):
+            return None
+    text = normalize_name(question or "")
+    if re.search(r"\b(lowest|cheapest|cheap|bottom|least\s+expensive)\b", text):
+        return "asc"
+    if re.search(r"\b(highest|most\s+expensive|expensive|top)\b", text):
+        return "desc"
+    return None
+
+
 def is_open_product_listing(question: str, *, limit: int | None = None) -> bool:
     """True for open 'which/show products …' asks without an explicit top-N.
 
@@ -457,6 +907,11 @@ def is_open_product_listing(question: str, *, limit: int | None = None) -> bool:
     if limit is not None:
         return False
     text = normalize_name(question)
+    # Count asks stay on product_count — never demote to a sample listing.
+    if is_product_count_ask(question):
+        return False
+    if is_ranked_product_listing_ask(question):
+        return False
     if re.search(r"\b(top|bottom|first|last|show|list)\s+\d+\b", text):
         return False
     if re.search(r"\b\d+\s+(products?|items?|styles?)\b", text):
@@ -476,6 +931,21 @@ def plan_routes(question: str) -> list[str]:
     tokens = set(normalize_name(question).split())
     if "live" in tokens and "plmex" in text:
         return ["live_sql"]
+    # Planner shapes from live-schema-aware linguistic detectors (no hardcoded values).
+    try:
+        from fashion_brain.planning.schema_grounding import detect_query_shape
+
+        shape = detect_query_shape(question)
+    except Exception:
+        shape = None
+    if shape == "shared_overlap":
+        return ["shared_products"]
+    if shape in {"category_rollup", "volatility", "state_transition"}:
+        return ["product_count"]
+    if shape == "entity_frequency":
+        return ["product_count"]
+    if shape == "facet_listing":
+        return ["products"]
     if temporal_count_entity(question):
         return ["product_count"]
     if _is_price_history_question(question):
@@ -493,6 +963,9 @@ def plan_routes(question: str) -> list[str]:
     if re.search(r"\b(top|bottom|highest|lowest|most)\s+\d+\b", normalize_name(question)):
         return ["product_count"]
     if _buyer_ranking_question(question):
+        return ["product_count"]
+    # Domain attribute / construction / fit asks stay on product_count (never direct).
+    if tokens & {"construction", "constructions", "fit", "fits", "composition", "compositions"}:
         return ["product_count"]
     # "how many <facet>s" — product KG facet entity count, not shared interconnect.
     if _facet_entity_count(question):
@@ -515,8 +988,73 @@ def plan_routes(question: str) -> list[str]:
     return ["product_count"]
 
 
+def _facet_keys_from_kg_stats(graph_id: str | None = None) -> list[str]:
+    """Indexed filter names from kg_stats (kg → filter → values). Stats-driven, not a noun list."""
+
+    try:
+        from knowledge_graph.retrieval.kg_stats import load_graph_stats, stats_available
+    except Exception:
+        return []
+    gids: list[str] = []
+    if graph_id:
+        gids.append(str(graph_id))
+    for alt in ("ecom_products", "plmex_products", "own_products"):
+        if alt not in gids:
+            gids.append(alt)
+    keys: list[str] = []
+    seen: set[str] = set()
+    for gid in gids:
+        try:
+            if not stats_available(gid):
+                continue
+            stats = load_graph_stats(gid) or {}
+        except Exception:
+            continue
+        for raw in list((stats.get("unique_counts") or {}).keys()) + list(
+            (stats.get("value_counts") or {}).keys()
+        ):
+            key = str(raw or "").strip().casefold().replace(" ", "_")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def _match_facet_in_tokens(tokens: set[str], facet_keys: list[str]) -> str | None:
+    """Map question tokens onto an indexed filter key (buyer/brand/…)."""
+
+    try:
+        from knowledge_graph.retrieval.ecom import _fold_facet_token
+    except Exception:
+        _fold_facet_token = None  # type: ignore[assignment]
+    for key in facet_keys:
+        folded = (_fold_facet_token(key) if _fold_facet_token else None) or key
+        variants = {
+            folded,
+            folded + "s",
+            folded.replace("_", ""),
+            folded.replace("_", "") + "s",
+            key,
+            key + "s",
+        }
+        if folded.endswith("y") and len(folded) > 2:
+            variants.add(folded[:-1] + "ies")
+        stem = folded.split("_")[-1] if "_" in folded else folded
+        if stem and stem != folded:
+            variants |= {stem, stem + "s"}
+            if stem.endswith("y") and len(stem) > 2:
+                variants.add(stem[:-1] + "ies")
+        if tokens & {str(v).casefold() for v in variants if v}:
+            return folded
+    return None
+
+
 def _facet_entity_count(question: str, schema=None) -> str | None:
-    """'How many <facet>s' → ontology facet label (or product), else None."""
+    """'How many <facet>s' → ontology / kg_stats filter key (or product), else None.
+
+    Lookup shape: ``kg_stats[<graph>].value_counts[<filter>]`` — never invent random plurals.
+    """
 
     if schema is not None:
         from fashion_brain.agents.entity_extract import (
@@ -530,6 +1068,12 @@ def _facet_entity_count(question: str, schema=None) -> str | None:
         if hit:
             return hit
     text = normalize_name(question)
+    # Placeholder / missing-value probes are product filters, not distinct-facet counts.
+    if re.search(
+        r"\b(missing|unspecified|unknown|null|__\w+__)\b",
+        text,
+    ) and re.search(r"\b(brand|buyer|color|category|material)\b", text):
+        return None
     # Breakdown / list of products per facet is group_by, not distinct-facet count.
     if re.search(r"\b(per|by|wise|grouped|breakdown|each|all|every)\b", text) and re.search(
         r"\b(products?|items?|skus?|styles?|list|table|show)\b", text
@@ -543,26 +1087,52 @@ def _facet_entity_count(question: str, schema=None) -> str | None:
     if re.search(r"\b(per|by|wise|grouped|breakdown|each)\b", text):
         return None
     tokens = set(text.split())
-    # Without schema: treat plural facet-ish tokens as product-count routing signal.
-    # Concrete label comes from RuntimeSchemaContext when platform is available.
+    # Prefer the named product KG's indexed filters (plmex / ecom / …).
+    graph_hint = None
+    try:
+        prefs = preferred_graphs_from_question(question)
+        graph_hint = prefs[0] if prefs else None
+    except Exception:
+        graph_hint = None
+    if not graph_hint:
+        if tokens & {"plm", "plmex"}:
+            graph_hint = "plmex_products"
+        elif tokens & {"ecom", "ecomm", "ecommerce", "commerce"}:
+            graph_hint = "ecom_products"
+    # "how many products does buyer X have" counts products, not distinct buyers.
+    # Distinct-facet only when the facet is the counted noun: "how many brands/buyers".
+    if tokens & {"product", "products", "item", "items", "sku", "skus", "style", "styles"}:
+        if not re.search(
+            r"\b(how many|number of|count of)\s+(brands?|buyers?|colors?|colours?|"
+            r"categories|materials?|seasons?|genders?)\b",
+            text,
+        ):
+            return "product"
+    hit = _match_facet_in_tokens(tokens, _facet_keys_from_kg_stats(graph_hint))
+    if hit and hit not in {"product", "products"}:
+        return hit
     for token in tokens:
         if token in {"product", "products"}:
             return "product"
-        if token.endswith("s") and len(token) > 3 and token not in _SYSTEM_WORDS | _GRAPH_SCOPE_NOISE:
-            # brands → brand, colors → color
-            return token[:-1] if token.endswith("s") else token
     return None
 
 def _is_analysis(question: str) -> bool:
-    """Product-mix analysis on the selected product KG (PLM, ecom, or other) — not ecom-only."""
+    """Product-mix / assortment analysis (full or focused) — same analytical engine.
+
+    Full: \"full analysis of Primark\" → every facet with distinct values.
+    Focused: \"Primark category breakdown\" / \"analysis material wise\" → one facet.
+    Compare assortment profiles also belong here.
+    """
 
     tokens = set(normalize_name(question).split())
-    if not tokens & _ANALYSIS_WORDS:
-        return False
-    # "breakdown by gauge" stays a single-field count.
-    if _group_field(question):
-        return False
-    return True
+    if tokens & _ANALYSIS_WORDS:
+        return True
+    if "compare" in tokens and tokens & {"assortment", "profile", "profiles", "mix"}:
+        return True
+    # Breakdown / wise → same engine (focused when a dimension is named).
+    if tokens & _BREAKDOWN_HEADS or "wise" in tokens:
+        return True
+    return False
 
 
 def _buyer_ranking_question(question: str) -> bool:
@@ -587,30 +1157,33 @@ def answer_question(
     graph_id: str | None = None,
     conversation_state: dict | None = None,
 ) -> GroundedAnswer:
-    """Route an LLM ask through the agent graph. Template mode stays on the catalog."""
+    """Single ask entry for HTTP /ask, WS /ws/ask, and conversation messages.
+
+    Always uses the catalog orchestrator (same internal route as WebSocket chat).
+    The LangGraph outer router is not used on this entry — keep HTTP/WS/eval aligned.
+    """
 
     from fashion_brain.trace import current_trace, end_trace, start_trace
+    from fashion_brain.stage_timing import current_timing, end_timing, log_timing, start_timing, timed
 
+    owns_timing = current_timing() is None
+    if owns_timing:
+        start_timing()
     owns_trace = current_trace() is None
     if owns_trace:
         start_trace(question, source="http/ask")
     try:
-        # Conversation session memory (last_graph_id / filters) requires catalog orchestration.
-        if conversation_state is not None:
+        with timed("ask_pipeline"):
+            # Empty dict is enough: same catalog path WS uses on the first turn.
+            state = conversation_state if conversation_state is not None else {}
             answer = answer_from_catalog(
                 platform,
                 question,
                 principal,
                 history,
                 graph_id=graph_id,
-                conversation_state=conversation_state,
+                conversation_state=state,
             )
-        elif _use_agent_graph(platform):
-            from fashion_brain.flow import ask_with_graph
-
-            answer = ask_with_graph(platform, question, principal, history, graph_id=graph_id)
-        else:
-            answer = answer_from_catalog(platform, question, principal, history, graph_id=graph_id)
         if owns_trace:
             end_trace(status="ok", routes=getattr(answer, "routes", None), chars=len(getattr(answer, "answer", "") or ""))
         return answer
@@ -618,6 +1191,11 @@ def answer_question(
         if owns_trace:
             end_trace(status="error")
         raise
+    finally:
+        if owns_timing:
+            bundle = end_timing()
+            if bundle is not None:
+                log_timing(bundle, LOGGER)
 
 
 def _use_agent_graph(platform: Platform) -> bool:
@@ -654,10 +1232,149 @@ def answer_from_catalog(
         graph_id=graph_id,
         conversation_state=conversation_state,
     )
+    from fashion_brain.agents.query_understanding import clarification_awaiting
+
+    if clarification_awaiting(retrieved):
+        LOGGER.info("step 4/4 clarification — skipping response agent")
+        return _grounded(question, routes, retrieved.text or "", retrieved, platform)
+    if _is_simple_count_result(retrieved, _intention, question):
+        LOGGER.info("step 4/4 answer-card writer for count")
+        raw = _write_from_answer_card(
+            platform,
+            question,
+            retrieved,
+            routes=routes,
+            intention=_intention,
+        )
+        return _grounded(question, routes, raw, retrieved, platform)
+    scope_note_text = ""
+    if conversation_state is not None:
+        scope_note_text = str(conversation_state.pop("_response_scope_note", "") or "")
     LOGGER.info("step 4/4 response agent started")
-    answer = ResponseAgent().compose(platform, question, retrieved)
+    answer = ResponseAgent().compose(
+        platform,
+        question,
+        retrieved,
+        scope_note=scope_note_text,
+        routes=routes,
+    )
     LOGGER.info("step 4/4 response agent finished chars=%s", len(answer))
     return _grounded(question, routes, answer, retrieved, platform)
+
+
+def _write_from_answer_card(
+    platform: Platform,
+    question: str,
+    retrieved,
+    *,
+    routes: list[str] | None = None,
+    intention=None,
+) -> str:
+    """Build an answer card and write via LLM (or safe fallback when answer_mode != llm)."""
+
+    from fashion_brain.agents.answer_card import (
+        WRITER_PROMPT,
+        build_answer_card,
+        safe_fallback,
+        write_answer,
+    )
+    from fashion_brain.llm import build_model_provider
+
+    resolved = dict(getattr(retrieved, "resolved", None) or {})
+    filters = {
+        str(k): str(v)
+        for k, v in (
+            resolved.get("filters")
+            or getattr(intention, "filters", None)
+            or {}
+        ).items()
+        if v not in (None, "")
+    }
+    # Persist filters for ResponseAgent / later turns.
+    resolved["filters"] = filters
+    if routes:
+        resolved["routes"] = list(routes)
+    if getattr(intention, "group_by", None):
+        resolved["group_by"] = intention.group_by
+    if getattr(intention, "limit", None):
+        resolved["limit"] = intention.limit
+    retrieved.resolved = resolved
+
+    card = build_answer_card(
+        question,
+        routes or resolved.get("routes") or [],
+        filters,
+        retrieved,
+        response_type=getattr(retrieved, "response_type", None),
+        group_by=resolved.get("group_by"),
+        limit=resolved.get("limit"),
+    )
+    settings = getattr(platform, "settings", None)
+    answer_mode = str(getattr(settings, "answer_mode", "") or "")
+    model_provider = str(getattr(settings, "model_provider", "") or "").strip().casefold()
+    if answer_mode != "llm" or model_provider in {"", "none", "null"}:
+        body = safe_fallback(card)
+        footer = card.footer()
+        return f"{body}\n\n{footer}".strip() if footer else body
+
+    provider = build_model_provider(platform.settings)
+    configured_timeout = getattr(platform.settings, "request_timeout_seconds", None)
+    if configured_timeout is None or configured_timeout <= 0:
+        configured_timeout = getattr(platform.settings, "ollama_timeout_seconds", None)
+    response_timeout = min(float(configured_timeout), 120.0) if configured_timeout else 90.0
+
+    def llm_call(prompt: str) -> str:
+        return str(
+            provider.complete(
+                prompt,
+                timeout=response_timeout,
+                system="",
+                temperature=0.3,
+            )
+            or ""
+        )
+
+    try:
+        return write_answer(card, llm_call, WRITER_PROMPT)
+    except Exception:
+        body = safe_fallback(card)
+        footer = card.footer()
+        return f"{body}\n\n{footer}".strip() if footer else body
+
+
+def _is_simple_count_result(retrieved, intention, question: str) -> bool:
+    """True when a count is already fully formatted and needs no response-model rewrite."""
+
+    metadata_count = (
+        getattr(retrieved, "retrieve_mode", None) == "template"
+        and getattr(retrieved, "response_type", None) in {"stats", "concise"}
+        and any(
+            str(getattr(item, "record_id", "") or "") == "kg_stats"
+            for item in (getattr(retrieved, "evidence", None) or [])
+        )
+    )
+    if metadata_count:
+        return True
+    if (
+        str(getattr(intention, "intent", "") or "").casefold() not in {"count", "product_count"}
+        or getattr(intention, "group_by", None)
+        or bool(getattr(intention, "analysis", False))
+        or bool(getattr(intention, "suggest", False))
+        or getattr(intention, "limit", None) not in (None, 0)
+    ):
+        return False
+    if not is_product_count_ask(question):
+        return False
+    if is_ranked_product_listing_ask(question) or is_open_product_listing(question):
+        return False
+    try:
+        from knowledge_graph.retrieval.ecom import price_history_mode
+
+        if _is_price_history_question(question) or is_price_trend_analysis_ask(question) or price_history_mode(question):
+            return False
+    except Exception:
+        return False
+    return True
 
 
 def draft_catalog(
@@ -726,14 +1443,22 @@ def enrich_ecom_question_filters(question: str, filters: dict | None = None) -> 
             out["price_max"] = match.group(1)
     if "currency" not in out and (" eur" in f" {text}" or "€" in (question or "") or "euro" in text):
         out["currency"] = "EUR"
-    if "section" not in out and re.search(r"\bwomen\b", text):
+    # Do not invent section=women when gender is already set — that turns a
+    # single-filter kg_stats hit into a multi-filter Cypher miss (P09).
+    if "section" not in out and "gender" not in out and re.search(r"\bwomen\b", text):
         out["section"] = "women"
-    # Composition/spec compares need the named garment kept even when EntityExtract is thin.
-    if is_composition_compare_question(question) and not any(
-        out.get(k) for k in ("garment", "garment_type", "category")
-    ):
+    # Composition/spec compares and product-type listings need the named garment kept.
+    if not any(out.get(k) for k in ("garment", "garment_type", "category")):
         garment = garment_type_from_question(question)
-        if garment:
+        if garment and (
+            is_composition_compare_question(question)
+            or bool(
+                re.search(
+                    r"\b(t[\s-]?shirts?|sweaters?|knitwear|dresses?|jeans|hoodies?)\b",
+                    (question or "").casefold(),
+                )
+            )
+        ):
             out["garment"] = garment
     parties = _compare_party_names(question)
     if len(parties) >= 2:
@@ -774,6 +1499,8 @@ def _retrieve(
     parent_of = parent_category_name(question)
     if parent_of:
         filters = {**filters, "parent_of": parent_of}
+    # Preserve the caller's requested scope for provenance on :8001 evidence.
+    requested_filters = dict(filters)
 
     request = BrainRetrieveRequest(
         question=question,
@@ -790,6 +1517,7 @@ def _retrieve(
         count_entity=getattr(intention, "count_entity", None),
         graph_id=graph_id or None,
         graph_ids=list(graph_ids) if graph_ids else None,
+        requested_filters=requested_filters,
     )
     remote = uses_kg_api(platform.settings)
     trace_step(
@@ -856,10 +1584,24 @@ def _alias_at(tokens: list[str], index: int) -> tuple[str, int] | None:
     return found
 
 
+def _is_breakdown_phrase_at(tokens: list[str], index: int) -> int | None:
+    """Return index after a breakdown phrase starting at ``index``, else None."""
+
+    if index >= len(tokens):
+        return None
+    token = tokens[index]
+    if token in _BREAKDOWN_SUFFIXES:
+        return index + 1
+    # Spoken form: "break down" / "breaks down"
+    if token in {"break", "breaks", "broke"} and index + 1 < len(tokens) and tokens[index + 1] == "down":
+        return index + 2
+    return None
+
+
 def _group_marker_at(tokens: list[str], index: int) -> tuple[str, int] | None:
     """A breakdown phrase at this token. Returns (field, index after the phrase).
 
-    Recognised shapes: "by|per|each <field>", "<field> wise|breakdown|distribution|split",
+    Recognised shapes: "by|per|each <field>", "<field> wise|breakdown|distribution|split|break down",
     and "breakdown|distribution|split [by] <field>".
     """
 
@@ -871,10 +1613,12 @@ def _group_marker_at(tokens: list[str], index: int) -> tuple[str, int] | None:
     found = _alias_at(tokens, index)
     if found:
         after = index + found[1]
-        if after < len(tokens) and tokens[after] in _BREAKDOWN_SUFFIXES:
-            return found[0], after + 1
-    if token in _BREAKDOWN_HEADS:
-        start = index + 1
+        end = _is_breakdown_phrase_at(tokens, after)
+        if end is not None:
+            return found[0], end
+    head_end = _is_breakdown_phrase_at(tokens, index)
+    if head_end is not None or token in _BREAKDOWN_HEADS:
+        start = head_end if head_end is not None else index + 1
         if start < len(tokens) and tokens[start] == "by":
             start += 1
         found = _alias_at(tokens, start)
@@ -910,6 +1654,12 @@ def _product_type_breakdown(question: str) -> str | None:
 
 
 def _is_suggestion(question: str) -> bool:
+    """True when the user wants a *suggested* product/sample specification sheet.
+
+    Wording varies (generate / create / typical / product specification for brand+garment).
+    Do not require one fixed sentence — only exclude analysis and explicit retrieve-existing cues.
+    """
+
     if _is_analysis(question):
         return False
     tokens = normalize_name(question).split()
@@ -919,18 +1669,46 @@ def _is_suggestion(question: str) -> bool:
     if any(phrase in text for phrase in ("new product", "new sample", "new style", "sample for")):
         return True
     has_spec_term = bool(set(tokens) & {"spec", "specs", "specification", "specifications"})
-    has_creation_verb = bool(set(tokens) & {"make", "makes", "create", "creates", "design", "develop", "prepare", "draft"})
-    return has_spec_term and has_creation_verb
+    if not has_spec_term:
+        return False
+    # "full / exact / complete specification" of matching products → product_details, not invent.
+    if re.search(
+        r"\b(?:full|complete|detailed|exact)\b.{0,32}\b(?:specifications?|specs?|details?|attributes?)\b",
+        text,
+    ):
+        return False
+    # Named style/SKU detail asks are retrieve-existing, not mode suggestion.
+    if product_ref_from_question(question):
+        return False
+    has_creation_verb = bool(set(tokens) & _SPEC_CREATE_VERBS)
+    has_mode_cue = bool(set(tokens) & _SPEC_MODE_CUES)
+    # "product specification for Primark sweater" (no style id) = build a sample-ready sheet.
+    has_spec_for_scope = bool(
+        re.search(r"\b(?:product\s+)?(?:specifications?|specs?)\s+(?:for|of)\b", text)
+    )
+    return has_creation_verb or has_mode_cue or has_spec_for_scope
 
 
 def _is_product_details_request(question: str) -> bool:
     if _is_suggestion(question):
         return False
     text = normalize_name(question)
+    # Explicit style / SKU asks ("Zara style 08965901 made of", "tell me more about … 04786296").
+    if product_ref_from_question(question) and re.search(
+        r"\b(style|sku|product|made of|material|materials|composition|"
+        r"colour|color|price|availability|detail|details|tell me more|about)\b",
+        text,
+    ):
+        return True
     spec_term = r"(?:specifications?|specs?|details?|attributes?)"
+    # Retrieve stored props only when the user marks it as full/exact/complete detail,
+    # or asks details/attributes for/of a scope without suggestion language.
+    if re.search(rf"\b(?:full|complete|detailed|exact)\b.{{0,32}}\b{spec_term}\b", text):
+        return True
+    # Bare "details for/of …" / "attributes for …" still means look up existing records.
+    # Do not treat bare "specification for …" as product_details — that is suggest-sheet intent.
     return bool(
-        re.search(rf"\b(?:full|complete|detailed|exact)\b.{{0,32}}\b{spec_term}\b", text)
-        or re.search(rf"\b{spec_term}\s+(?:for|of)\b", text)
+        re.search(rf"\b(?:details?|attributes?)\s+(?:for|of)\b", text)
     )
 
 
@@ -950,13 +1728,21 @@ def _is_party_token(token: str) -> bool:
         or token in _RANK_WORDS
         or token in _MATERIAL_WORDS
         or token in _COLOR_WORDS
+        or token in _COLOR_MARKERS
+        or token in _GARMENT_TYPE_WORDS
         or token in _GENDER_VALUES
         or token in _SEASON_WORDS
+        or token in _FILTER_NOISE
+        or token in _BREAKDOWN_HEADS
+        or token in _BREAKDOWN_SUFFIXES
     ):
         return False
     if token.isdigit() or re.fullmatch(r"(19|20)\d{2}", token):
         return False
     if token in _FIELD_ALIASES:
+        return False
+    # Hyphenated garment forms (t-shirt, sweat-shirt) are never parties.
+    if garment_type_from_question(token):
         return False
     return len(token) > 1
 
@@ -979,9 +1765,35 @@ def _make_verb_follows(tokens: list[str], index: int) -> int | None:
     return None
 
 
+def _is_schema_prose_filter(value: str) -> bool:
+    """True when a filter value is schema-hint text, not a catalog facet value."""
+
+    text = normalize_name(value or "")
+    if not text:
+        return True
+    if ":" in str(value or ""):  # e.g. ":GarmentCategory" from relationship hints
+        return True
+    tokens = set(text.split())
+    prose = {
+        "toward",
+        "relationship",
+        "relationships",
+        "required",
+        "schema",
+        "hint",
+        "hints",
+        "garmentcategory",
+        "allowlist",
+        "via",
+    }
+    return bool(tokens & prose)
+
+
 def _reliable_filter(value: str) -> bool:
     """Reject a model filter that pasted the question instead of a catalog value."""
 
+    if _is_schema_prose_filter(value):
+        return False
     tokens = normalize_name(value).split()
     if not tokens or len(tokens) > 4:
         return False
@@ -990,6 +1802,8 @@ def _reliable_filter(value: str) -> bool:
     if set(tokens) & _METRIC_OPERATOR_WORDS:
         return False
     if set(tokens) & _TASK_WORDS:
+        return False
+    if set(tokens) & _MODAL_WORDS:
         return False
     if set(tokens) & _RANK_WORDS:
         return False
@@ -1007,10 +1821,20 @@ def _reliable_filter(value: str) -> bool:
 
 def _asked_dimension(question: str) -> str | None:
     tokens = normalize_name(question).split()
-    if not tokens or tokens[0] not in {"what", "which", "list", "show"}:
+    if not tokens:
         return None
-    found = _alias_at(tokens, 1)
-    return found[0] if found else None
+    # Mid-sentence too: "In Zara tops, which material mixes…"
+    for index, token in enumerate(tokens):
+        if token not in {"what", "which", "list", "show"}:
+            continue
+        found = _alias_at(tokens, index + 1)
+        if found:
+            return found[0]
+        # "which material mixes / blends" → material breakdown, not material=<mixes>.
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if nxt in {"material", "materials", "fabric", "fabrics", "composition", "compositions"}:
+            return "material" if nxt.startswith("material") or nxt.startswith("fabric") else "composition"
+    return None
 
 
 def _compare_party_names(question: str) -> list[str]:
@@ -1073,12 +1897,18 @@ def _is_value_token(token: str) -> bool:
     return token.isdigit() or _is_filter_term(token)
 
 
-def resolve_catalog_plan(question: str, history: list | None = None, *, carry: bool | None = None) -> dict:
+def resolve_catalog_plan(
+    question: str,
+    history: list | None = None,
+    *,
+    carry: bool | None = None,
+    brand_names: list[str] | None = None,
+) -> dict:
     """Keyword plan from the latest question. Earlier turns merge only when carry=True (agent decision)."""
 
     from fashion_brain.trace import trace_debug
 
-    current = _catalog_plan(question)
+    current = _catalog_plan(question, brand_names=brand_names)
     trace_debug(
         "Keyword plan",
         filters=current.get("filters"),
@@ -1104,7 +1934,7 @@ def resolve_catalog_plan(question: str, history: list | None = None, *, carry: b
     running_group: str | None = None
     running_limit: int | None = None
     for text in _user_questions(history):
-        step = _catalog_plan(text)
+        step = _catalog_plan(text, brand_names=brand_names)
         running_filters.update(step["filters"])
         if step.get("group_by"):
             running_group = step["group_by"]
@@ -1206,15 +2036,123 @@ def _question_tokens(question: str) -> list[str]:
             glued.append("ecommerce")
             index += 1
             continue
+        # C&A / C and A → c-and-a (normalize_name splits on &).
+        if token == "c" and nxt == "a":
+            glued.append("c-and-a")
+            index += 2
+            continue
+        if token == "c" and nxt == "and" and index + 2 < len(tokens) and tokens[index + 2] == "a":
+            glued.append("c-and-a")
+            index += 3
+            continue
         glued.append(token)
         index += 1
     return glued
 
 
-def _graph_scope_signal_tokens(tokens: set[str]) -> set[str]:
-    """Tokens that can name a catalog world — drop grammar and generic 'products/data'."""
+def _facet_attr_tokens_for_graph_scoring() -> set[str]:
+    """Filter/facet attribute names must not select a product KG (brand ≠ ecom)."""
 
-    return {tok for tok in tokens if len(tok) >= 2 and tok not in _GRAPH_SCORE_STOPWORDS}
+    keys = set(_facet_keys_from_kg_stats())
+    out: set[str] = set()
+    for key in keys:
+        out.add(key)
+        out.add(key + "s")
+        stem = key.split("_")[-1]
+        if len(stem) >= 4:
+            out.add(stem)
+            out.add(stem + "s")
+        if key.endswith("y") and len(key) > 4:
+            out.add(key[:-1] + "ies")
+        if stem.endswith("y") and len(stem) > 4:
+            out.add(stem[:-1] + "ies")
+    # Always exclude the most common party/mix facet nouns even before stats load.
+    out |= {
+        "brand",
+        "brands",
+        "buyer",
+        "buyers",
+        "category",
+        "categories",
+        "family",
+        "families",
+        "section",
+        "sections",
+        "color",
+        "colors",
+        "colour",
+        "colours",
+        "material",
+        "materials",
+        "garment",
+        "garments",
+    }
+    return out
+
+
+def _graph_scope_signal_tokens(tokens: set[str]) -> set[str]:
+    """Tokens that can name a catalog world — drop grammar, facets, and generic 'products/data'."""
+
+    facet_noise = _facet_attr_tokens_for_graph_scoring()
+    return {
+        tok
+        for tok in tokens
+        if len(tok) >= 2
+        and tok not in _GRAPH_SCORE_STOPWORDS
+        and tok not in facet_noise
+        and not tok.isdigit()
+    }
+
+
+def question_names_catalog_explicitly(question: str, platform=None) -> bool:
+    """True when the user names a catalog world (plm/ecom/…), not merely a facet like brand."""
+
+    text = normalize_name(question or "")
+    # Glued tokens so "e-commerce" / "e commerce" count as ecommerce (normalize splits on '-').
+    glued = set(_question_tokens(question))
+    # Distinctive catalog tokens even when registry prefs are unavailable.
+    if glued & {"plm", "plmex"} or re.search(r"\bplm(?:ex)?\b", text):
+        return True
+    if glued & {"ecom", "ecomm", "ecommerce", "ecommerces"} or re.search(
+        r"\be[\s\-]?comm?(erce)?s?\b", text
+    ):
+        return True
+    named = preferred_graphs_from_question(question, platform)
+    if not named:
+        return False
+    # Generic id fragments that appear in almost every product ask — never treat
+    # as an explicit catalog mention (ecom_products → "products" was matching all).
+    generic = {
+        "products",
+        "product",
+        "items",
+        "item",
+        "catalog",
+        "data",
+        "graph",
+        "source",
+        "sources",
+    }
+    # Require a distinctive catalog token / id fragment in the question.
+    for gid in named:
+        parts = {
+            p
+            for p in re.split(r"[_\-\s]+", str(gid))
+            if len(p) >= 3 and p not in generic
+        }
+        tokens = set(text.split()) | glued
+        if any(part in tokens for part in parts):
+            return True
+        if "plm" in str(gid) and (
+            "plm" in glued or "plmex" in glued or re.search(r"\bplm(?:ex)?\b", text)
+        ):
+            return True
+        if "ecom" in str(gid) and (
+            glued & {"ecom", "ecomm", "ecommerce", "ecommerces", "commerce", "commerces"}
+            or re.search(r"\be[\s\-]?comm?(erce)?s?\b", text)
+        ):
+            return True
+    return False
 
 
 def _id_part_scope_hits(signal: set[str], id_parts: set[str]) -> set[str]:
@@ -1411,10 +2349,13 @@ def _all_parties_dimension(tokens: list[str]) -> str | None:
     return None
 
 
-def _catalog_plan(question: str) -> dict:
+def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dict:
     """Read filters and one breakdown field from the question words. Counts are not guessed here."""
 
     tokens = _question_tokens(question)
+    live_brand_keys = {
+        normalize_name(str(n)) for n in (brand_names or []) if n
+    }
     filters: dict[str, list[str]] = {}
     group_by = _count_dimension(question)
     limit: int | None = None
@@ -1503,6 +2444,19 @@ def _catalog_plan(question: str) -> dict:
                     break
                 if tok in _FIELD_ALIASES and nxt in _FIELD_ALIASES:
                     break
+                # "material mixes/blends" is a breakdown ask, not material=mixes.
+                if found[0] in {"material", "composition"} and tok in {
+                    "mix",
+                    "mixes",
+                    "mixture",
+                    "mixtures",
+                    "blend",
+                    "blends",
+                }:
+                    group_by = group_by or found[0]
+                    index += 1
+                    values = []
+                    break
                 values.append(tok)
                 index += 1
             if values and found[0] not in filters:
@@ -1565,6 +2519,50 @@ def _catalog_plan(question: str) -> dict:
                 filters.setdefault("buyer", []).extend(name)
                 index += 1 + len(name)
                 continue
+        # "in <brand> tops/t-shirts/…" — brand scope + garment, not country-of-origin.
+        if token == "in" and index + 1 < len(tokens):
+            party = tokens[index + 1]
+            garment_tok = tokens[index + 2] if index + 2 < len(tokens) else ""
+            if _is_party_token(party) and party not in _GRAPH_SCOPE_NOISE and party not in _SYSTEM_WORDS:
+                # "in Zara tops" OR "in Zara, which tops…" (garment later).
+                if garment_tok in _GARMENT_TYPE_WORDS or garment_type_from_question(garment_tok) or garment_tok in {
+                    "tops",
+                    "top",
+                }:
+                    filters.setdefault("brand", []).append(party)
+                    filters.setdefault("buyer", []).append(party)
+                    if not filters.get("garment") and not filters.get("garment_type"):
+                        g = garment_type_from_question(garment_tok) or (
+                            "tops" if garment_tok in {"top", "tops"} else garment_tok
+                        )
+                        filters.setdefault("garment", []).append(g)
+                    index += 3
+                    continue
+                if garment_tok in {"which", "what", "whose", "how"} or not garment_tok:
+                    filters.setdefault("brand", []).append(party)
+                    filters.setdefault("buyer", []).append(party)
+                    index += 2
+                    continue
+        # "<brand> jackets/tops/…" without a preposition.
+        if (
+            _is_party_token(token)
+            and token not in _GARMENT_TYPE_WORDS
+            and index + 1 < len(tokens)
+            and (
+                tokens[index + 1] in _GARMENT_TYPE_WORDS
+                or garment_type_from_question(tokens[index + 1])
+                or tokens[index + 1] in {"tops", "top"}
+            )
+        ):
+            filters.setdefault("brand", []).append(token)
+            filters.setdefault("buyer", []).append(token)
+            g = garment_type_from_question(tokens[index + 1]) or (
+                "tops" if tokens[index + 1] in {"top", "tops"} else tokens[index + 1]
+            )
+            if not filters.get("garment") and not filters.get("garment_type"):
+                filters.setdefault("garment", []).append(g)
+            index += 2
+            continue
         if token == "from":
             # Prefer brand only when clearly a party cue; else skip (origin handled above).
             name = _take_party_name(tokens, index + 1)
@@ -1604,8 +2602,34 @@ def _catalog_plan(question: str) -> dict:
                 continue
 
         if index + 1 < len(tokens) and tokens[index + 1] in _COLOR_MARKERS:
-            filters.setdefault("color", []).append(token)
-            index += 2
+            # "zara colours break down" → brand=zara + group_by=color — never color=zara.
+            if _is_party_token(token) and token not in _GARMENT_TYPE_WORDS:
+                filters.setdefault("brand", []).append(token)
+                if not group_by:
+                    group_by = "color"
+                index += 2
+                end = _is_breakdown_phrase_at(tokens, index)
+                if end is not None:
+                    index = end
+                continue
+            # "red colour" / "navy colors" → color filter.
+            if token in _COLOR_WORDS or not _is_party_token(token):
+                filters.setdefault("color", []).append(token)
+                index += 2
+                continue
+
+        # "zara prices" / "primark availability" — party before a measure word is the brand.
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if (
+            _is_party_token(token)
+            and token not in _GARMENT_TYPE_WORDS
+            and (
+                nxt in _MEASURE_PROPERTY_WORDS
+                or nxt in {"prices", "price", "availability", "stock"}
+            )
+        ):
+            filters.setdefault("brand", []).append(token)
+            index += 1
             continue
 
         if token in _COLOR_WORDS:
@@ -1614,6 +2638,14 @@ def _catalog_plan(question: str) -> dict:
             filters.setdefault("gender", []).append(_GENDER_VALUES[token])
         elif token in _MATERIAL_WORDS:
             filters.setdefault("material", []).append(token)
+        elif (
+            token in _GARMENT_TYPE_WORDS
+            and token not in {"shirt", "shirts", "top", "tops"}  # prefer t-shirt / full-phrase detect
+            and not filters.get("garment")
+            and not filters.get("garment_type")
+        ):
+            # Named product type as filter (sweater / knitwear), not a brand.
+            filters.setdefault("garment", []).append(token)
         elif re.fullmatch(r"(19|20)\d{2}", token):
             filters.setdefault("season", []).append(token)
         elif token in _FIELD_ALIASES:
@@ -1621,7 +2653,14 @@ def _catalog_plan(question: str) -> dict:
             index += 1
             continue
         elif group_by:
-            # Breakdown asks: leftover grammar is not a garment filter.
+            # Breakdown / ranking: leftover party token is brand only when live metadata agrees.
+            if (
+                _is_party_token(token)
+                and token not in _GARMENT_TYPE_WORDS
+                and (not live_brand_keys or normalize_name(token) in live_brand_keys)
+            ):
+                if live_brand_keys:
+                    filters.setdefault("brand", []).append(token)
             index += 1
             continue
         elif analysis:
@@ -1656,12 +2695,24 @@ def _catalog_plan(question: str) -> dict:
             filters.pop("buyer", None)
             filters.pop("brand", None)
         elif field_wise:
-            # "analysis … material wise" → keep the column breakdown; not a single-party profile.
-            analysis = False
+            # Focused analysis: keep analysis=True + group_by so the same engine
+            # runs one facet (unique-value breakdown) instead of a count stub.
+            pass
         else:
             group_by = None
             party = _analysis_party_name(tokens)
             if party and party not in _SYSTEM_WORDS and party not in _GRAPH_SCOPE_NOISE:
+                if live_brand_keys and normalize_name(party) not in live_brand_keys:
+                    party = None
+            # "full analysis of Primark" — party after "of" may miss keyword cues;
+            # fall back to live brand tokens present in the question.
+            if not party and live_brand_keys:
+                for tok in tokens:
+                    key = normalize_name(tok)
+                    if key in live_brand_keys and key not in _SYSTEM_WORDS:
+                        party = tok
+                        break
+            if party:
                 explicit_buyer = bool(set(tokens) & {"buyer", "buyers"})
                 explicit_brand = bool(set(tokens) & {"brand", "brands"})
                 if explicit_brand and not explicit_buyer:
@@ -1680,8 +2731,12 @@ def _catalog_plan(question: str) -> dict:
     if compare_parties:
         filters["brand"] = list(compare_parties)
         filters.pop("buyer", None)
+        # Drop invented garment leftovers, then restore a real product-type phrase below.
         filters.pop("garment", None)
         filters.pop("garment_type", None)
+        named_garment = garment_type_from_question(question)
+        if named_garment:
+            filters["garment"] = [named_garment]
         # Keep an explicit category if the user named one; drop invented leftovers.
         cat_vals = filters.get("category") or []
         if cat_vals and not _reliable_filter(" ".join(str(v) for v in cat_vals)):
@@ -1691,8 +2746,31 @@ def _catalog_plan(question: str) -> dict:
             or any(tok in {"brand", "brands", "buyer", "buyers"} for tok in tokens)
             or bool(re.search(r"\b(more|fewer|less|most|least)\b", " ".join(tokens)))
         )
-        # Price-history compares keep brand filters but do not force a category breakdown.
-        if brand_compare and not _is_price_history_question(question):
+        # Composition/spec compares keep the garment filter — do not force brand breakdown.
+        if is_composition_compare_question(question):
+            brand_compare = False
+        token_set = set(tokens)
+        assortment_compare = bool(
+            token_set & _ANALYSIS_WORDS
+            or token_set & {"assortment", "profile", "profiles", "mix", "overview"}
+            or (
+                "compare" in token_set
+                and not bool(
+                    re.search(
+                        r"\b(more|fewer|less|most|least|how many|count)\b",
+                        " ".join(tokens),
+                    )
+                )
+            )
+        )
+        if assortment_compare:
+            # Side-by-side full attribute profiles (same engine as full analysis).
+            analysis = True
+            group_by = None
+            if limit is None:
+                limit = 5
+        elif brand_compare and not _is_price_history_question(question):
+            # Count-style "who has more" → brand breakdown.
             group_by = group_by if group_by in {"brand", "buyer"} else "brand"
 
     flat: dict[str, str] = {}
@@ -1726,6 +2804,105 @@ def _catalog_plan(question: str) -> dict:
     if _is_price_history_question(question) or _is_availability_history_question(question):
         for junk in ("garment", "garment_type"):
             flat.pop(junk, None)
+
+    # Listing / ranking asks that name a product type: keep garment filter.
+    # Prefer full-phrase detect (t-shirt) over raw token leftovers (shirts).
+    detected_garment = garment_type_from_question(question)
+    if detected_garment and (
+        group_by in {"brand", "buyer", "category", "material", "color", "garment_type"}
+        or bool(
+            set(tokens)
+            & {
+                "have",
+                "has",
+                "show",
+                "list",
+                "which",
+                "what",
+                "most",
+                "products",
+                "examples",
+                "compare",
+                "composition",
+                "compositions",
+                "mix",
+                "mixes",
+                "common",
+                "breakdown",
+            }
+        )
+        or any(flat.get(k) for k in ("garment", "garment_type", "brand", "buyer"))
+        or is_composition_compare_question(question)
+    ):
+        flat["garment"] = detected_garment
+        flat.pop("garment_type", None)
+    elif not any(flat.get(k) for k in ("garment", "garment_type", "category")):
+        pass
+
+    # "composition mixes" / "material mixes" without a prior group marker.
+    if group_by is None and re.search(
+        r"\b((material|materials|composition|compositions)\s+(mix|mixes|blend|blends)|"
+        r"(mix|mixes|blend|blends)\s+of\s+(material|materials))\b",
+        " ".join(tokens),
+    ):
+        group_by = "material"
+    if group_by is None and re.search(
+        r"\b(most common|common)\s+(material|materials|composition|compositions)\b",
+        " ".join(tokens),
+    ):
+        group_by = "material"
+    if group_by is None and re.search(
+        r"\b(material|materials|composition|compositions)\s+(dominate|dominant|breakdown)\b",
+        " ".join(tokens),
+    ):
+        group_by = "material"
+
+    # "most common … garment type" / "garment types are most common"
+    if group_by is None and re.search(r"\bgarment\s+types?\b", " ".join(tokens)):
+        group_by = "garment_type"
+    # Construction / fit attribute frequency ("what construction … most common").
+    if group_by is None and re.search(
+        r"\b(construction|constructions|fit|fits)\b",
+        " ".join(tokens),
+    ) and re.search(
+        r"\b(common|usually|typical|most|details?|see|seen)\b",
+        " ".join(tokens),
+    ):
+        group_by = (
+            "construction"
+            if any(t.startswith("construction") for t in tokens)
+            else "fit"
+        )
+
+    # "PLMEX Zara …" / "ecom Primark …" — catalog token then party name.
+    if not flat.get("brand") and not flat.get("buyer"):
+        for index, token in enumerate(tokens[:-1]):
+            if token not in _GRAPH_SCOPE_NOISE and token not in _SYSTEM_WORDS:
+                continue
+            nxt = tokens[index + 1]
+            if _is_party_token(nxt) and nxt not in _GARMENT_TYPE_WORDS:
+                flat["brand"] = nxt
+                flat["buyer"] = nxt
+                break
+    # Lone party in "how many Primark products…" when no brand was attached yet.
+    if not flat.get("brand") and not flat.get("buyer"):
+        parties = [
+            tok
+            for tok in tokens
+            if _is_party_token(tok)
+            and tok not in _GARMENT_TYPE_WORDS
+            and tok not in _GRAPH_SCOPE_NOISE
+            and tok not in _SYSTEM_WORDS
+        ]
+        if len(parties) == 1:
+            flat["brand"] = parties[0]
+            flat["buyer"] = parties[0]
+
+    # "about 10" / "show me 10" examples when digit was not already captured after show/list.
+    if limit is None:
+        about_n = re.search(r"\b(?:about|around|roughly|approx(?:imately)?|top|show|list|give)\s+(\d{1,3})\b", " ".join(tokens))
+        if about_n and re.search(r"\b(example|examples|products?|items?|styles?)\b", " ".join(tokens)):
+            limit = max(1, min(int(about_n.group(1)), 50))
 
     if limit is None and group_by == "garment_type" and flat.get("buyer"):
         limit = 10
@@ -1808,6 +2985,11 @@ def live_brand_names(platform, graph_id: str | None = None, principal=None) -> l
                     names.append(str(alias))
     except Exception:
         pass
+    # Prefer kg_stats brand inventory too (covers graphs with no brand-node cache).
+    try:
+        names.extend(live_party_values(platform, "brand", graph_id=graph_id, include_brand_cache=False))
+    except Exception:
+        pass
     # De-dupe preserving order.
     seen: set[str] = set()
     out: list[str] = []
@@ -1819,6 +3001,222 @@ def live_brand_names(platform, graph_id: str | None = None, principal=None) -> l
     return out
 
 
+def live_party_values(
+    platform,
+    attribute: str,
+    *,
+    graph_id: str | None = None,
+    include_brand_cache: bool = True,
+) -> list[str]:
+    """Live facet values (brand/buyer/…) from kg_stats (+ brand cache for brand).
+
+    Used to reject invented party filters like buyer=possible / brand=impossible.
+    """
+
+    attr = str(attribute or "").strip().casefold().replace(" ", "_")
+    if not attr or platform is None:
+        return []
+    names: list[str] = []
+    if attr == "brand" and include_brand_cache:
+        try:
+            # Avoid recursion: brand cache path without kg_stats re-entry.
+            from fashion_brain.planning.runtime_schema import get_runtime_schema, resolve_product_graph_id
+            from fashion_brain.planning.schema_cache import get_brands
+
+            gid = graph_id or resolve_product_graph_id(platform)
+            if gid:
+                for row in get_brands(platform, gid, None) or []:
+                    name = str((row or {}).get("name") or "").strip()
+                    if name:
+                        names.append(name)
+            schema = get_runtime_schema(platform, gid)
+            for item in getattr(schema, "canonical_hints", None) or []:
+                if str(item.get("type") or "").casefold() != "brand":
+                    continue
+                name = str(item.get("name") or "").strip()
+                if name:
+                    names.append(name)
+        except Exception:
+            pass
+    try:
+        from knowledge_graph.retrieval.ecom import registry_product_graphs
+        from knowledge_graph.retrieval.kg_stats import dimension_bucket
+
+        generated = getattr(getattr(platform, "settings", None), "generated", None)
+        gids: list[str] = []
+        if graph_id:
+            gids.append(str(graph_id))
+        for gid in registry_product_graphs(platform) or []:
+            if gid and str(gid) not in gids:
+                gids.append(str(gid))
+        for gid in gids:
+            bucket = dimension_bucket(gid, attr, generated) or {}
+            for key in bucket:
+                text = str(key or "").strip()
+                if text:
+                    names.append(text)
+    except Exception:
+        pass
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in names:
+        key = normalize_name(name)
+        if key and key not in seen and not _is_grammar_party_name(key):
+            seen.add(key)
+            out.append(name)
+    return out
+
+
+def match_live_party_value(raw: str, allowed: list[str] | set[str] | None) -> str | None:
+    """Return a canonical live party name if ``raw`` matches metadata; else None."""
+
+    want = normalize_name(str(raw or ""))
+    if not want or _is_grammar_party_name(want):
+        return None
+    if not allowed:
+        return None
+    by_norm = {normalize_name(str(n)): str(n) for n in allowed if n}
+    if want in by_norm:
+        return by_norm[want]
+    compact = want.replace(" ", "").replace("-", "").replace("_", "")
+    for key, surface in by_norm.items():
+        if key.replace(" ", "").replace("-", "").replace("_", "") == compact:
+            return surface
+    return None
+
+
+def ground_party_filters_against_metadata(
+    filters: dict | None,
+    platform,
+    *,
+    graph_id: str | None = None,
+) -> dict:
+    """Keep brand/buyer only when the value exists in live KG metadata.
+
+    Grammar sanitize first, then metadata check. Unknown tokens (possible,
+    impossible, random English) are dropped — not treated as parties.
+
+    On PLM graphs, when a party exists as buyer (and optionally also as brand),
+    prefer buyer — e.g. Matalan sweaters for women (P13) are buyer-scoped.
+    On e-commerce graphs, prefer brand when both match.
+    """
+
+    out = sanitize_party_filters(dict(filters or {}))
+    if platform is None:
+        return out
+    for key in ("brand", "buyer"):
+        raw = out.get(key)
+        if not raw:
+            continue
+        allowed = live_party_values(platform, key, graph_id=graph_id)
+        if not allowed:
+            # Metadata unavailable for this dimension — do not invent; keep
+            # grammar-clean values only (already sanitized).
+            LOGGER.debug("party metadata empty for %s; skipped live grounding", key)
+            continue
+        parts = split_multi_party_filter(str(raw)) or [str(raw)]
+        kept: list[str] = []
+        for part in parts:
+            hit = match_live_party_value(part, allowed)
+            if hit:
+                kept.append(hit)
+            else:
+                LOGGER.info(
+                    "dropped ungrounded party filter %s=%s (not in live metadata)",
+                    key,
+                    part,
+                )
+        if not kept:
+            out.pop(key, None)
+        elif len(kept) == 1:
+            out[key] = kept[0]
+        else:
+            out[key] = " | ".join(dict.fromkeys(kept))
+
+    # Cross-role: value set as brand but only live as buyer → buyer (P13 Matalan).
+    # When both roles match on PLM, prefer buyer; on e-commerce prefer brand.
+    # Never role-flip a multi-party compare string ("Primark | Zara") as one token.
+    gid = str(graph_id or "").casefold()
+    brand_raw = out.get("brand")
+    buyer_raw = out.get("buyer")
+    plm_like = "plmex" in gid or gid in {"plm", "plm records"} or "plm" in gid
+    ecom_like = "ecom" in gid or "commerce" in gid
+    multi_brand = len(split_multi_party_filter(str(brand_raw or ""))) >= 2
+    multi_buyer = len(split_multi_party_filter(str(buyer_raw or ""))) >= 2
+    if brand_raw and not buyer_raw and not multi_brand:
+        buyer_allowed = live_party_values(platform, "buyer", graph_id=graph_id) or []
+        brand_allowed = live_party_values(platform, "brand", graph_id=graph_id) or []
+        buyer_hit = match_live_party_value(str(brand_raw), buyer_allowed)
+        brand_hit = match_live_party_value(str(brand_raw), brand_allowed)
+        if buyer_hit and (not brand_hit or plm_like):
+            out["buyer"] = buyer_hit
+            out.pop("brand", None)
+            LOGGER.info(
+                "party role flip brand→buyer value=%s graph=%s brand_hit=%s",
+                buyer_hit,
+                graph_id,
+                bool(brand_hit),
+            )
+    elif (
+        brand_raw
+        and buyer_raw
+        and not multi_brand
+        and not multi_buyer
+        and normalize_name(str(brand_raw)) == normalize_name(str(buyer_raw))
+    ):
+        if ecom_like:
+            out.pop("buyer", None)
+        elif plm_like:
+            out.pop("brand", None)
+    return out
+
+
+def ensure_compare_party_filters(filters: dict | None, question: str = "") -> dict:
+    """Keep multi-brand compare scope (Primark | Zara). Recover from the question if dropped."""
+
+    out = dict(filters or {})
+    parties = split_multi_party_filter(str(out.get("brand") or out.get("buyer") or ""))
+    if len(parties) >= 2:
+        return out
+    named = _compare_party_names(question or "")
+    if len(named) >= 2:
+        # Prefer brand encoding; graph aligner remaps per catalog later.
+        out["brand"] = " | ".join(named)
+        out.pop("buyer", None)
+        LOGGER.info("recovered compare parties from question: %s", out["brand"])
+    return out
+
+
+# ISO currency codes / money words — never brand or buyer (e.g. user reply "USD").
+_CURRENCY_PARTY_NOISE = frozenset(
+    {
+        "usd",
+        "gbp",
+        "eur",
+        "sek",
+        "dkk",
+        "nok",
+        "pln",
+        "czk",
+        "chf",
+        "jpy",
+        "cny",
+        "aud",
+        "cad",
+        "dollar",
+        "dollars",
+        "pound",
+        "pounds",
+        "sterling",
+        "euro",
+        "euros",
+        "currency",
+        "currencies",
+        "both",
+    }
+)
+
+
 def _is_grammar_party_name(name: str) -> bool:
     """Reject catalog values that collide with question grammar (e.g. buyer 'frequently')."""
 
@@ -1828,6 +3226,9 @@ def _is_grammar_party_name(name: str) -> bool:
     tokens = set(key.split())
     if not tokens:
         return True
+    # Bare currency reply after a price-trend clarify must never become buyer=usd.
+    if key in _CURRENCY_PARTY_NOISE or tokens <= _CURRENCY_PARTY_NOISE:
+        return True
     grammar = (
         _COUNT_STOPWORDS
         | _GRAPH_SCORE_STOPWORDS
@@ -1836,10 +3237,12 @@ def _is_grammar_party_name(name: str) -> bool:
         | _MAKE_ADVERBS
         | _MAKE_VERBS
         | _TASK_WORDS
+        | _MODAL_WORDS
         | _METRIC_OPERATOR_WORDS
         | _ANALYSIS_WORDS
         | _RANK_WORDS
         | _MEASURE_PROPERTY_WORDS
+        | _CURRENCY_PARTY_NOISE
     )
     # Whole value is stopword grammar — never a real brand/buyer filter from the question.
     if tokens <= grammar:
@@ -1849,41 +3252,241 @@ def _is_grammar_party_name(name: str) -> bool:
     return False
 
 
-def ground_filters_from_live_brands(
-    question: str,
-    filters: dict | None,
-    brand_names: list[str] | None,
-) -> dict:
-    """Link question tokens to live Brand nodes — not a hardcoded retailer list.
+def live_brands_mentioned(question: str, brand_names: list[str] | None) -> list[str]:
+    """Return live Brand names mentioned in the question (longest match first, de-duped)."""
 
-    Used when the keyword planner leaves party names unassigned so EntityExtract /
-    Intention can ground against the actual catalog.
-    """
-
-    out = promote_live_brand_filters(filters, brand_names)
-    if out.get("brand") or out.get("buyer"):
-        return out
     text = normalize_name(question or "")
     if not text or not brand_names:
-        return out
-    # Longest brand name first so "calvin klein" wins over a bare token clash.
+        return []
     ranked = sorted(
         {normalize_name(str(n)): str(n) for n in brand_names if n}.items(),
         key=lambda item: len(item[0]),
         reverse=True,
     )
     hits: list[str] = []
+    seen: set[str] = set()
     for key, surface in ranked:
-        if len(key) < 2 or _is_grammar_party_name(key):
+        if len(key) < 2 or _is_grammar_party_name(key) or key in seen:
             continue
         if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text):
             hits.append(surface)
+            seen.add(key)
+    return hits
+
+
+def question_has_party_deixis(question: str) -> bool:
+    """True when the ask refers to a prior party ('of them', 'those', 'same brand', …)."""
+
+    return bool(
+        re.search(
+            r"\b(them|those|these|same|it|again)\b|\bof\s+them\b|\bfor\s+them\b|\bthat\s+brand\b",
+            question or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def ground_filters_from_live_brands(
+    question: str,
+    filters: dict | None,
+    brand_names: list[str] | None,
+    *,
+    platform=None,
+    graph_id: str | None = None,
+) -> dict:
+    """Link question tokens to live Brand nodes — not a hardcoded retailer list.
+
+    When the latest question names one live brand, that party **replaces** any
+    prior multi-party sticky filter (e.g. after a Primark vs Zara compare).
+    Brand/buyer values that are not in live metadata are dropped.
+    """
+
+    # Drop grammar leftovers (e.g. brand=tell from "tell me") before treating
+    # the filter as already grounded. Real parties still match live Brand nodes below.
+    out = sanitize_party_filters(promote_live_brand_filters(filters, brand_names))
+
+    def _is_placeholder_party(value: str) -> bool:
+        low = normalize_name(str(value or ""))
+        return bool(
+            re.search(r"\b(missing|unspecified|unknown|null|none)\b", low)
+            or re.fullmatch(r"__\w+__", str(value or "").strip())
+        )
+
+    if platform is not None:
+        # Keep explicit missing/placeholder brands for honest zero answers.
+        placeholders = {
+            k: v
+            for k, v in out.items()
+            if k in {"brand", "buyer"} and _is_placeholder_party(str(v))
+        }
+        out = ground_party_filters_against_metadata(out, platform, graph_id=graph_id)
+        out.update(placeholders)
+    else:
+        # Still reject brand values that are not in the provided live brand list.
+        allowed = list(brand_names or [])
+        if allowed and out.get("brand"):
+            parts = split_multi_party_filter(str(out["brand"])) or [str(out["brand"])]
+            kept = []
+            for part in parts:
+                if _is_placeholder_party(part):
+                    kept.append(part)
+                    continue
+                hit = match_live_party_value(part, allowed)
+                if hit:
+                    kept.append(hit)
+            if not kept:
+                out.pop("brand", None)
+            elif len(kept) == 1:
+                out["brand"] = kept[0]
+            else:
+                out["brand"] = " | ".join(dict.fromkeys(kept))
+    hits = live_brands_mentioned(question, brand_names)
     if len(hits) == 1:
-        out["brand"] = hits[0]
-        out["buyer"] = hits[0]
-    elif len(hits) >= 2:
+        explicit_buyer = bool(re.search(r"\bbuyers?\b", question, re.IGNORECASE)) and not bool(
+            re.search(r"\bbrands?\b", question, re.IGNORECASE)
+        )
+        party_key = "buyer" if explicit_buyer else "brand"
+        other_key = "brand" if explicit_buyer else "buyer"
+        out[party_key] = hits[0]
+        out.pop(other_key, None)
+        if platform is not None:
+            out = ground_party_filters_against_metadata(out, platform, graph_id=graph_id)
+        return out
+    if len(hits) >= 2:
         out["brand"] = " | ".join(hits[:4])
+        out.pop("buyer", None)
+        if platform is not None:
+            out = ground_party_filters_against_metadata(out, platform, graph_id=graph_id)
+        return out
+    # No party named in this question — keep prior sanitized party (of-them carry).
     return out
+
+
+def enrich_scope_from_question(
+    question: str,
+    filters: dict | None = None,
+    *,
+    brand_names: list[str] | None = None,
+    platform=None,
+) -> tuple[dict, str | None]:
+    """Dynamic scope for the latest turn: live brands + keyword facets + deixis carry.
+
+    Returns ``(filters, group_by)``. Never hard-codes retailer names.
+    """
+
+    prior = sanitize_party_filters(dict(filters or {}))
+    plan = _catalog_plan(question)
+    plan_filters = sanitize_party_filters(dict(plan.get("filters") or {}))
+    out = dict(prior)
+
+    # Facets / parties mentioned in THIS question always win.
+    for key in (
+        "garment",
+        "garment_type",
+        "category",
+        "color",
+        "gender",
+        "material",
+        "season",
+        "family",
+        "subfamily",
+        "brand",
+        "buyer",
+        "availability",
+    ):
+        if plan_filters.get(key):
+            out[key] = plan_filters[key]
+
+    names = list(brand_names or [])
+    if not names and platform is not None:
+        try:
+            names = live_brand_names(platform)
+        except Exception:
+            names = []
+    out = ground_filters_from_live_brands(
+        question, out, names, platform=platform
+    )
+    if platform is not None:
+        def _placeholder_party(value: str) -> bool:
+            low = normalize_name(str(value or ""))
+            return bool(
+                re.search(r"\b(missing|unspecified|unknown|null|none)\b", low)
+                or re.fullmatch(r"__\w+__", str(value or "").strip())
+            )
+
+        placeholders = {
+            k: v
+            for k, v in out.items()
+            if k in {"brand", "buyer"} and _placeholder_party(str(v))
+        }
+        out = ground_party_filters_against_metadata(out, platform)
+        out.update(placeholders)
+
+    hits = live_brands_mentioned(question, names)
+    # An explicitly named party starts a fresh scope; keep only facets named this turn.
+    if hits:
+        for key in ("garment", "garment_type", "category", "color", "material", "gender", "season", "family", "subfamily"):
+            if not plan_filters.get(key):
+                out.pop(key, None)
+
+    # Broader analysis / overall totals: never keep prior restrictive facets.
+    low_q = normalize_name(question or "")
+    broader_scope = bool(
+        _is_analysis(question)
+        or re.search(r"\b(overall|in total|altogether|full analysis|complete analysis)\b", low_q)
+    )
+    if broader_scope:
+        for key in ("garment", "garment_type", "category", "color", "material", "gender", "season", "family", "subfamily"):
+            if not plan_filters.get(key):
+                out.pop(key, None)
+
+    # Whole-catalog / dataset totals: never keep a prior brand/buyer.
+    if is_catalog_dataset_total_ask(question):
+        if not plan_filters.get("brand"):
+            out.pop("brand", None)
+        if not plan_filters.get("buyer"):
+            out.pop("buyer", None)
+
+    # Deixis / short follow-up with no new party: keep prior brand/buyer.
+    if not hits and not (out.get("brand") or out.get("buyer")):
+        if question_has_party_deixis(question) and (prior.get("brand") or prior.get("buyer")):
+            if prior.get("brand"):
+                out["brand"] = prior["brand"]
+            if prior.get("buyer"):
+                out["buyer"] = prior["buyer"]
+
+
+    group_by = plan.get("group_by")
+    if not group_by:
+        # Dimension words in the ask (category / color / …) from live-ish aliases.
+        low = normalize_name(question or "")
+        for dim in (
+            "category",
+            "garment_type",
+            "color",
+            "gender",
+            "material",
+            "composition",
+            "season",
+            "family",
+            "subfamily",
+            "brand",
+            "buyer",
+        ):
+            label = dim.replace("_", " ")
+            if re.search(rf"\b{re.escape(label)}\b", low) or re.search(rf"\b{re.escape(dim)}\b", low):
+                group_by = "material" if dim == "composition" else dim
+                break
+    # Dimension-only follow-up ("explore category"): clear stale facets not in this ask.
+    if group_by and not any(
+        plan_filters.get(k) for k in ("garment", "garment_type", "category", "color", "material")
+    ):
+        for key in ("garment", "garment_type", "color", "material", "gender"):
+            if key != group_by:
+                out.pop(key, None)
+
+    out = sanitize_party_filters(out)
+    return out, (str(group_by) if group_by else None)
 
 
 def sanitize_party_filters(filters: dict) -> dict:
@@ -1895,7 +3498,15 @@ def sanitize_party_filters(filters: dict) -> dict:
         if not value:
             continue
         parts = split_multi_party_filter(str(value)) or [str(value)]
-        kept = [part for part in parts if part and not _is_grammar_party_name(part)]
+        kept = [
+            part
+            for part in parts
+            if part
+            and not _is_grammar_party_name(part)
+            and _reliable_filter(part)
+            and normalize_name(part) not in _GARMENT_TYPE_WORDS
+            and not garment_type_from_question(part)
+        ]
         if not kept:
             cleaned.pop(key, None)
         elif len(kept) == 1:
@@ -2003,6 +3614,7 @@ def plan_catalog_question(
     history: list | None = None,
     *,
     carry: bool | None = None,
+    state: dict | None = None,
 ) -> dict:
     """The model decides, code validates. Falls back to the keyword planner.
 
@@ -2013,11 +3625,20 @@ def plan_catalog_question(
     """
 
     from fashion_brain.planning.kg_catalog import build_field_catalog, ground_filters_with_catalog
+    from fashion_brain.planning.metadata_resolver import (
+        build_value_index,
+        check_understanding,
+        repair_filters,
+    )
 
     catalog = build_field_catalog(platform, question)
+    brand_names = live_brand_names(platform)
     model_plan = _plan_with_model(platform, question, history, catalog=catalog)
     if model_plan is None:
-        plan = resolve_catalog_plan(question, history, carry=bool(carry))
+        LOGGER.info("catalog planner keyword fallback used (model plan unavailable)")
+        plan = resolve_catalog_plan(
+            question, history, carry=bool(carry), brand_names=brand_names
+        )
         plan["source"] = "keywords"
         plan["references_prior_chat"] = bool(carry)
         plan["filters"] = ground_filters_with_catalog(
@@ -2031,6 +3652,14 @@ def plan_catalog_question(
             or catalog.preferred_graphs()
         )
         plan["available_attributes"] = catalog.all_attributes()
+        chk = check_understanding(platform, question, history, plan, state)
+        if chk.proceed:
+            plan["filters"] = chk.filters
+        else:
+            plan["filters"] = chk.filters
+            plan["needs_clarification"] = True
+            plan["clarify_text"] = chk.clarify_text
+            plan["clarify_options"] = chk.options
         return plan
     if carry is None:
         carry = bool(model_plan.get("references_prior_chat"))
@@ -2050,10 +3679,29 @@ def plan_catalog_question(
     model_plan["filters"] = _ground_filters(model_plan["filters"], texts)
     if not carry:
         model_plan["filters"] = _ground_filters(model_plan["filters"], [question])
+    # User said it (_ground_filters) + it exists in that field (repair_filters).
+    try:
+        idx_fields = list(
+            dict.fromkeys(
+                [
+                    *(catalog.all_attributes() or []),
+                    *(model_plan.get("filters") or {}).keys(),
+                ]
+            )
+        )
+        index = build_value_index(platform, idx_fields) if idx_fields else {}
+        if index:
+            model_plan["filters"], _unresolved = repair_filters(
+                model_plan["filters"], index
+            )
+    except Exception:
+        LOGGER.debug("repair_filters after _ground_filters skipped", exc_info=True)
     _promote_type_filters(model_plan["filters"])
     model_plan["filters"] = sanitize_party_filters(model_plan["filters"])
     _normalize_named_season(model_plan)
-    keyword = resolve_catalog_plan(question, history, carry=carry)
+    keyword = resolve_catalog_plan(
+        question, history, carry=carry, brand_names=brand_names
+    )
     if not model_plan["filters"] and keyword.get("filters"):
         model_plan["filters"] = dict(keyword["filters"])
     # Keyword party cues beat a model that stuffed the same name under garment/category.
@@ -2065,20 +3713,20 @@ def plan_catalog_question(
         model_plan["filters"] = sanitize_party_filters(model_plan["filters"])
     if _is_analysis(question):
         model_plan["suggest"] = False
+        model_plan["analysis"] = True
         field_wise = bool(keyword.get("group_by")) or bool(model_plan.get("group_by"))
         if field_wise:
-            # "analysis … material wise" → one-column breakdown, not a full multi-field profile.
-            model_plan["analysis"] = False
+            # Focused: one facet via the same analytical engine.
             model_plan["group_by"] = keyword.get("group_by") or model_plan.get("group_by")
         else:
-            model_plan["analysis"] = True
+            # Full: every facet with distinct values — clear single-field group_by.
             model_plan["group_by"] = None
-            if model_plan.get("limit") is None:
-                model_plan["limit"] = 5
-            if keyword.get("filters", {}).get("buyer") and not model_plan["filters"].get("buyer"):
-                model_plan["filters"]["buyer"] = keyword["filters"]["buyer"]
-            if keyword.get("filters", {}).get("brand") and not model_plan["filters"].get("brand"):
-                model_plan["filters"]["brand"] = keyword["filters"]["brand"]
+        if model_plan.get("limit") is None:
+            model_plan["limit"] = 5
+        if keyword.get("filters", {}).get("buyer") and not model_plan["filters"].get("buyer"):
+            model_plan["filters"]["buyer"] = keyword["filters"]["buyer"]
+        if keyword.get("filters", {}).get("brand") and not model_plan["filters"].get("brand"):
+            model_plan["filters"]["brand"] = keyword["filters"]["brand"]
     model_plan["filters"] = ground_filters_with_catalog(model_plan["filters"], catalog, question=question)
     model_plan["filters"] = _drop_group_by_as_filter(model_plan.get("filters") or {}, model_plan.get("group_by"), question)
     preferred = (
@@ -2101,13 +3749,21 @@ def plan_catalog_question(
     model_plan["filters"] = filters
     model_plan["group_by"] = group_by
     model_plan["source"] = "model"
+    chk = check_understanding(platform, question, history, model_plan, state)
+    if chk.proceed:
+        model_plan["filters"] = chk.filters
+    else:
+        model_plan["filters"] = chk.filters
+        model_plan["needs_clarification"] = True
+        model_plan["clarify_text"] = chk.clarify_text
+        model_plan["clarify_options"] = chk.options
     return model_plan
 
 
 def _plan_timeout(seconds: float | None) -> float | None:
     if seconds is None or seconds <= 0:
-        return 10.0
-    return min(10.0, seconds)
+        return 20.0
+    return min(20.0, float(seconds))
 
 
 def _plan_with_model(
@@ -2201,9 +3857,7 @@ def _parse_model_plan(text: str) -> dict | None:
         preferred_graphs = [str(item).strip() for item in raw_preferred if str(item).strip()]
     elif isinstance(raw_preferred, str) and raw_preferred.strip():
         preferred_graphs = [raw_preferred.strip()]
-    # Keep group_by when the model asked for a single-field wise/breakdown analysis.
-    if analysis and group_by:
-        analysis = False
+    # Focused analysis keeps both analysis=True and group_by (same engine, one facet).
     return {
         "filters": filters,
         "group_by": group_by,
@@ -2357,11 +4011,20 @@ def apply_buyer_spelling(platform, holder) -> str:
             filters[key] = exact
             continue
         # Short tokens are too dangerous to fuzzy-match (comm → primark).
+        # Keep the typed value (e.g. zara, c&a) so count filters still apply —
+        # never delete a short brand just because fuzzy match is unsafe.
         if len(typed_key) < 5:
-            filters.pop(key, None)
             continue
         nearest = _nearest_name(typed, names)
         if nearest is None:
+            continue
+        # Reject weak fuzzy hits for unknown parties (tesco → random catalog name).
+        typed_nn = normalize_name(typed)
+        near_nn = normalize_name(nearest)
+        if not typed_nn or not near_nn:
+            continue
+        if typed_nn not in near_nn and near_nn not in typed_nn:
+            # Keep the user's spelling; retrieve should return empty/honest miss.
             continue
         filters[key] = nearest
         note = f"{typed} is not a {label} name. Using the closest product {label}, {nearest}."

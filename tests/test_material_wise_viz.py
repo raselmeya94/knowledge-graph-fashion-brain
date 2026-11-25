@@ -6,10 +6,11 @@ from fashion_brain.ask import resolve_catalog_plan
 from knowledge_graph.retrieval.ecom import _dimension_breakdown_lines
 
 
-def test_analysis_material_wise_is_group_by_not_full_analysis():
+def test_analysis_material_wise_is_focused_analysis():
     plan = resolve_catalog_plan("analysis all products with material wise")
     assert plan["group_by"] == "material"
-    assert plan["analysis"] is False
+    # Same engine as full analysis — focused to one facet via group_by.
+    assert plan["analysis"] is True
     assert plan["filters"] == {}
 
 

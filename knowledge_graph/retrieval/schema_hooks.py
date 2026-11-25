@@ -40,4 +40,37 @@ def on_schema_changed(platform, graph_id: str | None = None, *, ontology_id: str
         report["facet_indexes"] = f"error:{exc}"
         LOGGER.warning("facet index ensure failed: %s", exc)
 
+    try:
+        from knowledge_graph.retrieval.live_schema import invalidate_live_schema_cache, warm_live_schema
+
+        invalidate_live_schema_cache()
+        report["live_schema"] = warm_live_schema(platform)
+    except Exception as exc:
+        report["live_schema"] = f"error:{exc}"
+        LOGGER.warning("live schema warm failed: %s", exc)
+
+    try:
+        from knowledge_graph.ontology_registry import (
+            invalidate_ontology_registry_cache,
+            warm_ontology_registry,
+        )
+
+        invalidate_ontology_registry_cache()
+        report["ontology_registry"] = warm_ontology_registry(platform)
+    except Exception as exc:
+        report["ontology_registry"] = f"error:{exc}"
+        LOGGER.warning("ontology registry warm failed: %s", exc)
+
+    try:
+        from knowledge_graph.retrieval.runtime_catalog import (
+            invalidate_runtime_catalog,
+            warm_runtime_catalog,
+        )
+
+        invalidate_runtime_catalog()
+        report["runtime_catalog"] = warm_runtime_catalog(platform, force=True)
+    except Exception as exc:
+        report["runtime_catalog"] = f"error:{exc}"
+        LOGGER.warning("runtime catalog warm failed: %s", exc)
+
     return report

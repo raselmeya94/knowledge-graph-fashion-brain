@@ -12,7 +12,11 @@
   ];
 
   function apiBase() {
-    return String(global.FB_API_BASE || "http://127.0.0.1:8000").replace(/\/$/, "");
+    var fallback =
+      typeof global.location !== "undefined" && global.location.hostname
+        ? global.location.protocol + "//" + global.location.hostname + ":8000"
+        : "http://127.0.0.1:8000";
+    return String(global.FB_API_BASE || fallback).replace(/\/$/, "");
   }
 
   function safeUrl(value) {
@@ -389,20 +393,37 @@
     const values = Array.isArray(data && data.values)
       ? data.values.map((item) => Number(item)).map((item) => (Number.isFinite(item) ? item : 0))
       : [];
-    const size = Math.min(labels.length, values.length);
+    const size = Math.min(labels.length, values.length || labels.length);
     const rawType = String((data && data.type) || "bar").toLowerCase();
     const kind = rawType === "pie" ? "pie" : rawType === "line" ? "line" : "bar";
     const sliced = values.slice(0, size);
     const avgRaw = data && data.avg != null ? Number(data.avg) : NaN;
     const minRaw = data && data.min != null ? Number(data.min) : NaN;
     const maxRaw = data && data.max != null ? Number(data.max) : NaN;
+    const multi = [];
+    if (Array.isArray(data && data.series)) {
+      data.series.forEach((entry, index) => {
+        if (!entry || !Array.isArray(entry.values)) return;
+        const nums = entry.values
+          .slice(0, labels.length)
+          .map((item) => Number(item))
+          .map((item) => (Number.isFinite(item) ? item : 0));
+        if (!nums.length) return;
+        multi.push({
+          name: String(entry.name || `Series ${index + 1}`),
+          values: nums,
+          style: String(entry.style || "solid").toLowerCase(),
+        });
+      });
+    }
     return {
       title: String((data && data.title) || "").trim(),
       kind,
       smooth: data && data.smooth !== false,
       analytics: Boolean(data && data.analytics) || kind === "line",
-      labels: labels.slice(0, size),
-      values: sliced,
+      labels: labels.slice(0, Math.max(size, labels.length)),
+      values: sliced.length ? sliced : multi[0] ? multi[0].values.slice() : [],
+      series: multi,
       avg: Number.isFinite(avgRaw) ? avgRaw : sliced.length ? sliced.reduce((a, b) => a + b, 0) / sliced.length : 0,
       min: Number.isFinite(minRaw) ? minRaw : sliced.length ? Math.min(...sliced) : 0,
       max: Number.isFinite(maxRaw) ? maxRaw : sliced.length ? Math.max(...sliced) : 0,
@@ -537,15 +558,24 @@
   function renderLineChart(svg, labels, values, options) {
     const smooth = !options || options.smooth !== false;
     const analytics = !options || options.analytics !== false;
-    const width = 560;
-    const height = analytics ? 260 : 220;
+    const multi = Array.isArray(options && options.series) ? options.series.filter((s) => s && Array.isArray(s.values) && s.values.length) : [];
+    const lines = multi.length
+      ? multi
+      : [{ name: "Trend", values: values, style: "solid" }];
+    const width = 640;
+    const legendRows = Math.ceil(lines.length / 3);
+    const height = (analytics ? 280 : 220) + legendRows * 18;
     const left = 52;
     const right = 18;
     const top = 28;
-    const bottom = 44;
-    const seriesMin = Math.min(...values);
-    const seriesMax = Math.max(...values);
-    const avg = options && Number.isFinite(options.avg) ? options.avg : values.reduce((a, b) => a + b, 0) / values.length;
+    const bottom = 52 + legendRows * 18;
+    const allVals = lines.flatMap((s) => s.values);
+    const primary = lines[0].values;
+    const seriesMin = Math.min(...allVals);
+    const seriesMax = Math.max(...allVals);
+    const avg = options && Number.isFinite(options.avg)
+      ? options.avg
+      : primary.reduce((a, b) => a + b, 0) / Math.max(primary.length, 1);
     const extentMin = Math.min(seriesMin, Number.isFinite(options && options.min) ? options.min : seriesMin, avg);
     const extentMax = Math.max(seriesMax, Number.isFinite(options && options.max) ? options.max : seriesMax, avg);
     const span = Math.max(extentMax - extentMin, Math.abs(extentMax) * 0.08, 1);
@@ -556,7 +586,6 @@
     const n = Math.max(labels.length - 1, 1);
     const yOf = (value) => top + plotH * (1 - (value - yMin) / (yMax - yMin));
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    const points = values.map((value, index) => [left + (plotW * index) / n, yOf(value)]);
 
     // Y-axis guide ticks.
     [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
@@ -591,24 +620,7 @@
       svg.appendChild(zero);
     }
 
-    const lineD = smooth
-      ? smoothLinePath(points)
-      : points.map((pt, i) => `${i ? "L" : "M"} ${pt[0]} ${pt[1]}`).join(" ");
-
-    if (analytics && points.length) {
-      const area = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      const baseY = yOf(Math.max(0, yMin));
-      area.setAttribute(
-        "d",
-        `${lineD} L ${points[points.length - 1][0]} ${baseY} L ${points[0][0]} ${baseY} Z`
-      );
-      area.setAttribute("fill", CHART_COLORS[0]);
-      area.setAttribute("fill-opacity", "0.12");
-      area.setAttribute("stroke", "none");
-      svg.appendChild(area);
-    }
-
-    // Average reference line.
+    // Average reference line (primary series).
     if (analytics && Number.isFinite(avg)) {
       const avgY = yOf(avg);
       const avgLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -630,48 +642,86 @@
       svg.appendChild(avgLabel);
     }
 
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", lineD);
-    path.setAttribute("fill", "none");
-    path.setAttribute("stroke", CHART_COLORS[0]);
-    path.setAttribute("stroke-width", "2.4");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    svg.appendChild(path);
+    lines.forEach((series, sIdx) => {
+      const color = CHART_COLORS[sIdx % CHART_COLORS.length];
+      const pts = series.values.map((value, index) => [left + (plotW * index) / n, yOf(value)]);
+      const lineD = smooth
+        ? smoothLinePath(pts)
+        : pts.map((pt, i) => `${i ? "L" : "M"} ${pt[0]} ${pt[1]}`).join(" ");
+      if (analytics && sIdx === 0 && pts.length) {
+        const area = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        const baseY = yOf(Math.max(0, yMin));
+        area.setAttribute(
+          "d",
+          `${lineD} L ${pts[pts.length - 1][0]} ${baseY} L ${pts[0][0]} ${baseY} Z`
+        );
+        area.setAttribute("fill", color);
+        area.setAttribute("fill-opacity", "0.10");
+        area.setAttribute("stroke", "none");
+        svg.appendChild(area);
+      }
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", lineD);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", color);
+      path.setAttribute("stroke-width", sIdx === 0 ? "2.6" : "2.0");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      if (series.style === "dashed") path.setAttribute("stroke-dasharray", "5 4");
+      svg.appendChild(path);
+      // Dots only on primary line to keep the view clean.
+      if (sIdx === 0) {
+        const minIdx = series.values.indexOf(Math.min(...series.values));
+        const maxIdx = series.values.indexOf(Math.max(...series.values));
+        pts.forEach((pt, index) => {
+          const isExtreme = index === minIdx || index === maxIdx;
+          const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          dot.setAttribute("cx", String(pt[0]));
+          dot.setAttribute("cy", String(pt[1]));
+          dot.setAttribute("r", isExtreme ? "4.2" : "2.4");
+          dot.setAttribute("fill", isExtreme ? (index === maxIdx ? "#059669" : "#dc2626") : color);
+          svg.appendChild(dot);
+        });
+      }
+    });
 
-    const minIdx = values.indexOf(seriesMin);
-    const maxIdx = values.indexOf(seriesMax);
-    const labelStep = Math.max(1, Math.ceil(points.length / 8));
-    points.forEach((pt, index) => {
-      const isExtreme = index === minIdx || index === maxIdx;
-      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      dot.setAttribute("cx", String(pt[0]));
-      dot.setAttribute("cy", String(pt[1]));
-      dot.setAttribute("r", isExtreme ? "4.4" : "2.6");
-      dot.setAttribute("fill", isExtreme ? (index === maxIdx ? "#059669" : "#dc2626") : CHART_COLORS[0]);
-      svg.appendChild(dot);
-      if (isExtreme) {
-        const callout = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        callout.setAttribute("x", String(pt[0]));
-        callout.setAttribute("y", String(index === maxIdx ? pt[1] - 8 : pt[1] + 14));
-        callout.setAttribute("text-anchor", "middle");
-        callout.setAttribute("font-size", "10");
-        callout.setAttribute("font-weight", "600");
-        callout.setAttribute("fill", index === maxIdx ? "#047857" : "#b91c1c");
-        callout.textContent = `${index === maxIdx ? "max" : "min"} ${Math.round(values[index] * 10) / 10}%`;
-        svg.appendChild(callout);
-      }
-      if (index === 0 || index === points.length - 1 || index % labelStep === 0) {
-        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        label.setAttribute("x", String(pt[0]));
-        label.setAttribute("y", String(height - 12));
-        label.setAttribute("text-anchor", "middle");
-        label.setAttribute("font-size", "9");
-        label.setAttribute("fill", "#6b7280");
-        const raw = labels[index] || "";
-        label.textContent = raw.length > 11 ? raw.slice(0, 10) + "…" : raw;
-        svg.appendChild(label);
-      }
+    const labelStep = Math.max(1, Math.ceil(labels.length / 8));
+    labels.forEach((raw, index) => {
+      if (!(index === 0 || index === labels.length - 1 || index % labelStep === 0)) return;
+      const x = left + (plotW * index) / n;
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", String(x));
+      label.setAttribute("y", String(height - 14 - legendRows * 18));
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("font-size", "9");
+      label.setAttribute("fill", "#6b7280");
+      const text = String(raw || "");
+      label.textContent = text.length > 11 ? text.slice(0, 10) + "…" : text;
+      svg.appendChild(label);
+    });
+
+    // Legend under the plot.
+    lines.forEach((series, sIdx) => {
+      const col = sIdx % 3;
+      const row = Math.floor(sIdx / 3);
+      const x = left + col * ((plotW) / 3);
+      const y = height - 8 - (legendRows - 1 - row) * 16;
+      const swatch = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      swatch.setAttribute("x", String(x));
+      swatch.setAttribute("y", String(y - 9));
+      swatch.setAttribute("width", "12");
+      swatch.setAttribute("height", "3");
+      swatch.setAttribute("rx", "1");
+      swatch.setAttribute("fill", CHART_COLORS[sIdx % CHART_COLORS.length]);
+      svg.appendChild(swatch);
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", String(x + 16));
+      text.setAttribute("y", String(y - 2));
+      text.setAttribute("font-size", "10");
+      text.setAttribute("fill", "#4b5563");
+      const name = String(series.name || `Series ${sIdx + 1}`);
+      text.textContent = name.length > 28 ? name.slice(0, 27) + "…" : name;
+      svg.appendChild(text);
     });
   }
 
@@ -706,6 +756,7 @@
         avg: series.avg,
         min: series.min,
         max: series.max,
+        series: series.series,
       });
     } else renderBarChart(svg, series.labels, series.values);
     wrap.appendChild(svg);

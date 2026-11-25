@@ -22,6 +22,10 @@ _PROBE_ATTRIBUTES = (
     "brand",
     "buyer",
     "category",
+    "subcategory",
+    "plm_main_category",
+    "plm_sub_category",
+    "plm_sub_sub_category",
     "garment_type",
     "family",
     "subfamily",
@@ -32,6 +36,9 @@ _PROBE_ATTRIBUTES = (
     "department",
     "availability",
     "section",
+    "designer",
+    "merchandiser",
+    "gauge",
 )
 _SYSTEM_PROBE_ATTRIBUTES = (
     "topic",
@@ -87,6 +94,11 @@ _TOKEN_STOP = frozenset(
     plm plmex plm-ex system database graph graphs source sources neo4j postgres sql
     kg comm com stored inside within wise analysis analyze analysing analyzing
     analyse profile review overview study breakdown distribution split
+    tell tells telling told say says saying said ask asks asking asked
+    explore exploring explored focus focusing focused narrow narrowing
+    yes yeah yep ok okay sure confirm confirming confirmed proceed correct accurate
+    fine alright reply report dimension dimensions aspect aspects color colour
+    colors colours category categories them those these me now
     """.split()
 )
 
@@ -878,13 +890,20 @@ def _lookup_value(platform, graph_id: str, attribute: str, token: str) -> str | 
     needle = normalize_name(token)
     if not needle:
         return None
+    if needle in _TOKEN_STOP or len(needle) < 2:
+        return None
     values = _values_for(platform, graph_id, attribute, token)
     exact = next((value for value in values if normalize_name(value) == needle), None)
     if exact:
         return exact
-    # Partial contains only for longer tokens (avoid "an" matching "organic").
+    # Soft match only on whole-token boundaries — never "tell" ⊂ "steller"
+    # (sophie steller) or "color" ⊂ "united colors of benetton".
     if len(needle) >= 4:
-        soft = next((value for value in values if needle in normalize_name(value)), None)
+        boundary = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])")
+        soft = next(
+            (value for value in values if boundary.search(normalize_name(value) or "")),
+            None,
+        )
         if soft:
             return soft
     return None

@@ -78,6 +78,19 @@ def end_timing() -> TimingBundle | None:
     return bundle
 
 
+def log_timing(bundle: TimingBundle, logger: Any) -> None:
+    """Log aggregate request timings without including query text or bound values."""
+
+    llm_calls = sum(event.name in {"llm_chat", "llm_stream"} for event in bundle.events)
+    logger.info(
+        "ask_timing total_ms=%.1f by_stage_ms=%s llm_calls=%s database_queries=%s",
+        bundle.total_ms(),
+        {name: round(ms, 1) for name, ms in bundle.by_stage().items()},
+        llm_calls,
+        len(bundle.cypher),
+    )
+
+
 def record_stage(name: str, ms: float, **meta: Any) -> None:
     bundle = _CURRENT.get()
     if bundle is not None:

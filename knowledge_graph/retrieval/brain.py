@@ -130,7 +130,8 @@ _GROUP_LABELS = {field.key: field.label for field in CATALOG_FIELDS}
 class BrainRetrieveRequest(BaseModel):
     question: str = ""
     intent: str
-    filters: dict[str, str] = Field(default_factory=dict)
+    # Arbitrary query scope — any facet key, scalar or list. Never strip upstream.
+    filters: dict[str, Any] = Field(default_factory=dict)
     group_by: str | None = None
     unsupported: bool = False
     limit: int | None = None
@@ -144,6 +145,8 @@ class BrainRetrieveRequest(BaseModel):
     # Optional scope: one individual KG, or several. Empty = all active registry graphs.
     graph_id: str | None = None
     graph_ids: list[str] | None = None
+    # Provenance echo: callers may set requested_filters explicitly; defaults to filters.
+    requested_filters: dict[str, Any] | None = None
 
 
 class BrainRetrieveResponse(BaseModel):
@@ -153,6 +156,8 @@ class BrainRetrieveResponse(BaseModel):
     unavailable: list[str] = Field(default_factory=list)
     synthetic_data: bool = False
     routes_hint: list[str] = Field(default_factory=list)
+    requested_filters: dict[str, Any] = Field(default_factory=dict)
+    applied_filters: dict[str, Any] = Field(default_factory=dict)
 
 
 def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveRequest) -> BrainRetrieveResponse:
@@ -336,7 +341,74 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                 avail_mode = None
                 split_multi_party_filter = None  # type: ignore
 
-            if tlabel == "AvailabilitySnapshot" or avail_mode:
+            # Entity frequency / co-occurrence (never brand-compare for these).
+            try:
+                from fashion_brain.planning.schema_grounding import detect_query_shape
+                from knowledge_graph.retrieval.ecom import (
+                    cypher_entity_frequency,
+                    overlap_facet_from_question,
+                )
+
+                shape = detect_query_shape(request.question or "")
+            except Exception:
+                shape = None
+                cypher_entity_frequency = None  # type: ignore
+                overlap_facet_from_question = None  # type: ignore
+            if (
+                not special_done
+                and shape == "entity_frequency"
+                and cypher_entity_frequency is not None
+            ):
+                field = (
+                    str(request.group_by or getattr(request, "count_entity", None) or "").strip()
+                    or (
+                        overlap_facet_from_question(request.question or "", platform, [target])
+                        if overlap_facet_from_question
+                        else None
+                    )
+                    or "material"
+                )
+                freq = cypher_entity_frequency(
+                    platform,
+                    target,
+                    field,
+                    dict(request.filters or {}),
+                    min_products=2,
+                    limit=max(int(request.limit or 25), 1),
+                )
+                if freq is not None:
+                    label = field.replace("_", " ")
+                    if not freq:
+                        lines.append(
+                            f"No {label} values were found on more than one product."
+                        )
+                    else:
+                        lines.append(
+                            f"{label.title()} values that appear on more than one product:"
+                        )
+                        lines.append(f"| {label.title()} | Products |")
+                        lines.append("| --- | ---: |")
+                        for value, count in freq:
+                            safe = str(value).replace("|", "\\|")
+                            lines.append(f"| {safe} | {int(count)} |")
+                        evidence.append(
+                            EvidenceItem(
+                                source_id=target,
+                                record_id=f"entity_frequency_{field}",
+                                title=f"{label} frequency",
+                                excerpt="; ".join(f"{v}={c}" for v, c in freq[:5]),
+                                source_path="neo4j",
+                                verification_status="observed",
+                                graph=target,
+                                node_id=None,
+                                synthetic=False,
+                            )
+                        )
+                    if not request.graph_id:
+                        request.graph_id = target
+                    special_done = True
+
+            if not special_done and (tlabel == "AvailabilitySnapshot" or avail_mode):
                 handled = append_neo4j_availability_history_answer(
                     platform,
                     principal,
@@ -352,7 +424,9 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                     if not request.graph_id:
                         request.graph_id = target
                     special_done = True
-            elif tlabel == "PriceChangeEvent" or price_history_mode(request.question or ""):
+            elif not special_done and (
+                tlabel == "PriceChangeEvent" or price_history_mode(request.question or "")
+            ):
                 trace_step(
                     "brain",
                     "Neo4j price history answer",
@@ -441,39 +515,62 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         if special_done:
             pass
         elif has_neo4j and intent in _neo_count_intents and request.analysis and not request.suggest:
-            analysis_targets = scoped_targets or ([target] if target else [])
-            for gid in analysis_targets:
-                if request.group_by:
-                    analysis_fields = [str(request.group_by)]
-                else:
-                    analysis_fields = _analysis_fields_for_graph(platform, gid)
+            # Never substitute assortment analysis for a price-history / movers ask.
+            price_blocked = False
+            try:
+                from knowledge_graph.retrieval.ecom import (
+                    append_price_history_unavailable,
+                    price_history_mode,
+                )
+
+                if price_history_mode(request.question or ""):
+                    append_price_history_unavailable(
+                        target or (scoped_targets[0] if scoped_targets else "ecom_products"),
+                        lines,
+                        evidence,
+                        caveats,
+                        question=request.question,
+                    )
+                    if not request.graph_id:
+                        request.graph_id = target
+                    special_done = True
+                    price_blocked = True
+            except Exception:
+                price_blocked = False
+            if not price_blocked:
+                analysis_targets = scoped_targets or ([target] if target else [])
+                for gid in analysis_targets:
+                    if request.group_by:
+                        analysis_fields = [str(request.group_by)]
+                    else:
+                        analysis_fields = _analysis_fields_for_graph(platform, gid)
+                    if len(analysis_targets) > 1:
+                        lines.append(f"## Analysis — `{gid}`")
+                    trace_step(
+                        "brain",
+                        "Neo4j analysis answer",
+                        graph_id=gid,
+                        fields=analysis_fields,
+                        filters=request.filters,
+                    )
+                    append_neo4j_analysis_answer(
+                        platform,
+                        principal,
+                        gid,
+                        dict(request.filters or {}),
+                        request.limit,
+                        lines,
+                        evidence,
+                        caveats,
+                        analysis_fields=analysis_fields,
+                    )
                 if len(analysis_targets) > 1:
-                    lines.append(f"## Analysis — `{gid}`")
-                trace_step(
-                    "brain",
-                    "Neo4j analysis answer",
-                    graph_id=gid,
-                    fields=analysis_fields,
-                    filters=request.filters,
-                )
-                append_neo4j_analysis_answer(
-                    platform,
-                    principal,
-                    gid,
-                    dict(request.filters or {}),
-                    request.limit,
-                    lines,
-                    evidence,
-                    caveats,
-                    analysis_fields=analysis_fields,
-                )
-            if len(analysis_targets) > 1:
-                caveats.append(
-                    "Attribute analysis ran per selected product graph (not limited to e-commerce)."
-                )
-            if not request.graph_id and analysis_targets:
-                request.graph_id = analysis_targets[0]
-            special_done = True
+                    caveats.append(
+                        "Attribute analysis ran per selected product graph (not limited to e-commerce)."
+                    )
+                if not request.graph_id and analysis_targets:
+                    request.graph_id = analysis_targets[0]
+                special_done = True
         elif has_neo4j and (intent == "specification" or request.suggest) and not request.analysis:
             from knowledge_graph.retrieval.ecom import append_neo4j_specification_answer
 
@@ -555,22 +652,36 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         # and never scrape product ids across million-row catalogs.
         from knowledge_graph.retrieval.ecom import (
             analysis_value_limit,
+            cypher_sample_products,
             facet_overlap_across_graphs,
             overlap_facet_from_question,
+            registry_product_graphs,
+            _human_product_label,
         )
 
         graph_ids = [str(item) for item in (product_ids or []) if item]
+        # Default: bind every active product graph when the ask is cross-catalog
+        # and the caller did not pin two+ catalogs.
         if len(set(graph_ids)) < 2:
-            lines.append("Name at least two product catalogs to compare shared attribute values.")
-            caveats.append("Cross-catalog overlap needs two or more product graphs.")
+            graph_ids = list(registry_product_graphs(platform) or [])
+        if len(set(graph_ids)) < 2:
+            lines.append(
+                "Cross-catalog overlap needs two or more active product graphs in the registry."
+            )
+            caveats.append("No multi-catalog scope available from the live registry.")
         else:
             field = str(request.group_by or "").strip() or overlap_facet_from_question(
                 request.question or "", platform, graph_ids
             )
+            # "canonical materials/attributes" → shared domain attribute values, not party linking.
+            if not field:
+                qn = (request.question or "").casefold()
+                if "material" in qn or "fabric" in qn:
+                    field = "material"
             if not field:
                 lines.append(
                     "Say which product attribute to compare across those catalogs "
-                    "(any schema facet such as material, color, or brand)."
+                    "(any schema facet present in the live product graphs)."
                 )
             else:
                 # Always aggregate fully (cheap distinct values). Cap only for explicit top-N.
@@ -613,6 +724,51 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                         lines.append("| " + " | ".join(
                             [value, *(str(int(counts.get(gid) or 0)) for gid in graph_ids)]
                         ) + " |")
+                    # Linked/shared product asks: include concrete examples per top values.
+                    wants_products = bool(
+                        re.search(
+                            r"\b(products?|items?|styles?|linked|link|pair|pairs)\b",
+                            (request.question or "").casefold(),
+                        )
+                    )
+                    if wants_products:
+                        lines.append("")
+                        lines.append(
+                            f"Example products linked by shared {label} values:"
+                        )
+                        lines.append("| Shared value | Catalog | Product |")
+                        lines.append("| --- | --- | --- |")
+                        sample_n = 0
+                        for group in groups[:5]:
+                            value = str(group.get("value") or "").strip()
+                            if not value:
+                                continue
+                            for gid in graph_ids:
+                                filt = dict(request.filters or {})
+                                filt[field] = value
+                                samples = cypher_sample_products(
+                                    platform, gid, filt, limit=2
+                                ) or []
+                                for prod in samples:
+                                    props = getattr(prod, "properties", None) or {}
+                                    if isinstance(prod, dict):
+                                        props = prod.get("properties") or prod
+                                    pname = _human_product_label(
+                                        props.get("name") or props.get("title"),
+                                        getattr(prod, "id", None)
+                                        or (prod.get("id") if isinstance(prod, dict) else None),
+                                    )
+                                    safe_val = value.replace("|", "\\|")
+                                    lines.append(
+                                        f"| {safe_val} | {graph_labels.get(gid, gid)} | {pname} |"
+                                    )
+                                    sample_n += 1
+                                    if sample_n >= 12:
+                                        break
+                                if sample_n >= 12:
+                                    break
+                            if sample_n >= 12:
+                                break
                     if row_limit is not None:
                         lines.append(
                             f"Showing top {len(groups)} shared {label} values "
@@ -621,8 +777,7 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                     else:
                         lines.append(f"{len(groups)} shared {label} values in total.")
                     caveats.append(
-                        f"Counts are products with each {label} value in each catalog; "
-                        "this is an attribute comparison, not a product listing."
+                        f"Counts are products with each {label} value in each catalog."
                     )
     elif intent == "products":
         rows = product_materials(platform, principal)
@@ -722,6 +877,59 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         unavailable=len(unavailable),
         routes_hint=hint,
     )
+    requested = dict(request.requested_filters if request.requested_filters is not None else request.filters or {})
+    applied: dict[str, Any] = {}
+    for item in evidence:
+        item_requested = getattr(item, "requested_filters", None) or {}
+        item_applied = getattr(item, "applied_filters", None) or {}
+        if not item_requested and requested:
+            try:
+                item.requested_filters = dict(requested)
+            except Exception:
+                pass
+        if item_applied:
+            applied.update(dict(item_applied))
+        elif requested and getattr(item, "record_id", None) == "kg_stats":
+            # Stamp empty applied_filters explicitly for global totals.
+            try:
+                if not getattr(item, "applied_filters", None):
+                    item.applied_filters = {}
+            except Exception:
+                pass
+    # Provenance guard at the service boundary: filtered ask + only global evidence → refuse.
+    if requested:
+        try:
+            from knowledge_graph.retrieval.kg_stats import filters_match, normalize_filter_dict
+
+            req_norm = normalize_filter_dict(requested)
+            if req_norm and not filters_match(req_norm, applied):
+                # Drop unfiltered global kg_stats hits; keep any other evidence.
+                kept = [
+                    item
+                    for item in evidence
+                    if filters_match(
+                        req_norm,
+                        normalize_filter_dict(getattr(item, "applied_filters", None) or {}),
+                    )
+                ]
+                if not kept and any(getattr(e, "record_id", None) == "kg_stats" for e in evidence):
+                    unavailable.append("kg_stats_filter_mismatch")
+                    caveats.append(
+                        "Catalog metadata returned an unfiltered total for a filtered ask; "
+                        "caller should use Text2Cypher."
+                    )
+                    evidence = []
+                    text = ""
+                    applied = {}
+                elif kept:
+                    evidence = kept
+                    text = "\n".join(
+                        line
+                        for line in (text or "").splitlines()
+                        if line.strip()
+                    ) or text
+        except Exception:
+            pass
     return BrainRetrieveResponse(
         text=text,
         evidence=evidence,
@@ -729,6 +937,8 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
         unavailable=unavailable,
         synthetic_data=synthetic,
         routes_hint=hint,
+        requested_filters=requested,
+        applied_filters=applied,
     )
 
 

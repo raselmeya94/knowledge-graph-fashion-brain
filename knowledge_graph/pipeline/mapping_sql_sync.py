@@ -17,7 +17,7 @@ from knowledge_graph.errors import ValidationFailed
 from knowledge_graph.ids import edge_id, register_source_identity, slug
 from knowledge_graph.logging_config import get_logger
 from knowledge_graph.models import GraphEdge, GraphNode
-from knowledge_graph.ontology import combine_ontologies, normalize_name
+from knowledge_graph.ontology import combine_ontologies, facet_name_fields, normalize_name
 from knowledge_graph.sources.mapping_store import get_mapping, mapping_exists
 
 LOGGER = get_logger("knowledge_graph.mapping_sql_sync")
@@ -557,7 +557,6 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
                 (start_id, rel["start_type"], rel["start_name"]),
                 (end_id, end_type, rel["end_name"]),
             ):
-                nn = normalize_name(node_name)
                 graph.upsert_node(
                     GraphNode(
                         id=node_id,
@@ -565,8 +564,8 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
                         graph=graph_id,
                         properties={
                             "id": node_id,
-                            "name": nn or str(node_name or "").strip(),
-                            "normalized_name": nn,
+                            # Keep original display in name; match via normalized_name only.
+                            **facet_name_fields(node_name),
                             "entity_type": node_type,
                             "lifecycle": "active",
                             "prov_source_id": graph_id,
@@ -592,7 +591,6 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
             edges += 1
             continue
 
-        nn = normalize_name(rel["end_name"])
         graph.upsert_node(
             GraphNode(
                 id=end_id,
@@ -600,8 +598,7 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
                 graph=graph_id,
                 properties={
                     "id": end_id,
-                    "name": nn or str(rel.get("end_name") or "").strip(),
-                    "normalized_name": nn,
+                    **facet_name_fields(rel.get("end_name")),
                     "entity_type": end_type,
                     "lifecycle": "active",
                     "prov_source_id": graph_id,

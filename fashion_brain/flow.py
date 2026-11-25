@@ -233,16 +233,29 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
             LOGGER.info("agent router selected route=news")
             trace_step("route", "Selected news")
             return {"route": "news", "tool_query": state["question"]}
-        if planned and planned[0] in _PLM_ROUTES and _is_explicit_catalog_question(question, planned[0]):
+        if planned and planned[0] in _PLM_ROUTES and _is_explicit_catalog_question(
+            state["question"], planned[0]
+        ):
             LOGGER.info("agent router selected route=catalog reason=planned_%s", planned[0])
             trace_step("route", "Selected catalog (planned route)", planned=planned[0])
             return {"route": "catalog", "tool_query": state["question"]}
+        # Domain-first guard: never allow direct/no-KG when the question overlaps
+        # introspected labels, relationships, or property keys.
+        if _question_requires_catalog(state["question"], platform):
+            LOGGER.info("agent router selected route=catalog reason=schema_grounded")
+            trace_step("route", "Selected catalog (schema-grounded domain guard)")
+            return {"route": "catalog", "tool_query": state["question"]}
         provider = build_model_provider(platform.settings)
+        router_tools = (
+            ROUTER_TOOLS
+            if _web_search_enabled(platform)
+            else [tool for tool in ROUTER_TOOLS if tool.get("function", {}).get("name") != "search_web"]
+        )
         try:
             body = provider.chat(
                 chat_messages(ROUTER_SYSTEM, state["question"], state.get("history")),
                 timeout=platform.settings.request_timeout_seconds,
-                tools=ROUTER_TOOLS,
+                tools=router_tools,
                 tool_choice="required",
             )
         except ModelUnavailableError as exc:
@@ -250,6 +263,13 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
             trace_step("route", "LLM router unavailable → catalog", error=exc.message)
             return {"route": "catalog", "tool_query": state["question"]}
         route, query = _route_from_body(body, state["question"])
+        if route == "direct" and _question_requires_catalog(state["question"], platform):
+            LOGGER.info("agent router overridden route=catalog reason=block_direct_schema_hit")
+            trace_step("route", "Blocked direct → catalog (schema token match)")
+            return {"route": "catalog", "tool_query": state["question"]}
+        route = _force_catalog_if_web_disabled(platform, route, state["question"])
+        if route == "catalog":
+            query = state["question"]
         LOGGER.info("agent router selected route=%s", route)
         trace_step("route", f"Selected {route}", query=query if route == "web_search" else None)
         return {"route": route, "tool_query": query}
@@ -258,7 +278,7 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
         from fashion_brain.agent import answer_from_catalog
 
         answer = answer_from_catalog(platform, state["question"], principal, state.get("history"), graph_id=graph_id)
-        if _catalog_declined(answer):
+        if _catalog_declined(answer) and _web_search_enabled(platform):
             LOGGER.info("catalog has no answer; web search selected")
             web = search_web(state)["answer"]
             web.routes = ["catalog", *[route for route in web.routes if route != "catalog"]]
@@ -324,7 +344,14 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
         }
 
     graph = StateGraph(AskState)
-    graph.add_node("router", route_question)
+
+    def timed_route_question(state: AskState) -> dict:
+        from fashion_brain.stage_timing import timed
+
+        with timed("agent_router"):
+            return route_question(state)
+
+    graph.add_node("router", timed_route_question)
     graph.add_node("catalog", use_catalog)
     graph.add_node("web_search", search_web)
     graph.add_node("direct", answer_directly)
@@ -427,8 +454,12 @@ def iter_ask_events(
     """Yield websocket deltas: thinking, reasoning, answer, then one done event."""
 
     from fashion_brain.agent import _use_agent_graph
+    from fashion_brain.stage_timing import current_timing, end_timing, log_timing, start_timing, timed
     from fashion_brain.trace import end_trace, start_trace, trace_step
 
+    owns_timing = current_timing() is None
+    if owns_timing:
+        start_timing()
     trace = start_trace(question, source="ws/ask")
     history = normalize_history(history)
     trace_step(
@@ -440,19 +471,25 @@ def iter_ask_events(
         agent_graph=_use_agent_graph(platform),
     )
     try:
-        yield from _iter_ask_events_traced(
-            platform,
-            question,
-            principal,
-            history,
-            graph_id=graph_id,
-            conversation_state=conversation_state,
-        )
+        with timed("ask_pipeline"):
+            yield from _iter_ask_events_traced(
+                platform,
+                question,
+                principal,
+                history,
+                graph_id=graph_id,
+                conversation_state=conversation_state,
+            )
         end_trace(status="ok")
     except Exception as exc:
         trace.warn("Ask pipeline failed", error=f"{exc.__class__.__name__}: {exc}")
         end_trace(status="error")
         raise
+    finally:
+        if owns_timing:
+            bundle = end_timing()
+            if bundle is not None:
+                log_timing(bundle, LOGGER)
 
 
 def _iter_ask_events_traced(
@@ -467,6 +504,50 @@ def _iter_ask_events_traced(
     from fashion_brain.trace import trace_step
 
     history = normalize_history(history)
+    pending_clar = bool(
+        isinstance(conversation_state, dict)
+        and (conversation_state.get("clarification") or {}).get("pending_slot")
+    )
+    pending_conf = bool(
+        isinstance(conversation_state, dict)
+        and (conversation_state.get("confirmation") or {}).get("question")
+    )
+    # Align with HTTP /ask + catalog pipeline: when past-history study is off,
+    # do not divert into "direct" rewrite / follow-up routes from prior turns.
+    try:
+        from fashion_brain.agents.conversation_context import STUDY_PAST_HISTORY
+    except Exception:
+        STUDY_PAST_HISTORY = False
+    if not STUDY_PAST_HISTORY:
+        # Keep history only while answering an in-flight clarify/confirm ("yes").
+        if not pending_clar and not pending_conf:
+            history = []
+            if isinstance(conversation_state, dict):
+                conversation_state["active_filters"] = {}
+
+    # Pending clarify/confirm must never fall through to "direct" model chat.
+    if pending_clar or pending_conf:
+        trace_step(
+            "route",
+            "Selected catalog (pending clarification/confirmation)",
+            pending_slot=(conversation_state or {}).get("clarification", {}).get("pending_slot"),
+        )
+        yield {"type": "status", "text": "Continuing your previous catalog request…"}
+        yield {
+            "type": "thinking",
+            "text": "Reading this as confirming and proceeding with the previous request.\n"
+            "Looking up the product catalog. ",
+        }
+        yield from _iter_catalog_stream(
+            platform,
+            question,
+            principal,
+            history,
+            summary=None,
+            graph_id=graph_id,
+            conversation_state=conversation_state,
+        )
+        return
 
     # Slash triggers first — never let "/advanced_garment_design" become garment_type=design.
     from fashion_brain.agents.slash_commands import parse_slash_command
@@ -532,6 +613,35 @@ def _iter_ask_events_traced(
         yield from _iter_news_stream(platform, question, principal, history, graph_id=graph_id)
         return
 
+    # Metadata-sufficient quantity asks: skip ThinkingBrain (schema catalog ~18s)
+    # and go straight to catalog meta fast path / kg_stats.
+    try:
+        from fashion_brain.orchestration.catalog_pipeline import _meta_fast_path_eligible
+
+        state_for_meta = dict(conversation_state or {})
+        if _meta_fast_path_eligible(question, state_for_meta, history):
+            trace_step(
+                "route",
+                "Selected catalog (kg_stats meta-eligible — skipped ThinkingBrain)",
+            )
+            yield {"type": "status", "text": "Looking up catalog totals…"}
+            yield {
+                "type": "thinking",
+                "text": "Reading this as a product count.\nLooking up the product catalog. ",
+            }
+            yield from _iter_catalog_stream(
+                platform,
+                question,
+                principal,
+                history,
+                summary=None,
+                graph_id=graph_id,
+                conversation_state=conversation_state,
+            )
+            return
+    except Exception:
+        pass
+
     from fashion_brain.agents import ThinkingBrain
 
     yield {
@@ -555,8 +665,45 @@ def _iter_ask_events_traced(
     )
     yield {"type": "thinking", "text": summary.text + "\n"}
 
+    # ThinkingBrain already extracted catalog Scope (e.g. Analyze PRIMARK → brand=primark).
+    # Never let the LLM router send that to web_search.
+    if _thinking_implies_catalog(summary):
+        trace_step(
+            "route",
+            "Selected catalog (ThinkingBrain Scope)",
+            filters=getattr(summary, "filters", None),
+            group_by=getattr(summary, "group_by", None),
+        )
+        yield {"type": "status", "text": "Searching matching product records…"}
+        yield {"type": "thinking", "text": "Looking up the product catalog. "}
+        yield from _iter_catalog_stream(
+            platform,
+            question,
+            principal,
+            history,
+            summary,
+            graph_id=graph_id,
+            conversation_state=conversation_state,
+        )
+        return
+
     if planned and planned[0] in _PLM_ROUTES and _is_explicit_catalog_question(question, planned[0]):
         trace_step("route", "Selected catalog (planned route)", planned=planned[0])
+        yield {"type": "status", "text": "Searching matching product records…"}
+        yield {"type": "thinking", "text": "Looking up the product catalog. "}
+        yield from _iter_catalog_stream(
+            platform,
+            question,
+            principal,
+            history,
+            summary,
+            graph_id=graph_id,
+            conversation_state=conversation_state,
+        )
+        return
+
+    if _question_requires_catalog(question, platform):
+        trace_step("route", "Selected catalog (schema-grounded domain guard)")
         yield {"type": "status", "text": "Searching matching product records…"}
         yield {"type": "thinking", "text": "Looking up the product catalog. "}
         yield from _iter_catalog_stream(
@@ -573,12 +720,17 @@ def _iter_ask_events_traced(
     provider = build_model_provider(platform.settings)
     yield {"type": "status", "text": "Choosing the best source for your question…"}
     trace_step("route", "LLM router started")
+    router_tools = (
+        ROUTER_TOOLS
+        if _web_search_enabled(platform)
+        else [tool for tool in ROUTER_TOOLS if tool.get("function", {}).get("name") != "search_web"]
+    )
     try:
         body = yield from _run_with_progress(
             lambda: provider.chat(
                 chat_messages(ROUTER_SYSTEM, question, history),
                 timeout=_model_timeout(platform),
-                tools=ROUTER_TOOLS,
+                tools=router_tools,
                 tool_choice="required",
             ),
             progress="Still selecting the best source for your question…",
@@ -588,6 +740,14 @@ def _iter_ask_events_traced(
         LOGGER.info("agent router unavailable error=%s; catalog selected", exc.message)
         route, query = "catalog", question
         trace_step("route", "LLM router unavailable → catalog", error=exc.message)
+    if route == "direct" and _question_requires_catalog(question, platform):
+        route, query = "catalog", question
+        trace_step("route", "Blocked direct → catalog (schema token match)")
+    if route == "web_search":
+        route = _force_catalog_if_web_disabled(platform, route, question)
+        if route == "catalog":
+            trace_step("route", "web_search disabled → catalog")
+            query = question
     trace_step("route", f"Selected {route}", query=query if route == "web_search" else None)
     yield {"type": "thinking", "text": f"Selected {route.replace('_', ' ')}. "}
     if route == "web_search":
@@ -681,6 +841,7 @@ def _iter_catalog_stream(
     conversation_state: dict | None = None,
 ):
     from fashion_brain.agent import _grounded, catalog_focus, draft_catalog
+    from fashion_brain.ask import _is_simple_count_result
     from fashion_brain.agents import response_messages
     from fashion_brain.agents._impl import _findings_have_table
     from fashion_brain.trace import trace_step
@@ -713,6 +874,16 @@ def _iter_catalog_stream(
         finding_chars=len(retrieved.text or ""),
         evidence=len(retrieved.evidence or []),
     )
+    # Progressive clarification: return the follow-up as the answer (no ResponseAgent rewrite).
+    from fashion_brain.agents.query_understanding import clarification_awaiting
+
+    if clarification_awaiting(retrieved):
+        text = (retrieved.text or "").strip()
+        trace_step("query_understanding", "Streaming clarification question", chars=len(text))
+        yield from _deltas("answer", text)
+        answer = _grounded(question, ["catalog", *routes], text, retrieved, platform)
+        yield {"type": "done", "answer": answer.model_dump()}
+        return
     # Analysis plan: spell out multi-facet viz intent in Thinking (not only "Type-wise top…").
     if bool(getattr(intention, "analysis", False)):
         who = (intention.filters or {}).get("brand") or (intention.filters or {}).get("buyer") or "selection"
@@ -738,67 +909,121 @@ def _iter_catalog_stream(
         yield {"type": "thinking", "text": focus + " "}
     yield {"type": "status", "text": "Preparing an answer from the retrieved product data…"}
     if retrieved.text.startswith("No count was estimated"):
-        trace_step("catalog", "No catalog answer → falling back to web")
-        yield {"type": "thinking", "text": "Our products do not cover this question. "}
-        for event in _iter_web_stream(platform, question, question, []):
-            if event.get("type") == "done":
-                answer = GroundedAnswer.model_validate(event["answer"])
-                answer.routes = ["catalog", *[item for item in answer.routes if item != "catalog"]]
-                answer.unavailable.insert(0, "Our products do not cover this question.")
-                event = {"type": "done", "answer": answer.model_dump()}
-            yield event
+        if _web_search_enabled(platform):
+            trace_step("catalog", "No catalog answer → falling back to web")
+            yield {"type": "thinking", "text": "Our products do not cover this question. "}
+            for event in _iter_web_stream(platform, question, question, []):
+                if event.get("type") == "done":
+                    answer = GroundedAnswer.model_validate(event["answer"])
+                    answer.routes = ["catalog", *[item for item in answer.routes if item != "catalog"]]
+                    answer.unavailable.insert(0, "Our products do not cover this question.")
+                    event = {"type": "done", "answer": answer.model_dump()}
+                yield event
+            return
+        trace_step("catalog", "No catalog answer (web_search disabled)")
+        yield {
+            "type": "done",
+            "answer": GroundedAnswer(
+                question=question,
+                routes=["catalog"],
+                answer=retrieved.text,
+                evidence=list(retrieved.evidence or []),
+                caveats=list(retrieved.caveats or []),
+                unavailable=["web_search_disabled"],
+                synthetic_data=False,
+            ).model_dump(),
+        }
         return
 
-    # Final reasoning plan from findings (provisional Ask/Fetch already streamed above).
+    # User-facing Reasoning: restated ask + scope + findings. Writer plan stays off-panel.
     reasoning = _catalog_reasoning_text(
         retrieved.text,
         retrieved.evidence,
         retrieved.caveats,
         question=question,
         intention=intention,
+        summary=summary,
+        include_writer_plan=False,
     )
-    trace_step("reasoning", "Streaming response plan memo", chars=len(reasoning))
+    writer_plan = _writer_plan_for_response(
+        retrieved.text,
+        question=question,
+        intention=intention,
+    )
+    trace_step("reasoning", "Streaming user-facing rationale", chars=len(reasoning))
     yield from _deltas("reasoning", "\n\n" + reasoning if provisional else reasoning)
-    # Keep structured retrieval output intact instead of paying for a second model call.
+    # Prefer a written ResponseAgent briefing. Only skip the model for a few
+    # canonical fixed answers (e.g. composition-compare / kg_stats meta) — never for
+    # ordinary Cypher tables that need prose polishing.
     parts: list[str] = []
     text = _canonical_composition_compare_answer(retrieved.text)
-    direct_retrieval = (
-        intention.intent in {"product_count", "product_details", "count", "breakdown"}
-        and not bool(getattr(intention, "analysis", False))
-        and not bool(getattr(intention, "suggest", False))
-    )
-    if not text and (direct_retrieval or _findings_have_table(retrieved.text) or _findings_have_chart(retrieved.text)):
-        text = retrieved.text
     streamed_answer = False
     if text:
-        text = _finalize_analysis_answer(text, retrieved.text)
-        trace_step("response", "Preserved retrieved structured answer", chars=len(text))
+        text = _finalize_analysis_answer(text, retrieved.text, question=question)
+        trace_step("response", "Preserved canonical structured answer", chars=len(text))
+        yield from _deltas("answer", text)
+        streamed_answer = True
+    elif _is_simple_count_result(retrieved, intention, question):
+        from fashion_brain.ask import _write_from_answer_card
+
+        text = _write_from_answer_card(
+            platform,
+            question,
+            retrieved,
+            routes=routes,
+            intention=intention,
+        )
+        trace_step(
+            "response",
+            "Answer-card writer for kg_stats/simple count",
+            chars=len(text),
+        )
         yield from _deltas("answer", text)
         streamed_answer = True
     else:
         try:
-            trace_step("response", "Response model stream started")
-            for event in _iter_model(
-                build_model_provider(platform.settings),
-                response_messages(question, retrieved, reasoning_plan=reasoning),
-                timeout=_model_timeout(platform),
-            ):
-                # Keep the user-facing rationale deterministic; never stream private model thoughts.
-                if event["type"] in {"reasoning", "thinking"}:
-                    continue
-                if event["type"] == "answer":
-                    parts.append(event["text"])
-                    streamed_answer = True
-                yield event
-            text = "".join(parts).strip()
-            trace_step("response", "Response model stream finished", chars=len(text))
-        except ModelUnavailableError:
+            # Prefer structured card writer over streaming findings rewrite.
+            from fashion_brain.ask import _write_from_answer_card
+
+            text = _write_from_answer_card(
+                platform,
+                question,
+                retrieved,
+                routes=routes,
+                intention=intention,
+            )
+            if text.strip():
+                trace_step("response", "Answer-card writer", chars=len(text))
+                yield from _deltas("answer", text)
+                streamed_answer = True
+            else:
+                text = ""
+        except Exception:
             text = ""
-            trace_step("response", "Response model unavailable → template compose")
         if not text:
-            text = retrieved.text
-            trace_step("response", "Using retrieved findings after response model timeout", chars=len(text))
-        text = _finalize_analysis_answer(text, retrieved.text)
+            try:
+                trace_step("response", "Response model stream started")
+                for event in _iter_model(
+                    build_model_provider(platform.settings),
+                    response_messages(question, retrieved, reasoning_plan=writer_plan),
+                    timeout=_model_timeout(platform, ceiling=120.0),
+                ):
+                    # Keep the user-facing rationale deterministic; never stream private model thoughts.
+                    if event["type"] in {"reasoning", "thinking"}:
+                        continue
+                    if event["type"] == "answer":
+                        parts.append(event["text"])
+                        streamed_answer = True
+                    yield event
+                text = "".join(parts).strip()
+                trace_step("response", "Response model stream finished", chars=len(text))
+            except ModelUnavailableError:
+                text = ""
+                trace_step("response", "Response model unavailable → template compose")
+            if not text:
+                text = retrieved.text
+                trace_step("response", "Using retrieved findings after response model timeout", chars=len(text))
+            text = _finalize_analysis_answer(text, retrieved.text, question=question)
         # Replace any streamed draft that still had raw <!--fb:viz:--> markers / missing charts.
         if streamed_answer:
             yield {"type": "answer", "text": text, "replace": True}
@@ -806,7 +1031,7 @@ def _iter_catalog_stream(
             yield from _deltas("answer", text)
             streamed_answer = True
     if not streamed_answer:
-        text = _finalize_analysis_answer(text, retrieved.text)
+        text = _finalize_analysis_answer(text, retrieved.text, question=question)
     answer = _grounded(question, ["catalog", *routes], text, retrieved, platform)
     trace_step("sources", "Streaming evidence/references", count=len(answer.evidence or []))
     yield from _iter_source_events(answer.evidence)
@@ -1580,8 +1805,12 @@ def _run_with_progress(operation, *, progress: str | list[str], interval: float 
         executor.shutdown(wait=False)
 
 
-def _model_timeout(platform, *, ceiling: float = 20.0) -> float:
-    """Bound one model stage so a slow local or remote model cannot stall a chat turn."""
+def _model_timeout(platform, *, ceiling: float = 90.0) -> float:
+    """Bound one model stage so a slow local or remote model cannot stall a chat turn.
+
+    Default ceiling is high enough for local 31B briefings; pass a lower ceiling
+    for cheap router/tool calls that should fail fast.
+    """
 
     configured = getattr(platform.settings, "request_timeout_seconds", None)
     if configured is None or configured <= 0:
@@ -1591,6 +1820,36 @@ def _model_timeout(platform, *, ceiling: float = 20.0) -> float:
     return min(float(configured), ceiling)
 
 
+def _web_search_enabled(platform) -> bool:
+    return bool(getattr(getattr(platform, "settings", None), "web_search_enabled", False))
+
+
+def _thinking_implies_catalog(summary) -> bool:
+    """ThinkingBrain already grounded a catalog Scope — never send that ask to web."""
+
+    if summary is None:
+        return False
+    filters = dict(getattr(summary, "filters", None) or {})
+    if any(v not in (None, "") for v in filters.values()):
+        return True
+    if getattr(summary, "group_by", None):
+        return True
+    intent = str(getattr(summary, "actual_intent", "") or "").casefold()
+    return bool(
+        re.search(
+            r"\b(product|catalog|assortment|brand|buyer|breakdown|attribute-wise|count)\b",
+            intent,
+        )
+    )
+
+
+def _force_catalog_if_web_disabled(platform, route: Route, question: str) -> Route:
+    if route == "web_search" and not _web_search_enabled(platform):
+        LOGGER.info("web_search disabled → catalog for question=%s", (question or "")[:80])
+        return "catalog"
+    return route
+
+
 def _is_explicit_catalog_question(question: str, route: str) -> bool:
     if route in {"product_details", "specification"}:
         return True
@@ -1598,18 +1857,28 @@ def _is_explicit_catalog_question(question: str, route: str) -> bool:
     asks_catalog_action = bool(
         re.search(
             r"\b(how many|count|number of|distribution|breakdown|analy[sz]e|compare|rank|"
-            r"show|list|find|which|what)\b",
+            r"show|list|find|which|what|profile|overview)\b",
             text,
         )
     )
     names_catalog_data = bool(
         re.search(
             r"\b(products?|catalog|assortment|styles?|brands?|buyers?|categories?|"
-            r"garments?|materials?|colors?|availability|in[\s-]?stock|prices?|specifications?)\b",
+            r"garments?|materials?|colors?|colours?|availability|in[\s-]?stock|prices?|"
+            r"specifications?|construction|fit|composition|fabric)\b",
             text,
         )
     )
     if asks_catalog_action and names_catalog_data:
+        return True
+    if _question_requires_catalog(question, None):
+        return True
+    # "Analyze PRIMARK" / "Analyse Zara" — party/name after analyze is a catalog Scope ask.
+    if asks_catalog_action and re.search(
+        r"\b(?:analy[sz]e|profile|overview)\s+[A-Za-z0-9][\w&\-]{1,}\b",
+        text,
+        re.IGNORECASE,
+    ):
         return True
     if asks_catalog_action:
         from fashion_brain.ask import garment_type_from_question
@@ -1618,12 +1887,34 @@ def _is_explicit_catalog_question(question: str, route: str) -> bool:
     return False
 
 
-def _provisional_reasoning_plan(question: str, summary) -> str:
-    """Short plan shown while retrieval runs — no request echo / checklist."""
+def _question_requires_catalog(question: str, platform) -> bool:
+    """True when the question overlaps live KG schema/ontology tokens."""
 
+    try:
+        from fashion_brain.planning.schema_grounding import question_matches_catalog_schema
+
+        return bool(question_matches_catalog_schema(question, platform))
+    except Exception:
+        text = (question or "").casefold()
+        return bool(
+            re.search(
+                r"\b(products?|catalog|brand|buyer|material|fabric|price|availability|"
+                r"category|construction|fit|composition|garment|color|colour)\b",
+                text,
+            )
+        )
+
+
+def _provisional_reasoning_plan(question: str, summary) -> str:
+    """Short plan shown while retrieval runs — restates clarified ask when Scope is known."""
+
+    resolved = _resolved_ask_line(question, summary=summary)
     intent = str(getattr(summary, "actual_intent", "") or "").strip() or "catalog lookup"
     intent = intent[0].lower() + intent[1:] if intent else "catalog lookup"
-    parts = [f"Looking up: {intent}."]
+    parts = []
+    if resolved:
+        parts.append(resolved)
+    parts.append(f"Looking up: {intent}.")
     filters = getattr(summary, "filters", None) or {}
     group_by = getattr(summary, "group_by", None)
     scope = [f"{key.replace('_', ' ')} = {value}" for key, value in list(filters.items())[:6] if value]
@@ -1703,6 +1994,45 @@ def _canonical_composition_compare_answer(findings: str) -> str:
     return "\n\n".join(block for block in blocks if block).strip()
 
 
+def _resolved_ask_line(question: str, intention=None, summary=None) -> str:
+    """Restate the full ask after clarification (original + user final instruction)."""
+
+    from fashion_brain.ask import _is_grammar_party_name, sanitize_party_filters
+
+    ask = " ".join(str(question or "").split())
+    thinking = str(getattr(summary, "actual_intent", "") or "").strip()
+    if thinking and len(thinking) > 8 and thinking.casefold() not in {"other", "count", "product_count"}:
+        ask = thinking
+    # Prefer Intention filters (post-carry) over Thinking keyword leftovers like brand=explore.
+    filters = sanitize_party_filters(
+        dict(getattr(intention, "filters", None) or getattr(summary, "filters", None) or {})
+    )
+    for key in ("brand", "buyer"):
+        raw = filters.get(key)
+        if raw and _is_grammar_party_name(str(raw).split("|")[0].strip()):
+            filters.pop(key, None)
+    group_by = getattr(intention, "group_by", None) or getattr(summary, "group_by", None)
+    # Prefer a concrete restatement when Scope is known (e.g. after user said "category").
+    if filters or group_by:
+        bits = []
+        party = filters.get("brand") or filters.get("buyer")
+        if party and not _is_grammar_party_name(str(party).split("|")[0].strip()):
+            bits.append(str(party))
+        for key, value in filters.items():
+            if key in {"brand", "buyer"} or value in (None, ""):
+                continue
+            bits.append(f"{key.replace('_', ' ')}={value}")
+        if group_by:
+            bits.append(f"by {str(group_by).replace('_', ' ')}")
+        if bits:
+            return "Resolved ask: analyze " + "; ".join(bits) + "."
+    if ask and not _is_grammar_party_name(ask.split()[0] if ask.split() else ""):
+        return f"Resolved ask: {ask}."
+    if ask:
+        return f"Resolved ask: {ask}."
+    return ""
+
+
 def _catalog_reasoning_text(
     findings: str,
     evidence: list | None = None,
@@ -1710,10 +2040,12 @@ def _catalog_reasoning_text(
     *,
     question: str = "",
     intention=None,
+    summary=None,
+    include_writer_plan: bool = False,
 ) -> str:
-    """User-facing rationale based on the request, retrieval result, and answer shape.
+    """User-facing rationale: restated ask + scope + findings. Not ResponseAgent instructions.
 
-    This is a concise explanation of decisions and evidence, not private chain-of-thought.
+    Writer-format guidance stays out of the Reasoning panel unless ``include_writer_plan``.
     """
 
     text = (findings or "").strip()
@@ -1726,6 +2058,8 @@ def _catalog_reasoning_text(
             caveats=caveats,
             question=question,
             intention=intention,
+            summary=summary,
+            include_writer_plan=include_writer_plan,
         )
 
     has_table = "|" in text and "---" in text
@@ -1804,33 +2138,64 @@ def _catalog_reasoning_text(
     if not text:
         result = "The retrieval returned no product findings."
     blocks = []
+    resolved = _resolved_ask_line(question, intention=intention, summary=summary)
+    if resolved:
+        blocks.append(resolved)
     if shared_catalogs:
         blocks.append("Compared shared values across the selected catalogs.")
     elif scope:
         blocks.append("Checked: " + "; ".join(scope) + ".")
     blocks.append(result)
-    # Skip meta "answer approach" for plain single-count replies — the answer itself is enough.
-    simple_count = (
-        not shared_catalogs
-        and not has_table
-        and not has_chart
-        and not scope
-        and bool(re.search(r"\bthere are\b.+\bproducts?\b", result.casefold()))
-    )
-    if not simple_count:
-        plan = (
-            "List only values shared by every selected catalog, with a separate product count for each."
-            if shared_catalogs
-            else _response_plan_for_findings(
-                question=question,
-                findings=text,
-                has_table=has_table,
-                has_chart=has_chart,
-                analysis=False,
-            )
+    # Writer instructions are for ResponseAgent only — never show in the Reasoning panel.
+    if include_writer_plan:
+        simple_count = (
+            not shared_catalogs
+            and not has_table
+            and not has_chart
+            and not scope
+            and bool(re.search(r"\bthere are\b.+\bproducts?\b", result.casefold()))
         )
-        blocks.append(plan)
+        if not simple_count:
+            plan = (
+                "List only values shared by every selected catalog, with a separate product count for each."
+                if shared_catalogs
+                else _response_plan_for_findings(
+                    question=question,
+                    findings=text,
+                    has_table=has_table,
+                    has_chart=has_chart,
+                    analysis=False,
+                )
+            )
+            blocks.append(plan)
     return "\n\n".join(blocks)[:1600]
+
+
+def _writer_plan_for_response(
+    findings: str,
+    *,
+    question: str = "",
+    intention=None,
+) -> str:
+    """ResponseAgent-only format guidance (not shown in the Reasoning panel)."""
+
+    text = (findings or "").strip()
+    has_table = "|" in text and "---" in text
+    has_chart = "```chart" in text or "```fbchart" in text
+    is_analysis = "product analysis for" in text.casefold() or "attribute-wise" in text.casefold()
+    shared_catalogs = bool(
+        getattr(intention, "intent", None) == "shared_products"
+        or "values present in every selected product catalog" in text.casefold()
+    )
+    if shared_catalogs:
+        return "List only values shared by every selected catalog, with a separate product count for each."
+    return _response_plan_for_findings(
+        question=question,
+        findings=text,
+        has_table=has_table,
+        has_chart=has_chart,
+        analysis=is_analysis,
+    )
 
 
 def _response_plan_for_findings(
@@ -1846,32 +2211,61 @@ def _response_plan_for_findings(
     q = (question or "").casefold()
     f = (findings or "").casefold()
     if "no grounded" in f or "0 products" in f or "0 rows" in f:
-        return "Nothing matched — suggest one broader question; skip a chart."
+        return (
+            "Nothing matched — write 2–3 honest sentences, offer one broader follow-up, "
+            "and skip a chart. Do not invent rows."
+        )
     if analysis:
-        return "Summarize metrics, keep useful tables/charts, and close with the main takeaways."
+        return (
+            "Write a short merchandising briefing: opening summary, keep useful tables/charts, "
+            "and close with the main takeaways. Do not collapse into one line."
+        )
     if "example products" in f or "showing up to" in f:
-        return "Lead with the total, keep any brand/category mix compact, and show only a few examples if present."
+        return (
+            "Open with the total in a short paragraph, keep any brand/category mix compact, "
+            "show only a few examples, and close with one follow-up."
+        )
     trend_ask = any(
         tok in q for tok in ("trend", "trends", "trending", "average price", "price change", "over time")
     ) or "price change trend" in f or "probable drivers" in f
     if trend_ask and (has_chart or "probable drivers" in f):
-        return "Lead with the recorded trend, keep the chart and evidence-based drivers, and avoid invented causes."
+        return (
+            "Explain the recorded trend in a short paragraph, keep the chart and evidence-based "
+            "drivers, and avoid invented causes."
+        )
     composition_compare = (
         "composition compare" in f
         or ("composition" in q and any(tok in q for tok in ("compare", "across", "vs", "versus", "similar")))
         or ("material mix" in f and "matching" in f)
     )
     if composition_compare:
-        return "Compare brands side by side, keep each material mix distinct, and close with a data-backed takeaway."
+        return (
+            "Compare brands side by side with a lead paragraph, keep each material mix distinct, "
+            "and close with a data-backed takeaway."
+        )
     if has_chart:
-        return "Keep the chart from the findings and add a brief explanation without duplicating it as a table."
+        return (
+            "Open with what the chart shows, keep the chart from the findings, and add a short "
+            "explanation without duplicating it as a table."
+        )
     if has_table and any(tok in q for tok in ("most", "rank", "top", "compare", "vs", "versus", "by ")):
-        return "Introduce the result briefly and keep the ranking/breakdown table."
+        return (
+            "Write a short lead paragraph on the result, keep the ranking/breakdown table, "
+            "and add one closing takeaway."
+        )
     if has_table:
-        return "Explain briefly and keep the breakdown table."
+        return (
+            "Explain the result in a short paragraph, keep the breakdown table, and close briefly."
+        )
     if any(tok in q for tok in ("how many", "count", "total")):
-        return "Answer with the count directly."
-    return "Answer directly; use a small table only when several values need comparison."
+        return (
+            "State the count in a short paragraph that names the scope; add any supporting mix "
+            "from findings; never answer with a single bare sentence only."
+        )
+    return (
+        "Answer in a clear short briefing (opening + evidence if any + brief close). "
+        "Use a small table when several values need comparison. Avoid one-line replies."
+    )
 
 
 def _analysis_reasoning_text(
@@ -1881,18 +2275,23 @@ def _analysis_reasoning_text(
     caveats: list | None = None,
     question: str = "",
     intention=None,
+    summary=None,
+    include_writer_plan: bool = False,
 ) -> str:
-    """Explain the analysis scope, leading findings, and answer presentation."""
+    """Explain the analysis scope and leading findings (user-facing Reasoning panel)."""
 
     ask = " ".join(str(question or "").split())
     if len(ask) > 140:
         ask = ask[:137] + "…"
     blocks: list[str] = []
+    resolved = _resolved_ask_line(question, intention=intention, summary=summary)
+    if resolved:
+        blocks.append(resolved)
     filters = getattr(intention, "filters", None) or {}
     scope = [f"{key.replace('_', ' ')} = {value}" for key, value in filters.items() if value]
     if scope:
         blocks.append("I'm analyzing this scope: " + "; ".join(scope) + ".")
-    elif ask:
+    elif ask and not resolved:
         blocks.append(f"I'm treating this as an analysis of: {ask}.")
     overview = next((ln for ln in lines if ln.lower().startswith("product analysis for")), "")
     if overview:
@@ -1953,14 +2352,15 @@ def _analysis_reasoning_text(
             continue
         blocks.append("Data note: " + note)
         break
-    plan = _response_plan_for_findings(
-        question=question,
-        findings="\n".join(lines),
-        has_table=any(ln.startswith("|") for ln in lines),
-        has_chart=any("```chart" in ln or "```fbchart" in ln for ln in lines),
-        analysis=True,
-    )
-    blocks.append(plan)
+    if include_writer_plan:
+        plan = _response_plan_for_findings(
+            question=question,
+            findings="\n".join(lines),
+            has_table=any(ln.startswith("|") for ln in lines),
+            has_chart=any("```chart" in ln or "```fbchart" in ln for ln in lines),
+            analysis=True,
+        )
+        blocks.append(plan)
     return "\n\n".join(blocks)[:2200] if blocks else "No grounded product findings were returned."
 
 
@@ -1974,10 +2374,22 @@ def _strip_fb_viz_markers(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
-def _finalize_analysis_answer(answer: str, findings: str) -> str:
-    """Strip internal viz markers and restore missing ```chart blocks from findings."""
+def _finalize_analysis_answer(answer: str, findings: str, *, question: str = "") -> str:
+    """Strip internal viz markers, restore charts, and polish user-facing wording."""
 
-    return _append_missing_analysis_viz(_strip_fb_viz_markers(answer), findings)
+    text = _append_missing_analysis_viz(_strip_fb_viz_markers(answer), findings)
+    try:
+        from fashion_brain.agents.answer_format import repair_chart_blocks
+
+        text = repair_chart_blocks(text)
+    except Exception:
+        pass
+    try:
+        from fashion_brain.agents.answer_formation import polish_final_answer
+
+        return polish_final_answer(text, question=question, findings=findings)
+    except Exception:
+        return text
 
 
 def _append_missing_analysis_viz(answer: str, findings: str) -> str:
@@ -2063,6 +2475,16 @@ def _evidence_reasoning(evidence: list | None, *, fallback: str) -> str:
 
 
 def _deltas(kind: str, text: str, step: int = 64):
+    # Keep ```chart … ``` blocks atomic so the UI never renders mid-JSON.
+    if kind == "answer":
+        try:
+            from fashion_brain.agents.answer_format import chunk_preserving_charts
+
+            for piece in chunk_preserving_charts(text, step):
+                yield {"type": kind, "text": piece}
+            return
+        except Exception:
+            pass
     for index in range(0, len(text), step):
         yield {"type": kind, "text": text[index : index + step]}
 

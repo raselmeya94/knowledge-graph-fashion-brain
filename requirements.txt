@@ -13,3 +13,4 @@ pypdf>=5.0,<6
 python-multipart>=0.0.9
 sentence-transformers>=3.0,<4
 numpy>=1.26,<3
+rapidfuzz>=3.0,<4; python_version>='3.11'

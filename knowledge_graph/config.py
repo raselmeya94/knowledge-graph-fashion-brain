@@ -39,9 +39,10 @@ class Settings(BaseSettings):
     neo4j_password: str = ""
     neo4j_database: str = "neo4j"
     api_token: str = ""
-    api_host: str = "127.0.0.1"
+    # Bind 0.0.0.0 so LAN devices can reach the APIs; kg_url stays loopback (same host).
+    api_host: str = "0.0.0.0"
     api_port: int = 8000
-    kg_api_host: str = "127.0.0.1"
+    kg_api_host: str = "0.0.0.0"
     kg_api_port: int = 8001
     kg_url: str = "http://127.0.0.1:8001"
     jwt_secret: str = ""
@@ -54,11 +55,21 @@ class Settings(BaseSettings):
     extraction_mode: str = "deterministic"
     # --- Fashion Brain only (shared .env); KG API ignores these at runtime ---
     answer_mode: str = "llm"
+    # Outer LangGraph web_search route (OpenRouter). Off → catalog/direct only.
+    web_search_enabled: bool = False
     text2cypher_enabled: bool = True
     graph_rag_mode: str = "text2cypher"
     simple_kg_rag: bool = True
     entity_linker_enabled: bool = True
     schema_ttl_seconds: int = 600
+    # Persisted live-schema + categorical value catalog (under DATA_ROOT).
+    runtime_catalog_dir: Path = Path("generated/runtime_catalog")
+    # 0 → fall back to schema_ttl_seconds at runtime.
+    runtime_catalog_ttl_seconds: int = 0
+    runtime_catalog_max_values_per_key: int = 500
+    runtime_catalog_force_refresh: bool = False
+    # Short-TTL in-memory Neo4j Q&A findings cache (Fashion Brain); 0 disables.
+    query_cache_ttl_seconds: float = 90.0
     cypher_timeout_seconds: float = 10.0
     cypher_max_rows: int = 200
     fewshot_k: int = 0
@@ -144,6 +155,18 @@ class Settings(BaseSettings):
     @property
     def generated(self) -> Path:
         return self.path(self.generated_dir)
+
+    @property
+    def runtime_catalog(self) -> Path:
+        return self.path(self.runtime_catalog_dir)
+
+    def runtime_catalog_ttl(self) -> int:
+        """Effective TTL seconds for persisted runtime catalog artifacts."""
+
+        ttl = int(self.runtime_catalog_ttl_seconds or 0)
+        if ttl > 0:
+            return ttl
+        return max(int(self.schema_ttl_seconds or 600), 60)
 
     @property
     def ontology_file(self) -> Path:

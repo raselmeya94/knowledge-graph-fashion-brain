@@ -160,6 +160,9 @@ class EvidenceItem(BaseModel):
     node_id: str | None = None
     relationship: str | None = None
     synthetic: bool = True
+    # Provenance: what the asker requested vs what this evidence actually applied.
+    requested_filters: dict[str, Any] = Field(default_factory=dict)
+    applied_filters: dict[str, Any] = Field(default_factory=dict)
 
 
 class GroundedAnswer(BaseModel):

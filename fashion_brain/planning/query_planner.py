@@ -16,12 +16,50 @@ def plan_retrieve(intention: Intention, question: str = "") -> Intention:
     """Fill retrieve_mode, response_type, metrics, operations when missing."""
 
     text = f"{question} {getattr(intention, 'thinking', '') or ''}".casefold()
-    analysis = bool(getattr(intention, "analysis", False))
     intent = str(intention.intent or "")
+    # Product-spec sheet asks must never become assortment analysis (mode sheet path).
+    if intent in {"specification", "product_details"} or bool(getattr(intention, "suggest", False)):
+        intention.analysis = False
+        intention.retrieve_mode = "template"
+        intention.response_type = intention.response_type or (
+            "specs" if intent in {"specification", "product_details"} else intention.response_type
+        )
+        intention.metrics = []
+        intention.operations = ["retrieve"]
+        return intention
+    analysis = bool(getattr(intention, "analysis", False))
     group_by = intention.group_by
     filters = dict(intention.filters or {})
     count_entity = str(getattr(intention, "count_entity", None) or "").strip()
     facet_count = bool(count_entity) and count_entity.casefold() not in {"product", "products"}
+    shape = str(getattr(intention, "query_shape", None) or "").strip() or None
+    if not shape:
+        try:
+            from fashion_brain.planning.schema_grounding import detect_query_shape
+
+            shape = detect_query_shape(question, schema_attrs=intention.available_attributes)
+        except Exception:
+            shape = None
+        if shape:
+            intention.query_shape = shape
+
+    if shape == "shared_overlap" and intent not in {"shared_products", "shared"}:
+        intention.intent = "shared_products"
+        intent = "shared_products"
+    if shape == "facet_listing" and not filters and count_entity:
+        # Prefer listing products via the resolved facet entity.
+        intention.metrics = list(dict.fromkeys([*(intention.metrics or []), "facet_listing"]))
+    if shape == "entity_frequency":
+        intention.metrics = list(dict.fromkeys([*(intention.metrics or []), "entity_frequency"]))
+        if not intention.group_by and count_entity:
+            intention.group_by = count_entity
+            group_by = count_entity
+    if shape == "category_rollup":
+        intention.operations = list(dict.fromkeys([*(intention.operations or []), "category_rollup"]))
+    if shape == "volatility":
+        intention.operations = list(dict.fromkeys([*(intention.operations or []), "volatility"]))
+    if shape == "state_transition":
+        intention.operations = list(dict.fromkeys([*(intention.operations or []), "state_transition"]))
 
     if not intention.response_type:
         intention.response_type = _response_type(intent, analysis, text, group_by, facet_count)
@@ -87,11 +125,22 @@ def _operations(intent: str, analysis: bool, text: str, group_by: str | None) ->
 
 def _retrieve_mode(intention: Intention, text: str) -> str:
     intent = str(intention.intent or "")
+    shape = str(getattr(intention, "query_shape", None) or "")
+    ops = {str(op) for op in (intention.operations or [])}
     if intent in {"system_meta", "live_sql", "news", "shared"}:
+        return "template"
+    if shape in {"category_rollup", "volatility", "state_transition"} or ops & {
+        "category_rollup",
+        "volatility",
+        "state_transition",
+    }:
+        return "template"
+    if shape == "entity_frequency" or "entity_frequency" in (intention.metrics or []):
         return "template"
     if re.search(r"\b(trend|history|historical|price change|availability change)\b", text):
         return "template"
-    if intention.analysis and not intention.group_by:
+    # Full (all facets) and focused (one group_by facet) share the analytical engine.
+    if intention.analysis:
         return "analytical_tool"
     if intent == "shared_products":
         return "text2cypher"
@@ -99,4 +148,6 @@ def _retrieve_mode(intention: Intention, text: str) -> str:
         return "template"
     if intent in {"product_count", "count", "breakdown"} and not intention.analysis:
         return "template"
+    if shape == "facet_listing":
+        return "text2cypher"
     return "text2cypher"

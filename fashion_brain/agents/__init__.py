@@ -3,11 +3,24 @@
 from fashion_brain.llm import build_model_provider
 
 from fashion_brain.agents.contracts import (
+    ClarificationItem,
+    ClarificationState,
+    ClarifyResult,
     ContextDecision,
     GraphChoice,
     Intention,
     IntentSummary,
+    ReadyResult,
     Retrieved,
+    UnderstandingPlan,
+    ValidatedFilter,
+    ValidatedIntent,
+)
+from fashion_brain.agents.query_understanding import (
+    QueryUnderstandingAgent,
+    apply_validated_intent,
+    clarification_awaiting,
+    store_understanding,
 )
 from fashion_brain.agents.conversation_context import ConversationContextAgent
 from fashion_brain.agents.product_spec import (
@@ -43,6 +56,9 @@ from fashion_brain.agents.entity_extract import EntityExtractAgent, ExtractedEnt
 from fashion_brain.agents.text2cypher import Text2CypherAgent
 
 __all__ = [
+    "ClarificationItem",
+    "ClarificationState",
+    "ClarifyResult",
     "ContextDecision",
     "ConversationContextAgent",
     "EntityExtractAgent",
@@ -53,6 +69,8 @@ __all__ = [
     "IntentionAgent",
     "IntentSummary",
     "ProductSpecificationAgent",
+    "QueryUnderstandingAgent",
+    "ReadyResult",
     "RESPONSE_SYSTEM",
     "SPEC_ANCHOR_FIELDS",
     "SPEC_CORE_FIELDS",
@@ -63,13 +81,18 @@ __all__ = [
     "SPECIFICATION_RESPONSE_SYSTEM",
     "ResponseAgent",
     "Retrieved",
+    "UnderstandingPlan",
+    "ValidatedFilter",
+    "ValidatedIntent",
     "SAMPLE_DESIGN_SYSTEM",
     "SampleDesignAgent",
     "THINKING_SYSTEM",
     "Text2CypherAgent",
     "ThinkingBrain",
     "_specification_text",
+    "apply_validated_intent",
     "build_model_provider",
+    "clarification_awaiting",
     "findings_are_product_specification",
     "parse_slash_command",
     "requests_sample_design",
@@ -77,5 +100,6 @@ __all__ = [
     "sample_design_messages",
     "sample_design_sheet",
     "sample_image_prompt",
+    "store_understanding",
     "ungrounded_numbers",
 ]

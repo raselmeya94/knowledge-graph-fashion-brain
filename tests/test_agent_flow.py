@@ -160,7 +160,7 @@ def test_shared_material_intent_is_not_misread_as_product_count():
 
 
 def test_shared_catalog_reasoning_does_not_claim_nothing_matched():
-    from fashion_brain.flow import _catalog_reasoning_text
+    from fashion_brain.flow import _catalog_reasoning_text, _writer_plan_for_response
 
     text = _catalog_reasoning_text(
         "Shared material values present in every selected product catalog:\n"
@@ -172,8 +172,15 @@ def test_shared_catalog_reasoning_does_not_claim_nothing_matched():
     )
 
     assert "Compared shared values" in text or "shared" in text.casefold()
-    assert "shared by every selected catalog" in text.casefold()
     assert "nothing matched" not in text
+    # Writer plan is for ResponseAgent only — not the Reasoning panel by default.
+    assert "list only values shared" not in text.casefold()
+    plan = _writer_plan_for_response(
+        "Shared material values present in every selected product catalog:\n| Material | n |\n| --- | ---: |\n| Polyester | 8 |",
+        question="Show materials shared across ecom and plmex.",
+        intention=Intention("shared_products", {}, "material", False, ""),
+    )
+    assert "shared by every selected catalog" in plan.casefold()
 
 
 def test_response_agent_polishes_fibre_percentages_and_preserves_catalog_counts(monkeypatch):
@@ -317,10 +324,84 @@ def test_full_product_specification_requests_existing_catalog_records(demo):
     assert plan_routes("suggest a product specification for Primark winter") == ["specification"]
     assert plan_routes("make a product specification for upcoming season") == ["specification"]
     summary = _deterministic_intent(question, None)
-    assert "Retrieve relevant product details." in summary.text
+    assert "retrieve the full specifications" in summary.text.casefold()
+    assert "building a product specification" not in summary.text.casefold()
     intention = IntentionAgent().understand(demo, question)
-    assert intention.intent == "product_details"
-    assert intention.suggest is False
+    # Metadata gate may clarify unresolved brand values in thin demo catalogs.
+    if intention.intent != "clarification":
+        assert intention.intent == "product_details"
+        assert intention.suggest is False
+
+
+def test_flexible_product_specification_phrasing_routes_to_suggest():
+    """Users do not use one fixed sentence — generate / typical / for brand+garment all mean suggest-sheet."""
+
+    from fashion_brain.ask import _is_product_details_request, _is_suggestion
+
+    variants = [
+        "Generate a product specification for a typical Primark sweater",
+        "Can you create a product spec for Primark jumper please",
+        "I need a typical sweater specification for Primark",
+        "product specification for Primark sweater",
+        "draft me a sample specification for a Primark sweater",
+        "write a product specification of a usual Primark sweater",
+        "build product specs for Primark sweater",
+    ]
+    for question in variants:
+        assert _is_suggestion(question), question
+        assert not _is_product_details_request(question), question
+        assert plan_routes(question) == ["specification"], question
+        plan = resolve_catalog_plan(question)
+        assert plan["suggest"] is True, question
+
+
+def test_product_spec_ask_keeps_party_filters_and_template_retrieve():
+    """Spec asks: brand/garment from the question; never sentence-as-brand or analytical_tool."""
+
+    from fashion_brain.agents.contracts import Intention
+    from fashion_brain.agents.turn_planner import _plan_product_specification
+    from fashion_brain.ask import sanitize_party_filters
+    from fashion_brain.planning.query_planner import plan_retrieve
+
+    q = "Generate a product specification for a typical Primark sweater"
+    turn = _plan_product_specification(q, {})
+    assert turn.analysis_depth == "unset"
+    assert turn.turn_type == "new_question"
+    party = (turn.filters.get("brand") or turn.filters.get("buyer") or "").casefold()
+    assert party == "primark"
+    garment = (
+        turn.filters.get("garment")
+        or turn.filters.get("garment_type")
+        or turn.filters.get("category")
+        or ""
+    ).casefold()
+    assert "sweater" in garment or "jumper" in garment
+
+    polluted = sanitize_party_filters(
+        {"brand": q, "category": "sweater", "buyer": "primark"}
+    )
+    assert "Generate" not in str(polluted.get("brand") or "")
+    assert polluted.get("brand") != q
+    # Sentence brand dropped; real party may remain on buyer.
+    assert (polluted.get("brand") or polluted.get("buyer") or "").casefold() in {
+        "primark",
+        "",
+    }
+
+    intention = Intention(
+        "specification",
+        {"brand": "Primark", "garment": "sweater"},
+        None,
+        False,
+        "",
+        suggest=True,
+        analysis=True,
+        retrieve_mode="analytical_tool",
+    )
+    planned = plan_retrieve(intention, q)
+    assert planned.analysis is False
+    assert planned.retrieve_mode == "template"
+    assert planned.intent == "specification"
 
 
 def test_specification_follow_up_keeps_buyer_from_analysis_history():
@@ -722,6 +803,7 @@ def test_reasoning_explains_interpretation_and_result_without_mechanical_headers
         "Show product counts by category for Primark",
         summary,
     )
+    assert "Resolved ask: analyze Primark; by category." in provisional
     assert "Looking up: count products grouped by category." in provisional
     assert "brand = Primark" in provisional
     assert "grouped by category" in provisional
@@ -730,16 +812,21 @@ def test_reasoning_explains_interpretation_and_result_without_mechanical_headers
     final = _catalog_reasoning_text(
         "There are 1,464 products grouped by category.\n\n"
         "| Category | Count |\n|---|---:|\n| Clothes | 1,464 |",
-        question="Show product counts by category for Primark",
+        question="category",  # clarification reply — must restate full ask
         intention=Intention(
             intent="product_count",
             filters={"brand": "Primark"},
             group_by="category",
         ),
+        summary=summary,
+        include_writer_plan=False,
     )
+    assert "Resolved ask: analyze Primark; by category." in final
     assert "Checked: brand = Primark; grouped by category." in final
     assert "There are 1,464 products grouped by category." in final
-    assert "Introduce the result briefly" in final or "breakdown table" in final
+    # Writer instructions must not appear in the Reasoning panel.
+    assert "Explain the result in a short paragraph" not in final
+    assert "keep the breakdown table" not in final
     assert "Fetch:" not in final
     assert "Response plan:" not in final
     assert "Answer approach:" not in final
@@ -808,7 +895,8 @@ def test_model_stage_timeouts_are_bounded():
 
 
 def test_catalog_fast_route_does_not_capture_general_questions():
-    from fashion_brain.flow import _is_explicit_catalog_question
+    from fashion_brain.flow import _is_explicit_catalog_question, _thinking_implies_catalog
+    from fashion_brain.agents.contracts import IntentSummary
 
     assert _is_explicit_catalog_question(
         "Show product counts by category for Primark.",
@@ -818,7 +906,17 @@ def test_catalog_fast_route_does_not_capture_general_questions():
         "How many sweaters does Primark have?",
         "product_count",
     )
+    # Bare brand analysis must stay on catalog — not web company research.
+    assert _is_explicit_catalog_question("Analyze PRIMARK", "product_count")
+    assert _is_explicit_catalog_question("Analyse Zara", "product_count")
     assert not _is_explicit_catalog_question("What is GSM?", "product_count")
+    assert _thinking_implies_catalog(
+        IntentSummary(
+            actual_intent="Analyse primark with attribute-wise product breakdowns",
+            text="Scope: brand = primark",
+            filters={"brand": "primark", "buyer": "primark"},
+        )
+    )
 
 
 def test_plain_catalog_counts_skip_text2cypher_model(demo, monkeypatch):

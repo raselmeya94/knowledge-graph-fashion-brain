@@ -32,7 +32,8 @@ def _headers(settings, clearance: str | None = None, *, content_type: str | None
 
 def _timeout(settings) -> float:
     timeout = getattr(settings, "request_timeout_seconds", None)
-    return min(float(timeout), 20.0) if timeout and timeout > 0 else 20.0
+    # Product listings / temporal templates often need >20s on large ecom graphs.
+    return min(float(timeout), 90.0) if timeout and timeout > 0 else 60.0
 
 
 def _raise_kg(response: httpx.Response, action: str) -> None:

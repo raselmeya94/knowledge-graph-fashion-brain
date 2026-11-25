@@ -1,0 +1,313 @@
+# Context-Aware Query Understanding & Progressive Clarification Agent
+
+## 1. Objective
+
+The Query Understanding Agent must accurately understand the user's analytical intent before generating or executing any data query.
+
+The agent must not make assumptions about vague, incomplete, or ambiguous requests. Instead, it should leverage conversation history, available Knowledge Graph (KG) metadata, and the dataset's actual schema and value distributions to progressively clarify the user's intent through intelligent, context-aware follow-up questions.
+
+The goal is to ensure that the final analytical request is sufficiently precise, grounded in available data, and aligned with what the user actually wants.
+
+---
+
+## 2. Knowledge Awareness & Metadata Prerequisites
+
+Before interpreting user questions, the agent must have access to a metadata registry describing all available Knowledge Graph sources.
+
+The metadata should contain:
+
+- Available KG sources and their descriptions
+- Source-specific attributes, columns, and node properties
+- Attribute descriptions and semantic meanings
+- Unique values for categorical attributes, where applicable
+- Frequency counts and value distributions
+- Available numerical fields and their statistical summaries
+- Relationships between entities and nodes
+- Data coverage and availability information
+
+For example, the `Category` attribute in a product dataset may contain:
+
+| Category | Count |
+|---|---:|
+| Sweater | 18,450 |
+| Polo | 12,300 |
+| T-Shirt | 9,820 |
+| Trouser | 7,600 |
+| Jacket | 4,250 |
+
+The agent should understand not only that `Category` exists, but also what values it contains, their meanings, and how they can be used to answer analytical questions.
+
+Metadata must be retrieved dynamically from the relevant source rather than relying on hardcoded assumptions or a fixed list of attributes.
+
+---
+
+## 3. Conversation History First
+
+Whenever a new user question arrives, the agent must first inspect the previous conversation context to determine whether the user's current request is a continuation of an existing analytical discussion.
+
+It should identify:
+
+- Previously selected KG sources
+- Previously selected brands, categories, or attributes
+- Filters already established by the user
+- The user's previous answers to clarification questions
+- The analytical scope that has already been agreed upon
+- Whether the current message modifies, extends, or replaces the previous request
+
+If sufficient context already exists to understand the current question, the agent should reuse it without unnecessarily asking the user to repeat information.
+
+If no relevant conversation context exists, the agent should begin understanding the question using the available metadata.
+
+---
+
+## 4. Dynamic & Relevant Metadata Retrieval
+
+The metadata registry may contain a large amount of information across multiple KG sources. The agent must never load or present the entire metadata registry unnecessarily.
+
+Instead, it should retrieve only the metadata relevant to the user's current question and progressively expand it as the conversation develops.
+
+For example, if the user asks:
+
+> Show me red sweaters.
+
+The agent should identify the relevant metadata sections:
+
+- Color → Red and its available color variations
+- Category / Garment Type → Sweater and related available classifications
+- Brand, if mentioned or required by the existing context
+- Other relevant attributes only if needed to resolve ambiguity
+
+It should not expose or process unrelated metadata such as supplier, shipment date, gauge, material composition, or buyer unless these fields become relevant to the user's request.
+
+Metadata retrieval must be query-driven, selective, and expandable.
+
+---
+
+## 5. Progressive Intent Clarification
+
+The agent must act as an intelligent analytical assistant that guides users from a vague question toward a well-defined analytical request.
+
+Clarification should be performed progressively, not by asking all possible questions at once.
+
+At every step, the agent should:
+
+1. Understand the user's current request.
+2. Identify what is already clear.
+3. Identify the most important unresolved ambiguity.
+4. Retrieve relevant metadata to understand the available choices.
+5. Ask one focused clarification question.
+6. Incorporate the user's answer into the conversation context.
+7. Re-evaluate whether the request is sufficiently clear.
+8. Continue clarification only when necessary.
+
+Each follow-up question must be meaningful and based on the actual available data.
+
+---
+
+## 6. Example: Ambiguous Brand Analysis
+
+### Initial user question
+
+> Analyze PRIMARK.
+
+The agent should recognize that:
+
+- The brand is identified as PRIMARK.
+- The user wants an analysis.
+- The analytical scope is not yet defined.
+- The dataset may support several types of analysis.
+
+The agent should retrieve PRIMARK-specific metadata and determine which analytical dimensions are available.
+
+### Clarification — Step 1
+
+The agent should ask:
+
+> What would you like to analyze about PRIMARK? For example, you can explore product categories, colors, gender distribution, pricing, materials, or seasonal trends.
+
+If the user responds:
+
+> Sweater category.
+
+The agent should update the analytical context:
+
+- Brand: PRIMARK
+- Category: Sweater
+- Intent: Analysis
+- Analysis scope: Not yet defined
+
+### Clarification — Step 2
+
+The agent should now understand that the user is interested in sweater products within PRIMARK, but it still needs to determine the depth of analysis.
+
+It should ask:
+
+> Would you like a complete analysis of PRIMARK's sweater products, or are you interested in a specific aspect such as color, gender, pricing, material composition, or season?
+
+If the user responds:
+
+> Full analysis.
+
+The agent should recognize this as a request for a comprehensive analysis of the selected product scope, not another request to select an individual attribute.
+
+---
+
+## 7. Define the Analytical Scope Before Execution
+
+When the user requests a full analysis, the agent must inspect the available attributes for the selected source and scope, and identify the analytical dimensions that can meaningfully contribute to the analysis.
+
+For example, a complete sweater analysis of PRIMARK may include:
+
+- Product volume and distribution
+- Color distribution
+- Gender distribution
+- Price distribution and price ranges
+- Material and composition
+- Seasonality
+- Product types and subcategories
+- Gauge distribution, if available and relevant
+- Other meaningful attributes present in the dataset
+
+The agent should not assume these fields are available. It must verify them against the selected source's actual metadata.
+
+When the user requests a full analysis, the agent should not continue asking the user to select every attribute individually. The agent should interpret "full analysis" as permission to explore all relevant available dimensions and organize the findings into a meaningful analytical report.
+
+Before execution, it may provide a concise confirmation of the understood scope if needed.
+
+---
+
+## 8. Deep-Dive Clarification Path
+
+If the user does not want a complete analysis and instead wants a specific analytical direction, the agent should continue progressively narrowing the scope.
+
+For example:
+
+**User:** Analyze PRIMARK.
+
+**Agent:** Which area would you like to explore: category, color, gender, pricing, materials, or season?
+
+**User:** Sweater.
+
+**Agent:** Within PRIMARK sweaters, what would you like to investigate: color trends, gender distribution, pricing, material composition, or a complete overview?
+
+**User:** Color.
+
+**Agent:** Would you like an overall color distribution, a comparison of colors by gender, or an analysis of the most common colors across sweater styles?
+
+The agent should continue this process until the user has provided sufficient detail for a precise analysis.
+
+Each clarification step should narrow the analytical scope while preserving all previously confirmed context.
+
+---
+
+## 9. Metadata-Grounded Clarification Intelligence
+
+The agent must know the available analytical possibilities before asking users to choose between them.
+
+It must never suggest attributes, filters, dimensions, metrics, or analytical options that are not supported by the selected KG source, unless clearly presented as an unavailable option requiring another data source.
+
+For example, if PRIMARK's dataset contains:
+
+- Category
+- Color
+- Gender
+- Composition
+- Price
+- Season
+- Product Type
+
+The agent can use these fields to guide clarification.
+
+If the dataset does not contain supplier information or product sales data, the agent must not offer supplier-performance analysis or sales-performance analysis as though these were available.
+
+Clarification questions must be grounded in actual metadata, not generic LLM assumptions.
+
+---
+
+## 10. Ambiguity Detection & Clarification Policy
+
+The agent should evaluate the user's request based on the following:
+
+| Intent dimension | Example | Clarification needed? |
+|---|---|---|
+| Source / Brand | PRIMARK | Only if source is ambiguous or unspecified |
+| Product scope | Sweater | If needed to identify the intended products |
+| Attribute | Color | If the analytical direction is unclear |
+| Metric | Count, percentage, average price | If multiple interpretations matter |
+| Comparison | PRIMARK vs ZARA | Clarify only if comparison scope is ambiguous |
+| Analysis depth | Full analysis | No further dimension-selection questions needed |
+| Time / season | Winter 2028 | Clarify only if needed |
+| Output format | Chart, report, table | Ask only if format materially matters |
+
+The agent should prioritize clarification based on the ambiguity that has the greatest impact on the final result.
+
+It must avoid:
+
+- Asking the same question repeatedly
+- Asking for information already present in conversation history
+- Asking unnecessary questions when the request is already clear
+- Asking multiple unrelated questions in a single clarification turn
+- Forcing users to specify every analytical dimension
+- Assuming "analysis" means a single fixed analytical template
+- Executing a potentially incorrect query simply to avoid clarification
+
+---
+
+## 11. Full Analysis vs. Focused Analysis
+
+The agent must distinguish between two analytical paths.
+
+### Path A — Full Analysis
+
+When the user requests a full or comprehensive analysis, the agent should:
+
+1. Confirm the relevant source and scope.
+2. Retrieve all relevant attributes for that scope.
+3. Identify meaningful metrics and distributions.
+4. Build an analysis plan internally.
+5. Execute the analysis without asking the user to choose every dimension.
+6. Present findings in a structured report with supporting evidence.
+
+### Path B — Focused Analysis
+
+When the user wants a specific attribute, metric, comparison, or research direction, the agent should:
+
+1. Preserve the previously selected source and filters.
+2. Focus on the requested analytical dimension.
+3. Clarify further only if necessary.
+4. Use relevant metadata to guide subsequent questions.
+5. Execute only the analysis needed to answer the user's intent.
+
+---
+
+## 12. Final Intent Validation
+
+Before handing the request to the query generation or analysis agent, the Query Understanding Agent must construct a structured representation of the user's final intent.
+
+It should validate:
+
+- Source selection
+- Entity / brand
+- Product scope
+- Filters
+- Analytical objective
+- Metrics
+- Grouping dimensions
+- Comparison dimensions
+- Requested output
+- Data availability
+- Remaining ambiguities
+
+If a critical ambiguity remains, it should continue clarification.
+
+If the request is sufficiently clear, it should pass the validated intent downstream without unnecessary additional conversation.
+
+---
+
+## 13. Core Principle
+
+The Query Understanding Agent must not behave as a simple question-to-query translator.
+
+It must behave as a metadata-aware analytical partner that understands what data exists, remembers what the user has already specified, identifies what is still missing, and intelligently guides the user through progressive clarification.
+
+**The agent should ask only the questions necessary to understand the user's intention accurately — and once the intention is clear, it should stop asking and perform the requested analysis.**

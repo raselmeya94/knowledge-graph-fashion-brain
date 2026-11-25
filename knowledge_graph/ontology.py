@@ -49,6 +49,21 @@ def normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def facet_name_fields(display: str | None) -> dict[str, str]:
+    """Human ``name`` + match-key ``normalized_name`` for facet / entity nodes.
+
+    Matching must use ``normalized_name`` only. Never store the normalized key
+    as ``name`` — that produces cut labels like ``c a`` for ``C&A``.
+    """
+
+    raw = str(display or "").strip()
+    nn = normalize_name(raw)
+    return {
+        "name": raw or nn,
+        "normalized_name": nn,
+    }
+
+
 def empty_ontology(*, name: str = "empty", version: str = "0") -> Ontology:
     """Minimal ontology so the API can boot before any POST /ontologies."""
 

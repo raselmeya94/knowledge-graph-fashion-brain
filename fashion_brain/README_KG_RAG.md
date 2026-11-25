@@ -1,5 +1,7 @@
 # Fashion Brain ↔ Knowledge Graph boundary
 
+For the full **user question → response** pipeline (agents, history variations, decisions), see [`README_TECHNICAL_FLOW.md`](./README_TECHNICAL_FLOW.md).
+
 ## Rule
 
 | Layer | Owns | Does **not** own |

@@ -88,12 +88,21 @@ def run_product_analysis(
     limit: int | None = None,
     analysis_fields: list[str] | None = None,
     group_by: str | None = None,
+    question: str = "",
 ) -> Retrieved:
     """Attribute-wise analysis on one or more product graphs (schema-driven fields)."""
 
-    from knowledge_graph.retrieval.ecom import append_neo4j_analysis_answer, resolve_analysis_fields
+    from fashion_brain.ask import ensure_compare_party_filters, split_multi_party_filter
+    from fashion_brain.planning.semantic_field_map import apply_semantic_field_map
+    from knowledge_graph.retrieval.ecom import (
+        append_neo4j_analysis_answer,
+        clean_product_filters,
+        resolve_analysis_fields,
+        resolve_focused_analysis_field,
+        _align_party_filters_for_graph,
+    )
 
-    filters = dict(filters or {})
+    filters = ensure_compare_party_filters(dict(filters or {}), question)
     lines: list[str] = []
     evidence: list[EvidenceItem] = []
     caveats: list[str] = []
@@ -108,17 +117,56 @@ def run_product_analysis(
             response_type="analysis_report",
         )
 
-    field_override = [str(group_by)] if group_by else analysis_fields
+    parties = split_multi_party_filter(str(filters.get("brand") or filters.get("buyer") or ""))
+    # Brand-vs-brand assortment compare belongs on the retail catalog first; avoid
+    # unscoped dual-catalog dumps when the ask is clearly a party compare.
+    if len(parties) >= 2 and len(ids) > 1 and not group_by:
+        ecom_ids = [g for g in ids if "ecom" in g.casefold() or "commerce" in g.casefold()]
+        if ecom_ids:
+            ids = ecom_ids
+            caveats.append(
+                "Brand assortment compare scoped to e-commerce (side-by-side brand profiles)."
+            )
+
+    field_override = analysis_fields
+    if len(parties) >= 2:
+        lines.append(
+            f"Side-by-side assortment compare: {' vs '.join(parties)}. "
+            "Each brand section below is independent — do not merge into one total."
+        )
+        lines.append("")
+
     for gid in ids:
         if len(ids) > 1:
             label = _graph_display_name(platform, gid)
-            lines.append(f"## {label} (`{gid}`)")
-        fields = resolve_analysis_fields(platform, gid, field_override)
+            # User-facing heading only — never leak internal graph ids.
+            lines.append(f"## {label}")
+        # Per-graph aliases: ecom buyer→brand, gender→section, … + hierarchy fallbacks.
+        mapped_filters, mapped_gb = apply_semantic_field_map(
+            dict(filters),
+            gid,
+            group_by=group_by,
+        )
+        mapped_filters = _align_party_filters_for_graph(
+            platform, gid, clean_product_filters(mapped_filters)
+        )
+        if group_by or mapped_gb:
+            fields = resolve_focused_analysis_field(
+                platform, gid, mapped_gb or group_by, mapped_filters
+            )
+            if fields and (mapped_gb or group_by) and fields[0] != str(mapped_gb or group_by):
+                caveats.append(
+                    f"Grouped by {fields[0].replace('_', ' ')} "
+                    f"(role-similar to {str(mapped_gb or group_by).replace('_', ' ')} "
+                    f"on this catalog)."
+                )
+        else:
+            fields = resolve_analysis_fields(platform, gid, field_override)
         append_neo4j_analysis_answer(
             platform,
             principal,
             gid,
-            filters,
+            mapped_filters,
             limit,
             lines,
             evidence,
@@ -129,11 +177,14 @@ def run_product_analysis(
             lines.append("")
 
     if len(ids) > 1:
+        labels = [_graph_display_name(platform, gid) for gid in ids]
         caveats.append(
-            f"Analysis ran independently on {len(ids)} product graphs: {', '.join(ids)}."
+            f"Analysis ran independently on {len(ids)} product catalogs: {', '.join(labels)}."
         )
     else:
-        caveats.append(f"Analysis scoped to product graph `{ids[0]}` (not assumed e-commerce).")
+        caveats.append(
+            f"Analysis scoped to {_graph_display_name(platform, ids[0])} (not assumed e-commerce)."
+        )
 
     return Retrieved(
         text="\n".join(lines).strip(),
@@ -141,15 +192,25 @@ def run_product_analysis(
         caveats=caveats,
         unavailable=[],
         retrieve_mode="analytical_tool",
-        response_type="analysis_report" if not group_by else "stats",
+        # Full and focused breakdowns share the analysis_report writer path.
+        response_type="analysis_report",
     )
 
 
 def _graph_display_name(platform, graph_id: str) -> str:
+    from fashion_brain.agents.answer_formation import source_heading_label, source_display_label
+
     try:
         for item in platform.kg_registry.list_graphs():
             if item.id == graph_id:
-                return str(item.name or graph_id)
+                raw = str(item.name or graph_id)
+                # Prefer short stable headings (PLMex / E-commerce) over registry chrome.
+                headed = source_heading_label(graph_id)
+                if headed in {"PLMex", "PLM", "E-commerce", "Own products"}:
+                    return "PLMex" if headed == "PLM" else headed
+                from knowledge_graph.retrieval.ecom import _user_facing_source_name
+
+                return _user_facing_source_name(raw) or source_display_label(graph_id)
     except Exception:
         pass
-    return graph_id
+    return source_heading_label(graph_id)

@@ -49,6 +49,34 @@ def get_schema_card(platform, graph_id: str, *, brands: list[dict] | None = None
     return card
 
 
+def get_pruned_schema_card(
+    platform,
+    question: str,
+    *,
+    graph_ids: list[str] | None = None,
+    domain_key: str | None = None,
+    fallback_card: str = "",
+) -> str:
+    """TTL-cached pruned live schema card keyed by (graph_ids, domain_key)."""
+
+    gids = [str(g) for g in (graph_ids or []) if g]
+    dkey = domain_key or "|".join(gids) or "all"
+    key = f"pruned:{dkey}:{hash(question) & 0xFFFFFFFF}"
+    hit = get_cached(key, platform)
+    if hit is not None:
+        return str(hit)
+    from fashion_brain.planning.domain_schema_filter import pruned_schema_card
+
+    card = pruned_schema_card(
+        platform,
+        question,
+        preferred_graphs=gids or None,
+        fallback_card=fallback_card,
+    ) or fallback_card
+    set_cached(key, card)
+    return card
+
+
 def get_brands(platform, graph_id: str, principal=None) -> list[dict]:
     key = f"{graph_id}:brands"
     hit = get_cached(key, platform)

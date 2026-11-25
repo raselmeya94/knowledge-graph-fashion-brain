@@ -12,7 +12,10 @@ from knowledge_graph.ontology import STRUCTURAL_LABELS, normalize_name
 
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, tuple[float, "RuntimeSchemaContext"]] = {}
+# Fallback TTL only when the process never warmed schema at startup.
 _CACHE_TTL_SEC = 60.0
+# After warm_runtime_schema(), treat schema as process-static until invalidate.
+_PINNED = False
 
 
 @dataclass
@@ -121,8 +124,43 @@ class RuntimeSchemaContext:
 
 
 def invalidate_runtime_schema_cache() -> None:
+    global _PINNED
     with _CACHE_LOCK:
         _CACHE.clear()
+        _PINNED = False
+
+
+def warm_runtime_schema(platform) -> dict[str, Any]:
+    """Load registry/ontology schema once at process start (not on each API hit).
+
+    Pins the in-memory cache so subsequent ``build_runtime_schema`` / ``GET
+    /brain/runtime_schema`` calls return memory only until invalidate.
+    """
+
+    global _PINNED
+    graphs = _registry_graphs(platform)
+    product_ids = [
+        g.graph_id
+        for g in graphs
+        if g.kind == "product" and g.status == "active" and g.graph_id
+    ]
+    # Default / overview first, then each product catalog.
+    targets: list[str | None] = [None]
+    for gid in product_ids:
+        if gid not in targets:
+            targets.append(gid)
+    built: list[str] = []
+    for target in targets:
+        ctx = build_runtime_schema(platform, target)
+        built.append(str(ctx.graph_id or target or "__default__"))
+    with _CACHE_LOCK:
+        _PINNED = True
+    return {
+        "pinned": True,
+        "graphs_warmed": built,
+        "product_graph_ids": product_ids,
+        "cache_keys": list(_CACHE.keys()),
+    }
 
 
 def default_product_graph_id(platform) -> str | None:
@@ -143,7 +181,7 @@ def build_runtime_schema(platform, graph_id: str | None = None) -> RuntimeSchema
     now = time.monotonic()
     with _CACHE_LOCK:
         hit = _CACHE.get(cache_key)
-        if hit and (now - hit[0]) < _CACHE_TTL_SEC:
+        if hit is not None and (_PINNED or (now - hit[0]) < _CACHE_TTL_SEC):
             return hit[1]
 
     ctx = RuntimeSchemaContext(graphs=graphs, graph_id=target)
@@ -346,3 +384,36 @@ def _load_ontology(platform, ontology_id: str | None) -> dict[str, Any] | None:
     except Exception:
         return None
     return None
+
+
+def pruned_schema_card(
+    platform,
+    question: str,
+    *,
+    graph_id: str | None = None,
+    graph_ids: list[str] | None = None,
+    fallback_card: str | None = None,
+) -> str:
+    """Merge live-schema prune with registry/ontology schema_card (fail-open)."""
+
+    preferred = [str(g) for g in (graph_ids or []) if g]
+    if graph_id and str(graph_id) not in preferred:
+        preferred = [str(graph_id), *preferred]
+    base = fallback_card
+    if base is None:
+        try:
+            base = build_runtime_schema(platform, preferred[0] if preferred else graph_id).schema_card()
+        except Exception:
+            base = ""
+    try:
+        from fashion_brain.planning.schema_cache import get_pruned_schema_card
+
+        return get_pruned_schema_card(
+            platform,
+            question,
+            graph_ids=preferred or None,
+            domain_key="|".join(preferred) if preferred else None,
+            fallback_card=base or "",
+        )
+    except Exception:
+        return base or ""

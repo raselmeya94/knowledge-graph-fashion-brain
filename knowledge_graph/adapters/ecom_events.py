@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from knowledge_graph.adapters.ecom_master import parse_price_num, product_id
-from knowledge_graph.ontology import normalize_name
+from knowledge_graph.ontology import facet_name_fields, normalize_name
 
 
 _PRICE_FIELDS = frozenset({"price", "original_price", "price_min", "price_max", "currency", "prices_seen"})
@@ -229,15 +229,13 @@ def build_event_graph(row: dict[str, Any]) -> dict[str, Any] | None:
             )
             if status:
                 avail_id = f"availability:{normalize_name(status).replace(' ', '-')}"
-                nn = normalize_name(status)
                 nodes.append(
                     {
                         "id": avail_id,
                         "labels": ["Entity", "SourceEntity", "Availability"],
                         "properties": {
                             "id": avail_id,
-                            "name": nn or status,
-                            "normalized_name": nn,
+                            **facet_name_fields(status),
                             "entity_type": "Availability",
                             "status": status,
                         },

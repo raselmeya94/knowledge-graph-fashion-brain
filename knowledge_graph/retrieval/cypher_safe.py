@@ -5,10 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# Block write/admin. Allow only fulltext queryNodes under CALL db.index.fulltext.
 _WRITE = re.compile(
-    r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD\s+CSV|CALL\s+dbms|CALL\s+db\.|FOREACH|ALTER|GRANT|DENY)\b",
+    r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD\s+CSV|CALL\s+dbms|FOREACH|ALTER|GRANT|DENY)\b",
     re.IGNORECASE,
 )
+_FORBIDDEN_DB_CALL = re.compile(r"\bCALL\s+db\.(?!index\.fulltext\.queryNodes\b)", re.IGNORECASE)
 _COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT = re.compile(r"//.*?$", re.MULTILINE)
 
@@ -40,6 +42,8 @@ def assert_read_only_cypher(cypher: str) -> str:
         raise ValueError("Multiple Cypher statements are not allowed.")
     if _WRITE.search(cleaned):
         raise ValueError("Write/admin Cypher clauses are not allowed.")
+    if _FORBIDDEN_DB_CALL.search(cleaned):
+        raise ValueError("Only CALL db.index.fulltext.queryNodes is allowed among db.* procedures.")
     if not re.search(r"\b(MATCH|OPTIONAL\s+MATCH|CALL|WITH|UNWIND)\b", cleaned, re.IGNORECASE):
         raise ValueError("Cypher must start from MATCH/CALL/WITH/UNWIND.")
     if not re.search(r"\bRETURN\b", cleaned, re.IGNORECASE):
@@ -96,17 +100,123 @@ def json_escape_lower(value: str) -> str:
     return f"'{text}'"
 
 
-def run_read_cypher(platform, cypher: str, params: dict[str, Any] | None = None, *, limit_rows: int = 200) -> list[dict]:
+# Relationship type in [:REL] or [:REL|OTHER]
+_REL_TYPES = re.compile(r"\[:?\s*([A-Z][A-Z0-9_]*)\s*(?:\|[A-Z0-9_|]*)?\s*(?:[*\d.]*)?\s*(?:\{[^}]*\})?\s*\]")
+_LABELED_DIR = re.compile(
+    r"\((?:[a-zA-Z_][\w]*)?(?::`?([A-Za-z_][\w]*)`?)*\)\s*"
+    r"-\[\s*:?\s*([A-Z][A-Z0-9_]*)[^\]]*\]->\s*"
+    r"\((?:[a-zA-Z_][\w]*)?(?::`?([A-Za-z_][\w]*)`?)*\)"
+)
+_LABELED_REV = re.compile(
+    r"\((?:[a-zA-Z_][\w]*)?(?::`?([A-Za-z_][\w]*)`?)*\)\s*"
+    r"<-\[\s*:?\s*([A-Z][A-Z0-9_]*)[^\]]*\]-\s*"
+    r"\((?:[a-zA-Z_][\w]*)?(?::`?([A-Za-z_][\w]*)`?)*\)"
+)
+_ALWAYS_ALLOWED_RELS = frozenset({"RESOLVES_TO", "IN_GRAPH", "IN_DOMAIN", "HAS_ALIAS"})
+
+
+def extract_relationship_types(cypher: str) -> list[str]:
+    cleaned = sanitize_cypher(cypher)
+    return list(dict.fromkeys(_REL_TYPES.findall(cleaned)))
+
+
+def assert_allowlisted_cypher(
+    cypher: str,
+    allowlist: dict[str, list[list[str]]] | None,
+    *,
+    strict_direction: bool = True,
+) -> str:
+    """Validate ``[:REL]`` types (and simple labeled directions) against allowlist.
+
+    Empty allowlist → no-op (fail-open). Structural rels always allowed.
+    """
+
+    cleaned = sanitize_cypher(cypher)
+    if not cleaned:
+        raise ValueError("Empty Cypher.")
+    if not allowlist:
+        return cleaned
+
+    normalized: dict[str, list[list[str]]] = {}
+    for rel, pairs in allowlist.items():
+        key = str(rel).upper()
+        bucket: list[list[str]] = []
+        for pair in pairs or []:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                bucket.append([str(pair[0]), str(pair[1])])
+        normalized[key] = bucket
+
+    for rel in extract_relationship_types(cleaned):
+        upper = rel.upper()
+        if upper in _ALWAYS_ALLOWED_RELS:
+            continue
+        if upper not in normalized:
+            known = ", ".join(sorted(normalized.keys())[:30]) or "(none)"
+            raise ValueError(
+                f"Relationship type {upper} is not in the ontology allowlist. "
+                f"Valid types include: {known}."
+            )
+
+    if strict_direction:
+        for match in _LABELED_DIR.finditer(cleaned):
+            src, rel, tgt = match.group(1), match.group(2).upper(), match.group(3)
+            if not src or not tgt or rel in _ALWAYS_ALLOWED_RELS:
+                continue
+            pairs = normalized.get(rel) or []
+            if pairs and not _pair_compatible(src, tgt, pairs):
+                valid = ", ".join(f"[{a}, {b}]" for a, b in pairs)
+                raise ValueError(
+                    f"Direction ({src})-[:{rel}]->({tgt}) is not allowlisted. "
+                    f"Valid [Source, Target] pairs for {rel}: {valid}."
+                )
+        for match in _LABELED_REV.finditer(cleaned):
+            tgt, rel, src = match.group(1), match.group(2).upper(), match.group(3)
+            if not src or not tgt or rel in _ALWAYS_ALLOWED_RELS:
+                continue
+            pairs = normalized.get(rel) or []
+            if pairs and not _pair_compatible(src, tgt, pairs):
+                valid = ", ".join(f"[{a}, {b}]" for a, b in pairs)
+                raise ValueError(
+                    f"Direction ({src})-[:{rel}]->({tgt}) is not allowlisted. "
+                    f"Valid [Source, Target] pairs for {rel}: {valid}."
+                )
+    return cleaned
+
+
+def _pair_compatible(src: str, tgt: str, pairs: list[list[str]]) -> bool:
+    s, t = src.casefold(), tgt.casefold()
+    for a, b in pairs:
+        if str(a).casefold() == s and str(b).casefold() == t:
+            return True
+    return False
+
+
+def run_read_cypher(
+    platform,
+    cypher: str,
+    params: dict[str, Any] | None = None,
+    *,
+    limit_rows: int = 200,
+    allowlist: dict[str, list[list[str]]] | None = None,
+) -> list[dict]:
     """Execute a validated read Cypher against Neo4j; return list of row dicts."""
 
     import time
 
     cleaned = assert_read_only_cypher(cypher)
+    if allowlist is not None:
+        cleaned = assert_allowlisted_cypher(cleaned, allowlist)
     session_factory = getattr(platform.graph, "_session", None)
     if not callable(session_factory):
         raise RuntimeError("Neo4j session is not available.")
     bind = dict(params or {})
     started = time.perf_counter()
+    try:
+        from knowledge_graph.retrieval.cypher_log import log_cypher_hit
+
+        log_cypher_hit(cleaned, bind, source="text2cypher")
+    except Exception:
+        pass
     with session_factory() as session:
         rows = [dict(record) for record in session.run(cleaned, bind)]
     rows = rows[: max(1, int(limit_rows))]
@@ -119,6 +229,44 @@ def run_read_cypher(platform, cypher: str, params: dict[str, Any] | None = None,
     except Exception:
         pass
     return rows
+
+
+_COLON_ID = re.compile(r"^[a-z0-9_]+:[a-z0-9_]+:[a-z0-9_\-./]+$", re.IGNORECASE)
+_SLUG_ONLY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
+
+
+def humanize_findings_labels(value: Any, *, row: dict | None = None, key: str | None = None) -> str:
+    """Display-only: prefer human names over raw colon/slug graph ids.
+
+    Does not invent facts; numbers and empty values pass through unchanged.
+    Evidence record_ids stay untouched — this is for findings prose/tables only.
+    """
+
+    if value is None:
+        return "—"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    text = str(value).strip()
+    if not text:
+        return "—"
+    # Prefer a parallel name/title column when the cell is an internal id.
+    if row and key and str(key).casefold() in {"id", "node_id", "canonical_id", "product_id", "record_id"}:
+        for alt in ("name", "title", "canonical_name", "product_name", "label"):
+            alt_val = row.get(alt)
+            if alt_val not in (None, ""):
+                return str(alt_val).replace("|", "/").replace("\n", " ")
+    if _COLON_ID.match(text):
+        # prefix:type:slug → title-case last segment
+        last = text.rsplit(":", 1)[-1]
+        return _title_slug(last)
+    if _SLUG_ONLY.match(text) and " " not in text:
+        return _title_slug(text)
+    return text.replace("|", "/").replace("\n", " ")
+
+
+def _title_slug(slug: str) -> str:
+    parts = re.split(r"[-_]+", str(slug or "").strip())
+    return " ".join(p[:1].upper() + p[1:] for p in parts if p)
 
 
 def rows_to_findings(rows: list[dict], *, explanation: str = "", cypher: str = "") -> str:
@@ -151,7 +299,8 @@ def rows_to_findings(rows: list[dict], *, explanation: str = "", cypher: str = "
         lines.append(f"| {label_key} | {count_key} |")
         lines.append("| --- | --- |")
         for row in rows[:40]:
-            lines.append(f"| {row.get(label_key)} | {row.get(count_key)} |")
+            label = humanize_findings_labels(row.get(label_key), row=row, key=str(label_key))
+            lines.append(f"| {label} | {row.get(count_key)} |")
         return "\n".join(lines)
 
     # Deduplicate identical listing rows (e.g. repeated parent category names).
@@ -181,11 +330,7 @@ def rows_to_findings(rows: list[dict], *, explanation: str = "", cypher: str = "
     for row in shown:
         cells = []
         for key in keys:
-            value = row.get(key)
-            if value is None:
-                cells.append("—")
-            else:
-                cells.append(str(value).replace("|", "/").replace("\n", " "))
+            cells.append(humanize_findings_labels(row.get(key), row=row, key=str(key)))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 

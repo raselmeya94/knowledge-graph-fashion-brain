@@ -7,7 +7,11 @@
   };
 
   function apiBase() {
-    return String(global.FB_API_BASE || "http://127.0.0.1:8000").replace(/\/$/, "");
+    var fallback =
+      typeof global.location !== "undefined" && global.location.hostname
+        ? global.location.protocol + "//" + global.location.hostname + ":8000"
+        : "http://127.0.0.1:8000";
+    return String(global.FB_API_BASE || fallback).replace(/\/$/, "");
   }
 
   function getUser() {

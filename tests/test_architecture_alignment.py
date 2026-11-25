@@ -123,3 +123,6 @@ def test_result_merger_keeps_provenance():
     assert merged.result_id == "result_x"
     assert len(merged.evidence) == 2
     assert "not merged" in merged.caveats[-1].lower()
+    assert "[Graph result" not in merged.text
+    assert "### Own products" in merged.text
+    assert "### E-commerce" in merged.text
