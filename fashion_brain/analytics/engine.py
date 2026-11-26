@@ -17,12 +17,12 @@ def pick_analysis_graphs(
     graph_id: str | None = None,
     graph_ids: list[str] | None = None,
     filters: dict | None = None,
+    all_product: bool = False,
 ) -> list[str]:
     """Resolve which product graphs to analyse — never force ecom.
 
-    Order: explicit graph_ids → graph_id → preferred → capability match from filters
-    → all active product graphs only when compare-sized preferred is empty and caller
-    already scoped; otherwise first capability-matched product graph.
+    Order: explicit graph_ids → all_product (Fashion Brain full scope) → graph_id →
+    preferred → capability match from filters → first active product graph.
     """
 
     from knowledge_graph.retrieval.ecom import registry_product_graphs
@@ -32,9 +32,13 @@ def pick_analysis_graphs(
     explicit = [str(g) for g in (graph_ids or []) if g and str(g) in active_set]
     if explicit:
         return explicit
+    if all_product and active:
+        return list(active)
     if graph_id and str(graph_id) in active_set:
         return [str(graph_id)]
     pref = [str(g) for g in (preferred or []) if g and str(g) in active_set]
+    if len(pref) > 1:
+        return pref
     if pref:
         return pref
 
@@ -219,7 +223,8 @@ def run_product_analysis(
     if len(ids) > 1:
         labels = [_graph_display_name(platform, gid) for gid in ids]
         caveats.append(
-            f"Analysis ran independently on {len(ids)} product catalogs: {', '.join(labels)}."
+            f"Fashion Brain combined view — analysis ran independently on "
+            f"{len(ids)} product catalogs: {', '.join(labels)}."
         )
     else:
         caveats.append(

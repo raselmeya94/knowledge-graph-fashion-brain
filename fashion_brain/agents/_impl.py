@@ -2194,6 +2194,7 @@ class GraphRouterAgent:
         "cross source",
         "using both",
         "from both",
+        "fashion brain",
         " and plm",
         " and plmex",
         " and ecom",

@@ -71,3 +71,63 @@ def test_pick_analysis_graphs_honours_explicit_preferred():
     platform = SimpleNamespace(kg_registry=SimpleNamespace(list_graphs=lambda: [ecom, plmex]))
     picked = pick_analysis_graphs(platform, preferred=["plmex_products"], filters={"brand": "Zara"})
     assert picked == ["plmex_products"]
+
+
+def test_pick_analysis_graphs_all_product_returns_both_catalogs():
+    """Fashion Brain full-scope analysis must not collapse to one sticky catalog."""
+
+    ecom = SimpleNamespace(
+        id="ecom_products",
+        kind="product",
+        name="E-Commerce",
+        description="retail",
+        capabilities=["brand_comparison"],
+        entities=["Brand"],
+        status="active",
+    )
+    plmex = SimpleNamespace(
+        id="plmex_products",
+        kind="product",
+        name="PLMex",
+        description="plm",
+        capabilities=["buyer_analysis"],
+        entities=["Buyer"],
+        status="active",
+    )
+    platform = SimpleNamespace(kg_registry=SimpleNamespace(list_graphs=lambda: [ecom, plmex]))
+    picked = pick_analysis_graphs(
+        platform,
+        all_product=True,
+        preferred=["ecom_products"],
+        graph_id="ecom_products",
+        filters={},
+    )
+    assert picked == ["ecom_products", "plmex_products"]
+
+
+def test_pick_analysis_graphs_multi_preferred_keeps_all():
+    ecom = SimpleNamespace(
+        id="ecom_products",
+        kind="product",
+        name="E-Commerce",
+        description="retail",
+        capabilities=["brand_comparison"],
+        entities=["Brand"],
+        status="active",
+    )
+    plmex = SimpleNamespace(
+        id="plmex_products",
+        kind="product",
+        name="PLMex",
+        description="plm",
+        capabilities=["buyer_analysis"],
+        entities=["Buyer"],
+        status="active",
+    )
+    platform = SimpleNamespace(kg_registry=SimpleNamespace(list_graphs=lambda: [ecom, plmex]))
+    picked = pick_analysis_graphs(
+        platform,
+        preferred=["ecom_products", "plmex_products"],
+        filters={},
+    )
+    assert picked == ["ecom_products", "plmex_products"]

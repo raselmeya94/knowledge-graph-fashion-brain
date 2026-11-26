@@ -53,3 +53,15 @@ def test_focused_analysis_intention_uses_analytical_tool():
     )
     plan_retrieve(intention, "Primark material breakdown")
     assert intention.retrieve_mode == "analytical_tool"
+
+
+def test_fashion_brain_garment_breakdown_is_analytical_tool():
+    intention = Intention(
+        intent="breakdown",
+        analysis=True,
+        group_by="garment",
+        filters={},
+    )
+    plan_retrieve(intention, "garment wise breakdown for fashion brain")
+    assert intention.retrieve_mode == "analytical_tool"
+    assert intention.response_type == "analysis_report"

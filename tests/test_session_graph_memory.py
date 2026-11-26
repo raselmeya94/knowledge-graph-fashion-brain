@@ -173,6 +173,44 @@ def test_session_graph_memory_pins_sticky_when_color_hits_both_catalogs(monkeypa
     assert out.preferred_graphs == ["ecom_products"]
 
 
+def test_session_graph_memory_skips_sticky_for_fashion_brain_garment_breakdown(
+    monkeypatch,
+):
+    """System-scoped garment breakdown must combine catalogs, not stick to ecom."""
+
+    platform = SimpleNamespace(
+        kg_registry=SimpleNamespace(
+            list_graphs=lambda: [_Graph("ecom_products"), _Graph("plmex_products")]
+        )
+    )
+    monkeypatch.setattr(
+        "knowledge_graph.retrieval.ecom.registry_product_graphs",
+        lambda _p: ["ecom_products", "plmex_products"],
+    )
+    monkeypatch.setattr(
+        "fashion_brain.ask.preferred_graphs_from_question",
+        lambda _q, _p=None: [],
+    )
+    intention = Intention(
+        intent="breakdown",
+        analysis=True,
+        group_by="garment",
+        preferred_graphs=["ecom_products", "plmex_products"],
+        retrieve_mode="analytical_tool",
+    )
+    out = _apply_session_graph_memory(
+        platform,
+        intention,
+        question="garment wise breakdown for fashion brain",
+        history=[{"role": "user", "content": "how many products in ecom?"}],
+        context=SimpleNamespace(is_contextual=False),
+        state={"last_graph_id": "ecom_products", "last_result_id": "prior"},
+        graph_id=None,
+    )
+    # Must not collapse multi-catalog preferred down to sticky ecom alone.
+    assert out.preferred_graphs == ["ecom_products", "plmex_products"]
+
+
 def test_context_agent_keeps_session_sticky_when_llm_unavailable():
     agent = ConversationContextAgent()
     decision = agent.analyze(

@@ -150,6 +150,37 @@ def _apply_session_graph_memory(
         deixis = question_has_catalog_deixis(question)
     except Exception:
         return intention
+    # Fashion Brain / unscoped system analysis → never collapse to one sticky catalog.
+    # Brand/buyer follow-ups and deixis ("of them") still pin. Deixis already fails
+    # _full_catalog_scope so those turns keep sticky memory below.
+    if _full_catalog_scope(question, state, platform):
+        low_scope = f" {str(question or '').casefold()} "
+        system_frame = any(
+            hint in low_scope
+            for hint in (
+                " fashion brain ",
+                " across catalogs ",
+                " all catalogs ",
+                " all sources ",
+                " whole system ",
+            )
+        )
+        filters = dict(getattr(intention, "filters", None) or {})
+        has_party = bool(filters.get("brand") or filters.get("buyer"))
+        analysis_unscoped = (
+            not has_party
+            and (
+                bool(getattr(intention, "analysis", False))
+                or getattr(intention, "retrieve_mode", None) == "analytical_tool"
+                or (
+                    bool(getattr(intention, "group_by", None))
+                    and str(getattr(intention, "intent", "") or "").casefold()
+                    in {"breakdown", "analysis", "product_count", "count", "other"}
+                )
+            )
+        )
+        if system_frame or analysis_unscoped:
+            return intention
     # Prior catalog + "of them" / history / contextual turn → stay pinned.
     if not (
         history
@@ -178,6 +209,7 @@ def _apply_session_graph_memory(
             " cross-source ",
             " using both ",
             " from both ",
+            " fashion brain ",
             " and plm ",
             " and plmex ",
             " and ecom ",
@@ -357,11 +389,12 @@ def _explicit_graphs_in_question(question: str, platform: Platform) -> list[str]
     return out
 
 
-def _full_catalog_count_scope(question: str, state: dict | None, platform: Platform) -> bool:
+def _full_catalog_scope(question: str, state: dict | None, platform: Platform) -> bool:
     """True when the user did not name a source — answer across all product KGs.
 
-    Sticky ``last_graph_id`` alone must not pin a fresh independent count to one
-    catalog. Deixis follow-ups ('of them') stay on the prior source.
+    Covers counts, breakdowns, and analysis under Fashion Brain (the system), not
+    a single sticky PLMex/ecom catalog. Explicit plm/ecom tokens pin one source.
+    Deixis follow-ups ('of them') stay on the prior source.
     """
 
     if _explicit_graphs_in_question(question, platform):
@@ -374,6 +407,10 @@ def _full_catalog_count_scope(question: str, state: dict | None, platform: Platf
     except Exception:
         pass
     return True
+
+
+# Back-compat alias used by count fast-path call sites.
+_full_catalog_count_scope = _full_catalog_scope
 
 
 def _source_display_label(graph_id: str) -> str:
@@ -4802,6 +4839,44 @@ def draft_catalog_orchestrated(
         )
         return retrieved, [intention.intent, "kg_stats", gid], intention, context, None
 
+    # Fashion Brain / unscoped analysis → every product catalog before the router picks.
+    ask_for_scope = source_question or effective_question or question or ""
+    if (
+        (
+            getattr(intention, "retrieve_mode", None) == "analytical_tool"
+            or bool(getattr(intention, "analysis", False))
+            or bool(getattr(intention, "group_by", None))
+        )
+        and _full_catalog_scope(ask_for_scope, state, platform)
+        and intention.intent
+        not in {
+            "system_meta",
+            "live_sql",
+            "news",
+            "shared_products",
+            "specification",
+            "product_details",
+        }
+        and not bool(getattr(intention, "suggest", False))
+    ):
+        generated = getattr(getattr(platform, "settings", None), "generated", None)
+        all_products = [
+            g
+            for g in _product_graph_candidates(
+                platform,
+                generated,
+                *(list(getattr(intention, "preferred_graphs", None) or [])),
+            )
+            if g
+        ]
+        if len(all_products) >= 2:
+            intention.preferred_graphs = list(all_products)
+            trace_step(
+                "router",
+                "Full-catalog Fashion Brain scope — preferred all product graphs",
+                preferred=intention.preferred_graphs,
+            )
+
     with timed("graph_router"):
         choice = GraphRouterAgent().choose(intention, platform=platform, question=question)
     trace_step(
@@ -4949,13 +5024,39 @@ def draft_catalog_orchestrated(
     } and not bool(getattr(intention, "suggest", False)):
         from fashion_brain.analytics.engine import pick_analysis_graphs, run_product_analysis
 
-        analysis_graphs = pick_analysis_graphs(
-            platform,
-            preferred=list(getattr(intention, "preferred_graphs", None) or []),
-            graph_id=product_ids[0] if len(product_ids) == 1 else None,
-            graph_ids=product_ids if len(product_ids) > 1 else None,
-            filters=dict(intention.filters or {}),
-        )
+        ask_for_scope = source_question or effective_question or question or ""
+        # Fashion Brain / unscoped system asks → every product catalog, not one sticky KG.
+        if _full_catalog_scope(ask_for_scope, state, platform):
+            analysis_graphs = pick_analysis_graphs(
+                platform,
+                all_product=True,
+                preferred=list(getattr(intention, "preferred_graphs", None) or []),
+                graph_ids=product_ids if len(product_ids) > 1 else None,
+                filters=dict(intention.filters or {}),
+            )
+            if len(analysis_graphs) < 2:
+                generated = getattr(
+                    getattr(platform, "settings", None), "generated", None
+                )
+                analysis_graphs = [
+                    g
+                    for g in _product_graph_candidates(
+                        platform,
+                        generated,
+                        *(product_ids or []),
+                        *(list(getattr(intention, "preferred_graphs", None) or [])),
+                    )
+                    if g
+                ] or analysis_graphs
+            intention.preferred_graphs = list(analysis_graphs)
+        else:
+            analysis_graphs = pick_analysis_graphs(
+                platform,
+                preferred=list(getattr(intention, "preferred_graphs", None) or []),
+                graph_id=product_ids[0] if len(product_ids) == 1 else None,
+                graph_ids=product_ids if len(product_ids) > 1 else None,
+                filters=dict(intention.filters or {}),
+            )
         if not analysis_graphs and product_ids:
             analysis_graphs = product_ids[:1]
         # Align filters/group_by to the first analysis catalog so Scope + retrieve
@@ -5000,7 +5101,11 @@ def draft_catalog_orchestrated(
         state["group_by"] = intention.group_by
         state["last_result_id"] = result_id
         state["last_retrieved_text"] = retrieved.text
-        _remember_graph(state, analysis_graphs)
+        if len(analysis_graphs) > 1:
+            state["last_graph_ids"] = list(analysis_graphs)
+            state.pop("last_graph_id", None)
+        else:
+            _remember_graph(state, analysis_graphs)
         try:
             from fashion_brain.ask import catalog_metric_family
 
