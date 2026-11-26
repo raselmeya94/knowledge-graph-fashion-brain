@@ -29,11 +29,13 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "own products": SOURCE_LABELS["own_products"],
     "plm records": SOURCE_LABELS["plmex_products"],
     "plmex records": SOURCE_LABELS["plmex_products"],
+    "plm data": SOURCE_LABELS["plmex_products"],
+    "plmex data": SOURCE_LABELS["plmex_products"],
 }
 
 SOURCE_HEADING_LABELS: dict[str, str] = {
     "ecom_products": "E-commerce",
-    "plmex_products": "PLM",
+    "plmex_products": "PLMex",
     "own_products": "Own products",
 }
 

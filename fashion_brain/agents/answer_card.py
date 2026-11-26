@@ -16,7 +16,7 @@ from typing import Any, Callable
 LOGGER = logging.getLogger("fashion_brain.answer_card")
 
 SOURCE_LABELS = {
-    "plmex_products": "PLM records",
+    "plmex_products": "PLMex",
     "ecom_products": "e-commerce listings",
     "own_products": "our own product data",
 }
@@ -60,7 +60,7 @@ BANNED = [
     r"\bkg\b(?!\s*\d)",
     r"ecom_products",
     r"plmex_products",
-    r"\bplmex\b",
+    # "PLMex" is the user-facing catalog name — allowed. Ban only the graph id above.
     r"catalog\s*[12]",
     r"source\s*[12]\b",
     r"\bnull\b",
@@ -98,11 +98,11 @@ INTENT_HINTS = {
     "count": (
         "INTENT HINT: SIMPLE PRODUCT COUNT — answer in 1–3 short sentences. "
         "Lead with the exact count and every active filter (e.g. '2,292 products with color white "
-        "in PLM records.'). If two sources exist, give both counts in one breath. "
+        "in PLMex.'). If two sources exist, give both counts in one breath. "
+        "When findings already list example names (brands, categories, colours — "
+        "'including X, Y, and Z'), weave a few of those names into the sentence naturally. "
         "Do NOT write Assortment Overview, Key Metrics, Product Distribution, Merchandising Reading, "
-        "or any breakdown/ranking tables. Do NOT quote competing facet tops (other colours, genders, "
-        "brands) from card.context — those steal the headline number. "
-        "Ignore optional related-facts context unless the user asked for more detail. "
+        "or any breakdown/ranking tables. Do not invent names that are not in the card. "
         "Do not invent beyond the card."
     ),
     "breakdown": (
@@ -238,7 +238,7 @@ If `required_filters` is present, weave every filter value naturally into the op
   times, and never include robotic filler closers ("Would you like...", "Let me know if...").
 
 ## 3. MULTI-SOURCE & COMPARISON DISCIPLINE
-When multiple sources exist in the card, distinguish **PLM records** from **e-commerce
+When multiple sources exist in the card, distinguish **PLMex** from **e-commerce
 listings** cleanly. Do not merge counts from different sources or different brands into
 one combined total unless the card explicitly provides a combined figure. Keep the primary
 requested result prominent.
@@ -257,7 +257,7 @@ Follow this clear structure whenever the card carries rich data:
 - Write like an expert fashion business analyst: warm, direct, natural, non-technical.
 - Never mention internal identifiers or plumbing (`knowledge graph`, `KG`, `Neo4j`,
   `Cypher`, `ecom_products`, `plmex_products`, `Catalog 1/2`, `Source 1/2`, `null`,
-  `routes`, or internal colon-prefixed IDs).
+  `routes`, or internal colon-prefixed IDs). Say **PLMex** (not PLM) when naming that catalog.
 - Never open with `"We found"`, `"Based on the context"`, `"According to"`, or robotic
   phrases like `"recorded N times"` / `"lead by a gap"`. Plain `"There are N …"` is fine
   for simple count asks.
@@ -419,14 +419,15 @@ def intent_hint(intent: str, card: "AnswerCard | None" = None) -> str:
     if key == "count" and card is not None and len(card.results) > 1:
         return (
             f"INTENT HINT (depth={depth}): SIMPLE COUNT — state both source totals in 1–3 "
-            f"sentences; distinguish PLM records from e-commerce listings; keep the primary "
-            f"result first.{must} No assortment headings, no competing facet tops, no related-facts dump."
+            f"sentences; distinguish PLMex from e-commerce listings; keep the primary "
+            f"result first. If findings include example names ('including …'), mention a few "
+            f"naturally — do not invent names.{must} No assortment headings or tables."
         )
     if key == "count":
         return (
             f"INTENT HINT (depth={depth}): SIMPLE PRODUCT COUNT — 1–3 sentences with the exact "
-            f"number and filters only.{must} No Assortment Overview / Key Metrics / Merchandising "
-            "Reading / related facet tops. Do not invent beyond the card."
+            f"number and filters; if findings include example names ('including …'), weave a few "
+            f"in naturally (do not invent).{must} No Assortment Overview / Key Metrics / tables."
         )
     if key == "examples" and card is not None and card.requested_n:
         return (
@@ -1389,7 +1390,7 @@ def _analysis_report_fallback(card: AnswerCard) -> str:
         find_low = findings.casefold()
         extra = []
         for n in notes:
-            t = str(n).replace("PLMex", "PLM").replace("plmex", "PLM")
+            t = str(n).replace("PLM records", "PLMex").replace(" PLM ", " PLMex ")
             if t and t.casefold() not in find_low:
                 extra.append(t)
         if extra:
@@ -1422,13 +1423,13 @@ def _analysis_report_fallback(card: AnswerCard) -> str:
             "### What stands out\n"
             f"The tables above show how **{scope}** is weighted across each attribute. "
             "Read category, material, colour, and garment type together — "
-            "and keep PLM vs e-commerce totals separate when both appear."
+            "and keep PLMex vs e-commerce totals separate when both appear."
         )
     if card.data_notes or card.caveats:
         notes = [*card.data_notes[:5], *card.caveats[:3]]
         cleaned = []
         for n in notes:
-            t = str(n).replace("PLMex", "PLM").replace("plmex", "PLM")
+            t = str(n).replace("PLM records", "PLMex").replace(" PLM ", " PLMex ")
             cleaned.append(t)
         sections.append("### Notes\n" + "\n".join(f"- {n}" for n in cleaned))
     elif not metrics and not field_blocks and not card.tables:
@@ -1975,7 +1976,7 @@ def _parse_md_tables(text: str) -> list[list[dict[str, str]]]:
     return tables
 
 
-def _extract_all_tables(text: str, *, max_rows_per_table: int = 40) -> list[dict[str, Any]]:
+def _extract_all_tables(text: str, *, max_rows_per_table: int = 500) -> list[dict[str, Any]]:
     """Preserve every Markdown table from findings along with its section heading."""
 
     lines = (text or "").splitlines()

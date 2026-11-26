@@ -12,10 +12,10 @@ from fashion_brain.agents.answer_format import (
 
 
 def test_source_label_mapping():
-    assert SOURCE_DISPLAY_LABELS["plmex_products"] == "PLM records"
+    assert SOURCE_DISPLAY_LABELS["plmex_products"] == "PLMex"
     assert SOURCE_DISPLAY_LABELS["ecom_products"] == "e-commerce listings"
-    assert source_display_label("plmex_products") == "PLM records"
-    assert source_heading_label("plmex_products") == "PLM"
+    assert source_display_label("plmex_products") == "PLMex"
+    assert source_heading_label("plmex_products") == "PLMex"
     assert source_heading_label("ecom_products") == "E-commerce"
 
 
@@ -25,21 +25,21 @@ def test_title_label():
 
 
 def test_polish_keeps_single_source_footer():
-    raw = "Primark has 560 sweaters.\n\nSource: PLM records\n"
+    raw = "Primark has 560 sweaters.\n\nSource: PLMex\n"
     out = polish_final_answer(raw, question="How many Primark sweater products?")
     assert "560" in out
-    assert out.rstrip().endswith("Source: PLM records")
+    assert out.rstrip().endswith("Source: PLMex")
 
 
 def test_polish_dedupes_duplicate_footers():
     raw = (
         "Primark has 560 sweaters.\n\n"
         "Source: E-commerce listings\n\n"
-        "Source: PLM records\n"
+        "Source: PLMex\n"
     )
     out = polish_final_answer(raw)
     assert out.count("Source:") == 1
-    assert "Source: PLM records" in out
+    assert "Source: PLMex" in out
 
 
 def test_repair_drops_truncated_bare_chart_json():

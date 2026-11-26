@@ -23,9 +23,46 @@ from fashion_brain.llm import build_image_provider, build_model_provider, resolv
 
 LOGGER = get_logger("fashion_brain.flow")
 
-Route = Literal["catalog", "web_search", "direct", "sample_design", "news"]
+Route = Literal["catalog", "web_search", "direct", "sample_design", "news", "out_of_scope"]
 DIRECT_CAVEAT = "This answer is the model's own reply. It is not from the product catalog."
 WEB_CAVEAT = "This answer can use web search. It is not a count from the product catalog."
+OUT_OF_SCOPE_REPLY = (
+    "That question sits outside Fashion Brain’s fashion and garment focus. "
+    "I can help with product catalogs, materials, styles, brands, and apparel topics. "
+    "Ask me something fashion-related and I’ll take it from there."
+)
+FASHION_WEB_UNAVAILABLE_REPLY = (
+    "That fashion topic isn’t something I can look up in the product catalog right now, "
+    "and web research isn’t available. "
+    "Try a catalog question about products, brands, materials, or availability."
+)
+OUT_OF_SCOPE_SYSTEM = (
+    "You write short out-of-scope replies for Fashion Brain.\n"
+    "Fashion Brain only supports fashion, garment, textile, apparel retail, and product-catalog topics.\n"
+    "The user asked something outside that domain.\n\n"
+    "Write 2–4 sentences that:\n"
+    "1) Briefly explain why THIS specific question is outside the fashion and garment domain "
+    "(name the topic in plain language; do not answer it).\n"
+    "2) Mention relevant Fashion Brain capabilities when appropriate "
+    "(product catalogs, materials, styles, brands, assortment, availability).\n"
+    "3) Invite the user to ask a fashion-related question.\n\n"
+    "Tone: professional, friendly, helpful.\n"
+    "Avoid: repetitive apologies, generic refusals that could fit any question, "
+    "answering the unrelated question, inventing fashion interpretations, "
+    "and any mention of routing, classification, tools, models, or internal systems.\n"
+    "Keep the reply dynamic and tied to the user's actual wording. Return only the reply text."
+)
+FASHION_WEB_UNAVAILABLE_SYSTEM = (
+    "You write short capability replies for Fashion Brain.\n"
+    "The user's question is fashion-related, but it cannot be answered from the product catalog "
+    "and web research is unavailable.\n\n"
+    "Write 2–4 sentences that:\n"
+    "1) Acknowledge the fashion topic without answering it as general trivia.\n"
+    "2) Explain briefly that catalog lookup / web research cannot cover it right now.\n"
+    "3) Invite a catalog-style fashion question (products, brands, materials, availability).\n\n"
+    "Tone: professional, friendly, helpful. No apologies spam, no internal routing talk. "
+    "Return only the reply text."
+)
 
 ROUTER_TOOLS = [
     {
@@ -33,10 +70,10 @@ ROUTER_TOOLS = [
         "function": {
             "name": "catalog",
             "description": (
-                "Look up the registered product catalog / e-commerce knowledge graph: product counts, "
-                "lists, breakdowns, brand analysis, price and availability history, and specifications "
-                "drawn from stored catalog products. Filter or group by live product fields such as "
-                "brand, category, color, material, availability, section, and price."
+                "Look up registered product catalog / knowledge-graph facts: product counts, lists, "
+                "breakdowns, brand analysis, price and availability history, and specifications from "
+                "stored catalog styles. Use only when the user wants live product data — not glossary "
+                "definitions of fashion terms."
             ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
@@ -45,7 +82,10 @@ ROUTER_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Research public information and write summaries or reports that are not catalog lookups.",
+            "description": (
+                "Research fashion/garment/textile topics that are not catalog lookups: definitions "
+                "(e.g. what GSM means), industry trends, market research, and fashion news."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "Search query."}},
@@ -57,35 +97,44 @@ ROUTER_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "out_of_scope",
+            "description": (
+                "Politely refuse questions outside fashion, garment, textile, apparel retail, or "
+                "product-catalog topics (e.g. HTML, programming, unrelated trivia). Do not answer them."
+            ),
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "answer_directly",
-            "description": "Answer from the model when the question needs neither the product catalog nor a web search.",
+            "description": (
+                "Rewrite, shorten, translate, or reformat a previous reply in this chat only. "
+                "Do not use for new factual questions."
+            ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
 ]
 ROUTER_SYSTEM = (
-    "Choose exactly one tool after interpreting the latest request and relevant conversation context. "
-    "Use catalog only when the user wants facts from the registered product knowledge graphs "
-    "(e-commerce retail scrape AND capped PLMEX sample catalog linked by shared hubs): counts, product lists, "
-    "field filters (brand, section/target group, color, material including fibre percentage thresholds), "
-    "comparisons, rankings, breakdowns, brand analysis, price/availability history, product specifications "
-    "from stored styles, registered sources/graphs, shared Reference / RESOLVES_TO links, or the interconnect. "
-    "Ecom is scraped retail storefront data; PLMEX is internal sample/development data — pick the matching graph. "
-    "v0 publish scope does NOT cover visual lookalikes, vector-only search, or full unrestricted PLM dumps — "
-    "if asked, say that is out of scope for this release and answer with available catalog filters instead. "
-    "Respect the distinction between a catalog data ask and a general question that merely mentions "
-    "fashion, garments, materials, or brands. "
-    "Use search_web for public research, current or emerging industry trends, news, market information, "
-    "country facts, and reports that require recent or source-backed information. "
-    "Use answer_directly for stable general knowledge, explanations, writing, brainstorming, advice, and "
-    "other requests that need neither catalog records nor current public information. "
-    "For ambiguous wording, infer the user's intended source from the full question and conversation; do not "
-    "route every fashion-related question to catalog. For example, 'what is GSM?' is general knowledge, while "
-    "'how many Primark products are in stock?' is catalog; 'what are the latest fashion trends?' needs web research, "
-    "while 'average price change trends for Primark' needs catalog temporal records. "
-    "Earlier messages are this conversation. If the latest message only rewrites, shortens, translates, or "
-    "reformats the previous reply, choose answer_directly and preserve its facts. "
-    "Product specifications grounded in stored catalog styles use catalog."
+    "You are Fashion Brain’s route planner. Read the user’s intent carefully — do not rely on shallow "
+    "keyword matching. Choose exactly one tool.\n"
+    "catalog — the user wants facts from the product knowledge graphs (counts, lists, filters, "
+    "comparisons, rankings, brand/assortment analysis, price/availability history, specs from stored styles). "
+    "Ecom is retail scrape data; PLMEX is internal sample/development data.\n"
+    "search_web — fashion/garment/textile questions that need explanation or public research, not a catalog "
+    "row count. Examples: what GSM means, what a seam is, tell me about gauge, fashion trends.\n"
+    "out_of_scope — topics outside fashion/garments/textiles/apparel retail/product catalogs "
+    "(programming, HTML, math homework, unrelated trivia). Refuse; do not answer.\n"
+    "answer_directly — only when the latest message rewrites/shortens/translates/reformats a previous reply.\n"
+    "Important: a fashion term that also appears as a catalog field (GSM, composition, gauge) is still "
+    "search_web when the user asks what it means / about it / for a definition. Use catalog only when they "
+    "ask for product data involving that field. Prior catalog turns must not force catalog for a new "
+    "definition or off-domain ask.\n"
+    "Examples: 'how many Primark products are in stock?' → catalog; 'what is GSM?' → search_web; "
+    "'tell me about composition' → search_web; 'what are the latest fashion trends?' → search_web; "
+    "'average price change for Primark' → catalog; 'what is HTML?' → out_of_scope."
 )
 
 # These routes may bypass the semantic router only when the question explicitly asks for catalog data.
@@ -236,24 +285,9 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
             LOGGER.info("agent router selected route=news")
             trace_step("route", "Selected news")
             return {"route": "news", "tool_query": state["question"]}
-        if planned and planned[0] in _PLM_ROUTES and _is_explicit_catalog_question(
-            state["question"], planned[0]
-        ):
-            LOGGER.info("agent router selected route=catalog reason=planned_%s", planned[0])
-            trace_step("route", "Selected catalog (planned route)", planned=planned[0])
-            return {"route": "catalog", "tool_query": state["question"]}
-        # Domain-first guard: never allow direct/no-KG when the question overlaps
-        # introspected labels, relationships, or property keys.
-        if _question_requires_catalog(state["question"], platform):
-            LOGGER.info("agent router selected route=catalog reason=schema_grounded")
-            trace_step("route", "Selected catalog (schema-grounded domain guard)")
-            return {"route": "catalog", "tool_query": state["question"]}
+        # LLM decides catalog vs web vs out_of_scope — no keyword/schema short-circuit.
         provider = build_model_provider(platform.settings)
-        router_tools = (
-            ROUTER_TOOLS
-            if _web_search_enabled(platform)
-            else [tool for tool in ROUTER_TOOLS if tool.get("function", {}).get("name") != "search_web"]
-        )
+        router_tools = _router_tools_for(platform)
         try:
             body = provider.chat(
                 chat_messages(ROUTER_SYSTEM, state["question"], state.get("history")),
@@ -262,17 +296,11 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
                 tool_choice="required",
             )
         except ModelUnavailableError as exc:
-            LOGGER.info("agent router unavailable error=%s; catalog selected", exc.message)
-            trace_step("route", "LLM router unavailable → catalog", error=exc.message)
-            return {"route": "catalog", "tool_query": state["question"]}
+            LOGGER.info("agent router unavailable error=%s; out_of_scope", exc.message)
+            trace_step("route", "LLM router unavailable → out_of_scope", error=exc.message)
+            return {"route": "out_of_scope", "tool_query": state["question"]}
         route, query = _route_from_body(body, state["question"])
-        if route == "direct" and _question_requires_catalog(state["question"], platform):
-            LOGGER.info("agent router overridden route=catalog reason=block_direct_schema_hit")
-            trace_step("route", "Blocked direct → catalog (schema token match)")
-            return {"route": "catalog", "tool_query": state["question"]}
-        route = _force_catalog_if_web_disabled(platform, route, state["question"])
-        if route == "catalog":
-            query = state["question"]
+        route, query = _normalize_router_choice(platform, route, query, state["question"])
         LOGGER.info("agent router selected route=%s", route)
         trace_step("route", f"Selected {route}", query=query if route == "web_search" else None)
         return {"route": route, "tool_query": query}
@@ -346,6 +374,15 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
             )
         }
 
+    def refuse_out_of_scope(state: AskState) -> dict:
+        return {
+            "answer": _out_of_scope_answer(
+                platform,
+                state["question"],
+                fashion_related=_is_fashion_domain_ask(state["question"], platform),
+            )
+        }
+
     graph = StateGraph(AskState)
 
     def timed_route_question(state: AskState) -> dict:
@@ -360,6 +397,7 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
     graph.add_node("direct", answer_directly)
     graph.add_node("sample_design", design_sample)
     graph.add_node("news", use_news)
+    graph.add_node("out_of_scope", refuse_out_of_scope)
     graph.add_edge(START, "router")
     graph.add_conditional_edges(
         "router",
@@ -370,6 +408,7 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
             "direct": "direct",
             "sample_design": "sample_design",
             "news": "news",
+            "out_of_scope": "out_of_scope",
         },
     )
     graph.add_edge("catalog", END)
@@ -377,6 +416,7 @@ def _compile(platform: Platform, principal: Principal, graph_id: str | None = No
     graph.add_edge("direct", END)
     graph.add_edge("sample_design", END)
     graph.add_edge("news", END)
+    graph.add_edge("out_of_scope", END)
     return graph.compile()
 
 
@@ -386,7 +426,7 @@ def _catalog_declined(answer: GroundedAnswer) -> bool:
 
 def _select_route(state: AskState) -> Route:
     route = state.get("route", "catalog")
-    if route not in {"catalog", "web_search", "direct", "sample_design", "news"}:
+    if route not in {"catalog", "web_search", "direct", "sample_design", "news", "out_of_scope"}:
         return "catalog"
     return route
 
@@ -404,6 +444,8 @@ def _route_from_body(body: dict, question: str) -> tuple[Route, str]:
     query = str(arguments.get("query") or question) if isinstance(arguments, dict) else question
     if name == "search_web":
         return "web_search", query
+    if name in {"out_of_scope", "refuse_out_of_scope", "out_of_domain"}:
+        return "out_of_scope", question
     if name == "answer_directly":
         return "direct", question
     # "catalog" is current; accept legacy "plm" tool name from older prompts/models.
@@ -515,6 +557,40 @@ def _iter_ask_events_traced(
         isinstance(conversation_state, dict)
         and (conversation_state.get("confirmation") or {}).get("question")
     )
+
+    # Definition / about asks first — never trapped by sticky entity clarification
+    # from a prior catalog misfire ("name a brand?").
+    early_scope = _fashion_scope_route(question, platform)
+    if early_scope is not None:
+        if isinstance(conversation_state, dict):
+            conversation_state.pop("clarification", None)
+            conversation_state.pop("analysis_brief", None)
+            conversation_state.pop("confirmation", None)
+        trace_step("route", f"Selected {early_scope} (definition/about early)")
+        if early_scope == "web_search":
+            yield {"type": "status", "text": "Researching this fashion topic…"}
+            yield {
+                "type": "thinking",
+                "text": "Reading this as a fashion definition / about question.\n"
+                "Selected web research. ",
+            }
+            yield from _iter_web_stream(platform, question, question, history)
+            return
+        fashion_related = _is_fashion_domain_ask(question, platform)
+        yield {"type": "status", "text": "Checking whether this fits Fashion Brain…"}
+        yield {
+            "type": "thinking",
+            "text": (
+                "This looks fashion-related, but catalog/web coverage isn’t available for it.\n"
+                if fashion_related
+                else "This doesn’t look like a fashion or garment catalog question.\n"
+            ),
+        }
+        yield from _iter_out_of_scope_stream(
+            platform, question, fashion_related=fashion_related
+        )
+        return
+
     # Align with HTTP /ask + catalog pipeline: when past-history study is off,
     # do not divert into "direct" rewrite / follow-up routes from prior turns.
     try:
@@ -527,6 +603,36 @@ def _iter_ask_events_traced(
             history = []
             if isinstance(conversation_state, dict):
                 conversation_state["active_filters"] = {}
+
+    # Self-contained product-count asks must not stay trapped by a sticky
+    # filter_validation / entity clarify from a prior misfire (that path skipped
+    # the Cypher COUNT fast path and burned ~1–2 min on turn_planner/schema).
+    if pending_clar:
+        try:
+            from fashion_brain.ask import is_product_count_ask
+
+            if is_product_count_ask(question):
+                slot = str(
+                    (conversation_state or {})
+                    .get("clarification", {})
+                    .get("pending_slot")
+                    or ""
+                )
+                if isinstance(conversation_state, dict):
+                    conversation_state.pop("clarification", None)
+                    conversation_state.pop("confirmation", None)
+                    conversation_state.pop("understanding_plan", None)
+                    # Fresh count ask — do not inherit prior turn filters.
+                    conversation_state["active_filters"] = {}
+                pending_clar = False
+                pending_conf = False
+                trace_step(
+                    "route",
+                    "Cleared sticky clarification for product-count ask",
+                    cleared_slot=slot or None,
+                )
+        except Exception:
+            pass
 
     # Pending clarify/confirm must never fall through to "direct" model chat.
     # QU decides whether this message answers the slot or starts a new catalog turn.
@@ -608,7 +714,6 @@ def _iter_ask_events_traced(
     from fashion_brain.agent import plan_routes
 
     planned = plan_routes(question)
-    trace_step("route", "Keyword route plan", planned=planned)
     if planned == ["news"]:
         trace_step("route", "Selected news")
         yield {"type": "status", "text": "Searching news sources…"}
@@ -617,17 +722,18 @@ def _iter_ask_events_traced(
         yield from _iter_news_stream(platform, question, principal, history, graph_id=graph_id)
         return
 
-    # Metadata-sufficient quantity asks: skip ThinkingBrain (schema catalog ~18s)
-    # and go straight to catalog meta fast path / kg_stats.
+    # Obvious product-count asks: skip the LLM router (local 31B was ~15–40s alone).
+    # Catalog meta/Cypher fast path answers these; definitions already exited above.
     try:
+        from fashion_brain.ask import is_product_count_ask
         from fashion_brain.orchestration.catalog_pipeline import _meta_fast_path_eligible
 
-        state_for_meta = dict(conversation_state or {})
-        if _meta_fast_path_eligible(question, state_for_meta, history):
-            trace_step(
-                "route",
-                "Selected catalog (kg_stats meta-eligible — skipped ThinkingBrain)",
-            )
+        if (
+            is_product_count_ask(question)
+            and not _is_general_definition_ask(question)
+            and _meta_fast_path_eligible(question, dict(conversation_state or {}), history)
+        ):
+            trace_step("route", "Selected catalog (product-count fast path, skipped LLM router)")
             yield {"type": "status", "text": "Looking up catalog totals…"}
             yield {
                 "type": "thinking",
@@ -645,6 +751,88 @@ def _iter_ask_events_traced(
             return
     except Exception:
         pass
+
+    # LLM-first routing: interpret intent before ThinkingBrain / meta / schema guards.
+    provider = build_model_provider(platform.settings)
+    yield {"type": "status", "text": "Understanding your question…"}
+    yield {"type": "thinking", "text": "Interpreting what you’re asking before choosing a source.\n"}
+    trace_step("route", "LLM router started")
+    router_tools = _router_tools_for(platform)
+    try:
+        body = yield from _run_with_progress(
+            lambda: provider.chat(
+                chat_messages(ROUTER_SYSTEM, question, history),
+                timeout=_model_timeout(platform),
+                tools=router_tools,
+                tool_choice="required",
+            ),
+            progress="Still understanding your question…",
+        )
+        route, query = _route_from_body(body, question)
+    except ModelUnavailableError as exc:
+        LOGGER.info("agent router unavailable error=%s; out_of_scope", exc.message)
+        route, query = "out_of_scope", question
+        trace_step("route", "LLM router unavailable → out_of_scope", error=exc.message)
+    route, query = _normalize_router_choice(platform, route, query, question)
+    trace_step("route", f"Selected {route}", query=query if route == "web_search" else None)
+
+    if route == "out_of_scope":
+        fashion_related = _is_fashion_domain_ask(question, platform)
+        yield {
+            "type": "thinking",
+            "text": (
+                "This looks fashion-related, but catalog/web coverage isn’t available for it.\n"
+                if fashion_related
+                else "This doesn’t look like a fashion or garment catalog question.\n"
+            ),
+        }
+        yield from _iter_out_of_scope_stream(
+            platform, question, fashion_related=fashion_related
+        )
+        return
+    if route == "web_search":
+        yield {"type": "thinking", "text": "Selected web research for this fashion topic.\n"}
+        yield from _iter_web_stream(platform, question, query, history)
+        return
+    if route == "direct":
+        yield {"type": "thinking", "text": "Selected direct.\n"}
+        yield from _iter_direct_stream(platform, question, history)
+        return
+    if route == "sample_design":
+        yield {"type": "thinking", "text": "Selected sample design.\n"}
+        yield from _iter_sample_design(platform, question, history)
+        return
+
+    # Catalog path only after the LLM chose catalog (and definition safety net passed).
+    yield {"type": "thinking", "text": "Selected the product catalog.\n"}
+    # Never meta-path about/definition asks — KG has field values, not glossary text.
+    if not _is_general_definition_ask(question):
+        try:
+            from fashion_brain.orchestration.catalog_pipeline import _meta_fast_path_eligible
+
+            state_for_meta = dict(conversation_state or {})
+            if _meta_fast_path_eligible(question, state_for_meta, history):
+                trace_step(
+                    "route",
+                    "Catalog meta fast path after LLM catalog choice",
+                )
+                yield {"type": "status", "text": "Looking up catalog totals…"}
+                yield {
+                    "type": "thinking",
+                    "text": "Reading this as a product count.\nLooking up the product catalog. ",
+                }
+                yield from _iter_catalog_stream(
+                    platform,
+                    question,
+                    principal,
+                    history,
+                    summary=None,
+                    graph_id=graph_id,
+                    conversation_state=conversation_state,
+                )
+                return
+        except Exception:
+            pass
 
     from fashion_brain.agents import ThinkingBrain
 
@@ -668,108 +856,17 @@ def _iter_ask_events_traced(
         prior_chat=summary.references_prior_chat,
     )
     yield {"type": "thinking", "text": summary.text + "\n"}
-
-    # ThinkingBrain already extracted catalog Scope (e.g. Analyze PRIMARK → brand=primark).
-    # Never let the LLM router send that to web_search.
-    if _thinking_implies_catalog(summary):
-        trace_step(
-            "route",
-            "Selected catalog (ThinkingBrain Scope)",
-            filters=getattr(summary, "filters", None),
-            group_by=getattr(summary, "group_by", None),
-        )
-        yield {"type": "status", "text": "Searching matching product records…"}
-        yield {"type": "thinking", "text": "Looking up the product catalog. "}
-        yield from _iter_catalog_stream(
-            platform,
-            question,
-            principal,
-            history,
-            summary,
-            graph_id=graph_id,
-            conversation_state=conversation_state,
-        )
-        return
-
-    if planned and planned[0] in _PLM_ROUTES and _is_explicit_catalog_question(question, planned[0]):
-        trace_step("route", "Selected catalog (planned route)", planned=planned[0])
-        yield {"type": "status", "text": "Searching matching product records…"}
-        yield {"type": "thinking", "text": "Looking up the product catalog. "}
-        yield from _iter_catalog_stream(
-            platform,
-            question,
-            principal,
-            history,
-            summary,
-            graph_id=graph_id,
-            conversation_state=conversation_state,
-        )
-        return
-
-    if _question_requires_catalog(question, platform):
-        trace_step("route", "Selected catalog (schema-grounded domain guard)")
-        yield {"type": "status", "text": "Searching matching product records…"}
-        yield {"type": "thinking", "text": "Looking up the product catalog. "}
-        yield from _iter_catalog_stream(
-            platform,
-            question,
-            principal,
-            history,
-            summary,
-            graph_id=graph_id,
-            conversation_state=conversation_state,
-        )
-        return
-
-    provider = build_model_provider(platform.settings)
-    yield {"type": "status", "text": "Choosing the best source for your question…"}
-    trace_step("route", "LLM router started")
-    router_tools = (
-        ROUTER_TOOLS
-        if _web_search_enabled(platform)
-        else [tool for tool in ROUTER_TOOLS if tool.get("function", {}).get("name") != "search_web"]
+    yield {"type": "status", "text": "Searching matching product records…"}
+    yield {"type": "thinking", "text": "Looking up the product catalog. "}
+    yield from _iter_catalog_stream(
+        platform,
+        question,
+        principal,
+        history,
+        summary,
+        graph_id=graph_id,
+        conversation_state=conversation_state,
     )
-    try:
-        body = yield from _run_with_progress(
-            lambda: provider.chat(
-                chat_messages(ROUTER_SYSTEM, question, history),
-                timeout=_model_timeout(platform),
-                tools=router_tools,
-                tool_choice="required",
-            ),
-            progress="Still selecting the best source for your question…",
-        )
-        route, query = _route_from_body(body, question)
-    except ModelUnavailableError as exc:
-        LOGGER.info("agent router unavailable error=%s; catalog selected", exc.message)
-        route, query = "catalog", question
-        trace_step("route", "LLM router unavailable → catalog", error=exc.message)
-    if route == "direct" and _question_requires_catalog(question, platform):
-        route, query = "catalog", question
-        trace_step("route", "Blocked direct → catalog (schema token match)")
-    if route == "web_search":
-        route = _force_catalog_if_web_disabled(platform, route, question)
-        if route == "catalog":
-            trace_step("route", "web_search disabled → catalog")
-            query = question
-    trace_step("route", f"Selected {route}", query=query if route == "web_search" else None)
-    yield {"type": "thinking", "text": f"Selected {route.replace('_', ' ')}. "}
-    if route == "web_search":
-        yield from _iter_web_stream(platform, question, query, history)
-    elif route == "direct":
-        yield from _iter_direct_stream(platform, question, history)
-    elif route == "sample_design":
-        yield from _iter_sample_design(platform, question, history)
-    else:
-        yield from _iter_catalog_stream(
-            platform,
-            question,
-            principal,
-            history,
-            summary,
-            graph_id=graph_id,
-            conversation_state=conversation_state,
-        )
 
 
 def _iter_news_stream(
@@ -1852,6 +1949,271 @@ def _force_catalog_if_web_disabled(platform, route: Route, question: str) -> Rou
         LOGGER.info("web_search disabled → catalog for question=%s", (question or "")[:80])
         return "catalog"
     return route
+
+
+def _router_tools_for(platform) -> list[dict]:
+    tools = list(ROUTER_TOOLS)
+    if not _web_search_enabled(platform):
+        tools = [t for t in tools if t.get("function", {}).get("name") != "search_web"]
+    return tools
+
+
+def _normalize_router_choice(
+    platform, route: Route, query: str, question: str
+) -> tuple[Route, str]:
+    """Post-checks after the LLM router.
+
+    Primary routing is LLM intent. Keep the about/definition safety net so a
+    mistaken catalog choice (e.g. GSM schema token → product count) cannot win.
+    """
+
+    route, query = _apply_fashion_scope_to_route(platform, route, query, question)
+    if route == "web_search" and not _web_search_enabled(platform):
+        # Do not invent a catalog count when research was requested but web is off.
+        LOGGER.info("web_search disabled after LLM choice → out_of_scope")
+        return "out_of_scope", question
+    if route == "catalog":
+        return "catalog", question
+    return route, query
+
+
+_FASHION_DOMAIN_RE = re.compile(
+    r"(?i)\b("
+    r"fashion|garment|garments|apparel|clothing|clothes|textile|textiles|fabric|fabrics|"
+    r"knit|knits|knitting|woven|weave|yarn|fibre|fiber|cotton|polyester|elastane|viscose|"
+    r"wool|linen|denim|silk|nylon|acrylic|rayon|spandex|"
+    r"gsm|seam|stitch|silhouette|hem|collar|sleeve|neckline|placket|gauge|gsm|"
+    r"sweater|jumper|cardigan|dress|skirt|blouse|shirt|trouser|trousers|pants|jean|jeans|"
+    r"jacket|coat|hoodie|tee|t[\s-]?shirt|top|tops|knitwear|outerwear|activewear|"
+    r"footwear|sneaker|sneakers|shoe|shoes|boot|boots|"
+    r"merchandis(?:e|er|ing)|buyer|buyers|brand|brands|assortment|plm|plmex|ecom|"
+    r"e[\s-]?comm(?:erce)?|retail(?:er|ers)?|storefront|sku|skus|style|styles|"
+    r"composition|construction|fit|colour|color|dye|dyed|finish|finishing|"
+    r"sample|samples|spec(?:ification)?s?|moodboard|lookbook|season|ss\d+|aw\d+|"
+    r"primark|zara|matalan|h&m|uniqlo|c&a"
+    r")\b"
+)
+
+
+def _is_fashion_domain_ask(question: str, platform=None) -> bool:
+    """True when the ask is about fashion, garments, textiles, or catalog product data."""
+
+    text = (question or "").strip()
+    if not text:
+        return False
+    if _FASHION_DOMAIN_RE.search(text):
+        return True
+    if _question_requires_catalog(text, platform):
+        return True
+    if _is_explicit_catalog_question(text, "product_count"):
+        return True
+    try:
+        from fashion_brain.ask import garment_type_from_question
+
+        if garment_type_from_question(text):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _looks_like_catalog_retrieval_ask(question: str) -> bool:
+    """Lexical product-data retrieval shape — no schema grounding.
+
+    Used so glossary asks like 'what is GSM?' are not treated as catalog just
+    because GSM is a PLM field name. Real retrieval still matches here via
+    products/counts/list/breakdown language.
+    """
+
+    text = (question or "").casefold()
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"\b("
+            r"how many|count of|number of|product count|item count|sku count|"
+            r"how much|average|avg|mean price|"
+            r"products?|items?|skus?|styles?|catalog|assortment|"
+            r"in[\s-]?stock|availability|prices?|pricing|"
+            r"top\s+\d+|bottom\s+\d+|breakdown|distribution|compare|comparison|"
+            r"analy[sz]e|profile|overview|list|show(?:\s+me)?|find(?:\s+me)?|"
+            r"rank(?:ing)?|share|parent(?:\s+category)?|"
+            r"latest|current|trend(?:s|ing)?|news|"
+            r"specifications?|plm(?:ex)?|e[\s-]?comm(?:erce)?|"
+            r"buyers?"
+            r")\b",
+            text,
+        )
+    )
+
+
+def _is_general_definition_ask(question: str) -> bool:
+    """True for about / definition / meaning / explain asks — not product retrieval.
+
+    The product KG has field *values* and counts, not glossary sentences. Asks like
+    'what is GSM?', 'tell me about gauge', or 'meaning of composition' must not hit
+    meta/catalog just because those tokens exist as schema keys.
+    """
+
+    text = (question or "").strip()
+    if not text or len(text) > 220:
+        return False
+
+    # Glossary / conceptual cues (anywhere in a short ask).
+    conceptual = bool(
+        re.search(
+            r"(?is)\b("
+            r"what(?:'s|\s+is|\s+are)\b|"
+            r"what\s+does\b.+\bmean\b|"
+            r"what\s+do\s+you\s+mean\s+by\b|"
+            r"define\b|definition\s+of\b|meaning\s+of\b|"
+            r"explain\b|tell\s+me\s+about\b|talk\s+(?:to\s+me\s+)?about\b|"
+            r"describe\s+what\b|in\s+(?:simple\s+)?terms\b|"
+            r"stand(?:s)?\s+for\b|abbreviation(?:\s+for)?\b|acronym(?:\s+for)?\b|"
+            r"difference\s+between\b"
+            r")",
+            text,
+        )
+    )
+    # Bare "about X" / "regarding X" with no retrieval framing.
+    about_only = bool(
+        re.match(
+            r"(?is)^\s*(?:please\s+)?(?:about|regarding|re:)\s+[\w][\w\s\-/&.']{0,80}\s*\??\s*$",
+            text,
+        )
+    )
+    if not conceptual and not about_only:
+        return False
+    # Product-data retrieval stays on catalog / meta — not this path.
+    if _looks_like_catalog_retrieval_ask(text):
+        return False
+    return True
+
+
+def _fashion_scope_route(question: str, platform) -> Route | None:
+    """Early fashion-scope decision for definition / about / off-domain asks.
+
+    - Fashion concept (e.g. GSM, seam, gauge) → web_search (or out_of_scope if web off)
+    - Off-domain (e.g. HTML) → out_of_scope polite refuse
+    - Otherwise None so normal catalog/LLM routing continues
+
+    Runs before ThinkingBrain / kg_stats so conceptual asks never burn 60–100s on catalog.
+    """
+
+    if not _is_general_definition_ask(question):
+        return None
+    if _is_fashion_domain_ask(question, platform):
+        if _web_search_enabled(platform):
+            return "web_search"
+        return "out_of_scope"
+    return "out_of_scope"
+
+
+def _apply_fashion_scope_to_route(
+    platform, route: Route, query: str, question: str
+) -> tuple[Route, str]:
+    """Clamp LLM/catalog choices to Fashion Brain scope."""
+
+    fashion = _is_fashion_domain_ask(question, platform)
+    definition = _is_general_definition_ask(question)
+
+    # Pure definitions never stay on catalog — even when the term is a schema field (GSM).
+    if definition:
+        if fashion:
+            if _web_search_enabled(platform):
+                LOGGER.info("fashion scope override route=%s → web_search", route)
+                return "web_search", question
+            LOGGER.info("fashion scope override route=%s → out_of_scope (web off)", route)
+            return "out_of_scope", question
+        LOGGER.info("fashion scope override route=%s → out_of_scope (off-domain)", route)
+        return "out_of_scope", question
+
+    if route == "direct" and not fashion:
+        LOGGER.info("fashion scope override direct → out_of_scope")
+        return "out_of_scope", question
+
+    if route == "web_search" and not fashion:
+        LOGGER.info("fashion scope override web_search → out_of_scope")
+        return "out_of_scope", question
+
+    if route == "direct" and fashion and _web_search_enabled(platform):
+        # Prefer researched fashion answers over unconstrained model trivia.
+        LOGGER.info("fashion scope override direct → web_search")
+        return "web_search", question
+
+    return route, query
+
+
+def _out_of_scope_topic_hint(question: str) -> str:
+    """Short plain topic phrase for fallback copy — never an answer."""
+
+    text = re.sub(r"\s+", " ", (question or "").strip())
+    text = re.sub(
+        r"(?is)^\s*(?:please\s+)?(?:what(?:'s|\s+is|\s+are)|what\s+does|define|definition\s+of|explain)\s+",
+        "",
+        text,
+    )
+    text = re.sub(r"(?is)\s+mean\s*\??\s*$", "", text)
+    text = re.sub(r"[?!.]+$", "", text).strip(" \t\"'`")
+    if not text:
+        return "that topic"
+    if len(text) > 60:
+        text = text[:57].rstrip() + "…"
+    return text
+
+
+def _fallback_out_of_scope_text(question: str, *, fashion_related: bool = False) -> str:
+    if fashion_related:
+        return FASHION_WEB_UNAVAILABLE_REPLY
+    topic = _out_of_scope_topic_hint(question)
+    return (
+        f"“{topic}” is outside Fashion Brain’s fashion and garment focus, so I can’t cover it here. "
+        "I can help with product catalogs, materials, styles, brands, and apparel questions. "
+        "Ask me something fashion-related and I’ll take it from there."
+    )
+
+
+def _draft_out_of_scope_text(
+    platform: Platform,
+    question: str,
+    *,
+    fashion_related: bool = False,
+) -> str:
+    """Instant topic-aware refusal — no model/catalog round-trip.
+
+    ``platform`` is accepted for call-site consistency; refusals must stay fast.
+    """
+
+    _ = platform
+    return _fallback_out_of_scope_text(question, fashion_related=fashion_related)
+
+
+def _out_of_scope_answer(
+    platform: Platform,
+    question: str,
+    *,
+    fashion_related: bool = False,
+) -> GroundedAnswer:
+    text = _draft_out_of_scope_text(platform, question, fashion_related=fashion_related)
+    return GroundedAnswer(
+        question=question,
+        routes=["out_of_scope"],
+        answer=text,
+        caveats=["Fashion Brain answers fashion and garment questions only."],
+        synthetic_data=False,
+    )
+
+
+def _iter_out_of_scope_stream(
+    platform: Platform,
+    question: str,
+    *,
+    fashion_related: bool = False,
+):
+    yield {"type": "status", "text": "Staying within Fashion Brain’s scope…"}
+    answer = _out_of_scope_answer(platform, question, fashion_related=fashion_related)
+    yield from _deltas("answer", answer.answer)
+    yield {"type": "done", "answer": answer.model_dump()}
 
 
 def _is_explicit_catalog_question(question: str, route: str) -> bool:

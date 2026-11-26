@@ -738,16 +738,35 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
     if category:
         needles = _soft_match_needles(str(category))
         params["category_needles"] = needles
-        where.append(
-            "("
-            "ANY(needle IN $category_needles WHERE toLower(coalesce(p.category_path,'')) CONTAINS needle) "
-            "OR ANY(needle IN $category_needles WHERE toLower(coalesce(p.name,'')) CONTAINS needle) "
-            "OR EXISTS { MATCH (p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUBFAMILY|HAS_SUB_CATEGORY|"
-            "HAS_GARMENT_TYPE|HAS_PLM_SUB_SUB_CATEGORY|HAS_PLM_MAIN_CATEGORY|HAS_PLM_SUB_CATEGORY]->(c:Entity) "
-            "WHERE ANY(needle IN $category_needles WHERE toLower(coalesce(c.name,'')) = needle "
-            "OR toLower(coalesce(c.name,'')) CONTAINS needle) }"
-            ")"
-        )
+        # Colour words as category needles must NOT match product titles
+        # ("Black Pull On…") — that path invented 743 "category Black" hits.
+        try:
+            from fashion_brain.planning.metadata_resolver import _looks_like_basic_color
+
+            colorish_category = _looks_like_basic_color(str(category)) or any(
+                _looks_like_basic_color(n) for n in needles
+            )
+        except Exception:
+            colorish_category = False
+        if colorish_category:
+            where.append(
+                "("
+                "EXISTS { MATCH (p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUBFAMILY|HAS_SUB_CATEGORY|"
+                "HAS_GARMENT_TYPE|HAS_PLM_SUB_SUB_CATEGORY|HAS_PLM_MAIN_CATEGORY|HAS_PLM_SUB_CATEGORY]->(c:Entity) "
+                "WHERE ANY(needle IN $category_needles WHERE toLower(coalesce(c.name,'')) = needle) }"
+                ")"
+            )
+        else:
+            where.append(
+                "("
+                "ANY(needle IN $category_needles WHERE toLower(coalesce(p.category_path,'')) CONTAINS needle) "
+                "OR ANY(needle IN $category_needles WHERE toLower(coalesce(p.name,'')) CONTAINS needle) "
+                "OR EXISTS { MATCH (p)-[:BELONGS_TO_CATEGORY|HAS_FAMILY|HAS_SUBFAMILY|HAS_SUB_CATEGORY|"
+                "HAS_GARMENT_TYPE|HAS_PLM_SUB_SUB_CATEGORY|HAS_PLM_MAIN_CATEGORY|HAS_PLM_SUB_CATEGORY]->(c:Entity) "
+                "WHERE ANY(needle IN $category_needles WHERE toLower(coalesce(c.name,'')) = needle "
+                "OR toLower(coalesce(c.name,'')) CONTAINS needle) }"
+                ")"
+            )
         handled.update({"category", "garment"})
     season_year = filters.get("season_year")
     if season_year:
@@ -2953,7 +2972,7 @@ def _append_currency_switch_only_summary(
 def _price_history_source_label(graph_id: str) -> str:
     low = str(graph_id or "").casefold()
     if "plm" in low:
-        return "PLM records"
+        return "PLMex"
     if "ecom" in low or low in {"master_products", "master"}:
         return "e-commerce listings"
     return str(graph_id or "this catalog")
@@ -4641,7 +4660,7 @@ def append_neo4j_specification_answer(
         return
     if len(targets) > 1:
         lines.append(
-            "Combined specification: retail mix from e-commerce plus development fields from PLM "
+            "Combined specification: retail mix from e-commerce plus development fields from PLMex "
             "(each catalog only contributes fields it actually stores)."
         )
         caveats.append(
@@ -5747,11 +5766,25 @@ def append_neo4j_count_answer(
                     kind = str(meta.get("kind") or "")
                     if kind == "distinct_facet":
                         noun = str(meta.get("attribute") or "value").replace("_", " ")
-                        lines.append(f"There are {n:,} distinct {noun}s in {label}.")
+                        attr = str(meta.get("attribute") or noun)
+                        example_bit = _facet_example_phrase(
+                            graph_id, attr, generated=generated, limit=5
+                        )
+                        line = f"There are {n:,} distinct {noun}s in {label}"
+                        if example_bit:
+                            line = f"{line} ({example_bit})"
+                        lines.append(line + ".")
                         title = f"{label} distinct {noun} count"
                         excerpt = f"{meta.get('attribute')}s={n}"
+                        if example_bit:
+                            excerpt = f"{excerpt}; {example_bit}"
                     elif kind == "value_count":
                         phrase = _filter_phrase(filters)
+                        # Enrich with top values of the counted facet itself
+                        # (e.g. brand=primark count → n/a; category filter → other
+                        # categories are competing — only distinct-facet gets names).
+                        # For single-filter product counts, name the filter value clearly;
+                        # optional_metadata may still carry related context for the writer.
                         lines.append(f"There are {n:,} products{phrase}.")
                         title = f"{label} {meta.get('attribute')}={meta.get('value')}"
                         filter_label = str(
@@ -5760,7 +5793,13 @@ def append_neo4j_count_answer(
                         )
                         excerpt = f"{filter_label} → {n} (from generated/kg_stats)"
                     else:
-                        lines.append(f"There are {n:,} products.")
+                        line = f"There are {n:,} products"
+                        brand_bit = _facet_example_phrase(
+                            graph_id, "brand", generated=generated, limit=4
+                        )
+                        if brand_bit:
+                            line = f"{line} ({brand_bit})"
+                        lines.append(line + ".")
                         title = f"{label} product total"
                         excerpt = f"products={n}"
                     evidence.append(
@@ -5781,7 +5820,7 @@ def append_neo4j_count_answer(
                     # Optional facet facts for ResponseAgent — not forced into the answer.
                     if (
                         include_optional_metadata
-                        and kind in {"value_count", "product_total", ""}
+                        and kind in {"value_count", "product_total", "distinct_facet", ""}
                         and n > 0
                     ):
                         _attach_optional_facet_metadata(
@@ -5828,13 +5867,22 @@ def append_neo4j_count_answer(
             n = 0
             source = "kg_stats"
         if n is not None:
-            lines.append(f"There are {n:,} distinct {noun}s in {label}.")
+            example_bit = _facet_example_phrase(
+                graph_id, entity, generated=generated, limit=5
+            )
+            line = f"There are {n:,} distinct {noun}s in {label}"
+            if example_bit:
+                line = f"{line} ({example_bit})"
+            lines.append(line + ".")
+            excerpt = f"{entity}s={n}"
+            if example_bit:
+                excerpt = f"{excerpt}; {example_bit}"
             evidence.append(
                 EvidenceItem(
                     source_id=graph_id,
                     record_id="kg_stats" if source == "kg_stats" else "facet_count",
                     title=f"{label} distinct {noun} count",
-                    excerpt=f"{entity}s={n}",
+                    excerpt=excerpt,
                     source_path=f"kg_stats/{graph_id}.json" if source == "kg_stats" else graph_id,
                     verification_status="observed",
                     graph=graph_id,
@@ -6014,7 +6062,7 @@ def append_neo4j_count_answer(
                 str(group_by),
                 groups,
                 total,
-                limit,
+                _explicit_facet_limit(question, limit),
                 graph_id=graph_id,
                 platform=platform,
                 generated=generated,
@@ -6091,7 +6139,7 @@ def append_neo4j_count_answer(
                 str(group_by),
                 usable,
                 total,
-                limit,
+                _explicit_facet_limit(question, limit),
                 graph_id=graph_id,
                 platform=platform,
                 generated=generated,
@@ -6131,6 +6179,44 @@ def append_neo4j_count_answer(
                     )
                 )
             return
+
+    # Pure "how many …" asks: one Cypher COUNT + one sentence. No samples,
+    # brand/category mix, or "open product listing" caveats — those belong to
+    # listing / show-me asks, not quantity asks.
+    try:
+        from fashion_brain.ask import is_product_count_ask
+
+        pure_count = (
+            is_product_count_ask(question or "")
+            and not ranked_listing
+            and not group_by
+            and limit is None
+        )
+    except Exception:
+        pure_count = False
+    if pure_count and filters:
+        total = cypher_count_products(platform, graph_id, filters)
+        if total is None:
+            total = 0
+        lines.append(
+            f"There are {int(total):,} products" + (f"{phrase}." if phrase else ".")
+        )
+        evidence.append(
+            EvidenceItem(
+                source_id=graph_id,
+                record_id="cypher_count",
+                title=f"{label} product count",
+                excerpt=f"products={int(total)}; filters={filters}",
+                source_path=graph_id,
+                verification_status="observed",
+                graph=graph_id,
+                node_id=None,
+                synthetic=False,
+                requested_filters=dict(filters or {}),
+                applied_filters=dict(filters or {}),
+            )
+        )
+        return
 
     # Open listings (no user top-N): short sample. Explicit limit: honour it, still capped.
     open_listing = limit is None and not ranked_listing
@@ -6198,7 +6284,7 @@ def append_neo4j_count_answer(
                     group_by,
                     groups,
                     total,
-                    limit,
+                    _explicit_facet_limit(question, limit),
                     graph_id=graph_id,
                     platform=platform,
                     generated=generated,
@@ -6217,6 +6303,7 @@ def append_neo4j_count_answer(
                     graph_id=graph_id,
                     platform=platform,
                     generated=generated,
+                    user_set_limit=True,
                 )
                 if brand_lines:
                     lines.append("By brand:")
@@ -6233,6 +6320,7 @@ def append_neo4j_count_answer(
                         graph_id=graph_id,
                         platform=platform,
                         generated=generated,
+                        user_set_limit=True,
                     )
                     if cat_lines:
                         lines.append("By category:")
@@ -6264,6 +6352,52 @@ def append_neo4j_count_answer(
         )
 
 
+# Soft facet tables: show every value when the set is small; otherwise preview + note.
+_FACET_AUTO_FULL_MAX = 25
+_FACET_AUTO_PREVIEW = 20
+_EXPLICIT_FACET_LIMIT_RE = re.compile(
+    r"\b(?:top|first|show|list|give|about|around)\s+(\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def _explicit_facet_limit(question: str | None, limit: int | None) -> int | None:
+    """Return limit only when the question named an explicit top/show N."""
+
+    if limit is None:
+        return None
+    if _EXPLICIT_FACET_LIMIT_RE.search(str(question or "")):
+        return max(1, int(limit))
+    return None
+
+
+def _facet_row_budget(
+    available: int,
+    *,
+    limit: int | None = None,
+    user_set_limit: bool = False,
+) -> tuple[int, str | None]:
+    """How many ranked facet rows to show + optional truncation note.
+
+    - User named N → honor that N (note when more exist).
+    - No N and set is small → show all.
+    - No N and set is huge → preview 20 and say "Showing 20 of N unique values."
+    """
+
+    total = max(0, int(available or 0))
+    if total <= 0:
+        return 0, None
+    if user_set_limit and limit is not None:
+        n = max(1, int(limit))
+        if total > n:
+            return n, f"Showing {n} of {total} unique values (your limit)."
+        return total, None
+    if total <= _FACET_AUTO_FULL_MAX:
+        return total, None
+    n = min(_FACET_AUTO_PREVIEW, total)
+    return n, f"Showing {n} of {total} unique values."
+
+
 def append_neo4j_analysis_answer(
     platform,
     principal: Principal,
@@ -6276,12 +6410,14 @@ def append_neo4j_analysis_answer(
     analysis_fields: list[str] | tuple[str, ...] | None = None,
     *,
     brief: bool = False,
+    user_set_limit: bool = False,
 ) -> None:
     """Type-wise top rankings for a brand/selection on any Neo4j product graph.
 
     ``analysis_fields`` come from that graph's live schema (via resolve_analysis_fields).
     Works for ecom, plmex, or any registered product KG — not e-commerce-only.
     ``brief=True`` titles the answer as a product brief and keeps only requested fields.
+    ``user_set_limit=True`` means ``limit`` came from the question (top/show N).
     """
 
     filters = _align_party_filters_for_graph(platform, graph_id, clean_product_filters(filters))
@@ -6309,6 +6445,7 @@ def append_neo4j_analysis_answer(
                 caveats,
                 analysis_fields=analysis_fields,
                 brief=brief,
+                user_set_limit=user_set_limit,
             )
             lines.append("")
         return
@@ -6335,12 +6472,8 @@ def append_neo4j_analysis_answer(
             for node in (sample or [])
             if allows(principal, node.properties.get("classification") or "internal")
         ]
-    # Full analysis: show many unique values per field. Focused (1 field): deeper cut.
+    # Per-field row budget is resolved after counting unique values (see loop below).
     focused = bool(analysis_fields) and len(list(analysis_fields)) == 1
-    if limit is not None:
-        top_n = max(int(limit), 1)
-    else:
-        top_n = 20 if focused else 12
     who_raw = filters.get("brand") or filters.get("buyer") or "this selection"
     who = _display_label(str(who_raw), graph_id=graph_id, platform=platform)
     garment_bit = (
@@ -6424,9 +6557,15 @@ def append_neo4j_analysis_answer(
         scope = "focused attribute"
     else:
         scope = "all attributes"
-    lines.append(
-        f"Field-wise analysis ({scope}; up to {top_n} unique values per field with counts and shares)."
-    )
+    if user_set_limit and limit is not None:
+        lines.append(
+            f"Field-wise analysis ({scope}; up to {int(limit)} unique values per field with counts and shares)."
+        )
+    else:
+        lines.append(
+            f"Field-wise analysis ({scope}; all values when ≤{_FACET_AUTO_FULL_MAX}, "
+            f"otherwise top {_FACET_AUTO_PREVIEW} with a count note)."
+        )
     # Skip facets the ask already fixed to one value (self-echo breakdowns).
     fixed_filters = {
         normalize_name(str(k)): normalize_name(str(v))
@@ -6437,13 +6576,20 @@ def append_neo4j_analysis_answer(
     for field in fields:
         if not is_analysis_facet_attr(str(field)):
             continue
-        choices = _usable_ranked(
+        all_usable = _usable_ranked(
             ranked.get(field),
             str(field),
             active_party=active_party,
             reserved_values=reserved_values,
-            limit=top_n,
         )
+        if not all_usable:
+            continue
+        show_n, trunc_note = _facet_row_budget(
+            len(all_usable),
+            limit=limit,
+            user_set_limit=user_set_limit,
+        )
+        choices = all_usable[:show_n] if show_n else all_usable
         if not choices:
             continue
         field_key = normalize_name(str(field))
@@ -6491,7 +6637,10 @@ def append_neo4j_analysis_answer(
         top_name, top_count = display_choices[0]
         share = round(100.0 * top_count / total, 1) if total else 0.0
         lines.append(f"Leading value: {top_name} ({top_count}, {share}%).")
-        lines.append(f"{len(display_choices)} unique values shown (of this field).")
+        if trunc_note:
+            lines.append(trunc_note)
+        else:
+            lines.append(f"{len(display_choices)} unique values shown (of this field).")
         lines.append("| Value | Count | Share % |")
         lines.append("| --- | ---: | ---: |")
         for name, count in display_choices:
@@ -6541,7 +6690,43 @@ def append_ecom_count_answer(platform, principal, filters, group_by, limit, line
     append_neo4j_count_answer(platform, principal, graph, filters, group_by, limit, lines, evidence, caveats)
 
 
+def _facet_example_phrase(
+    graph_id: str,
+    attribute: str,
+    *,
+    generated=None,
+    limit: int = 5,
+) -> str:
+    """Short 'including X, Y, Z' clause from kg_stats top values."""
+
+    try:
+        from knowledge_graph.retrieval.kg_stats import top_facet_examples
+
+        examples = top_facet_examples(
+            graph_id, attribute, generated=generated, limit=limit
+        )
+    except Exception:
+        return ""
+    if not examples:
+        return ""
+    names = [name for name, _n in examples if name]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return f"including {names[0]}"
+    if len(names) == 2:
+        return f"including {names[0]} and {names[1]}"
+    return "including " + ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
 def _graph_label(platform, graph_id: str) -> str:
+    try:
+        from fashion_brain.agents.answer_card import SOURCE_LABELS
+
+        if graph_id in SOURCE_LABELS:
+            return str(SOURCE_LABELS[graph_id])
+    except Exception:
+        pass
     try:
         for item in platform.kg_registry.list_graphs():
             if item.id == graph_id:
@@ -6555,8 +6740,13 @@ def _user_facing_source_name(name: str) -> str:
     """Strip internal infra words from registry titles shown to end users."""
 
     text = str(name or "").strip()
+    low = text.casefold()
+    # Always surface the catalog as PLMex — never bare "PLM".
+    if "plmex" in low or re.search(r"\bplm\b", low) or low in {"plm records", "plm data"}:
+        if "ecom" not in low and "commerce" not in low:
+            return "PLMex"
     text = re.sub(r"\bknowledge\s*graphs?\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(?:neo4j|postgres|plmex|kg)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:neo4j|postgres|kg)\b", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s{2,}", " ", text).strip(" -–—|/\\")
     return text or "our products"
 
@@ -7229,13 +7419,20 @@ def _dimension_breakdown_lines(
     graph_id: str | None = None,
     platform=None,
     generated=None,
+    user_set_limit: bool = False,
 ) -> list[str]:
     """Breakdown with one best-fit visualization (chart XOR table)."""
 
-    top_n = max(int(limit or 5), 1)
-    shown = _usable_ranked(groups, str(field), limit=top_n)
-    if not shown:
+    all_usable = _usable_ranked(groups, str(field))
+    if not all_usable:
         return [f"No {field.replace('_', ' ')} breakdown."]
+    # Hard cap when an N is provided (user top-N or caller preview cap); else soft.
+    show_n, trunc_note = _facet_row_budget(
+        len(all_usable),
+        limit=limit,
+        user_set_limit=bool(user_set_limit or limit is not None),
+    )
+    shown = all_usable[:show_n]
     field_label = field.replace("_", " ")
 
     def _label(name: str) -> str:
@@ -7259,6 +7456,8 @@ def _dimension_breakdown_lines(
         f"{field_label} breakdown (highest count first):",
         f"Leading {field_label}: {top_name} ({top_count} of {total}, {share}%).",
     ]
+    if trunc_note:
+        lines.append(trunc_note)
     # Ranked numbers only — response LLM decides chart vs table vs prose.
     lines.append("| Name | Count | Share % |")
     lines.append("| --- | ---: | ---: |")

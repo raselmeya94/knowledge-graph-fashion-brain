@@ -155,6 +155,11 @@ def _field_supported(meta, field: str, source: str | None) -> bool | None:
     graphs = list(getattr(meta, "field_graphs", {}).get(key) or [])
     if key == "color":
         graphs = list(dict.fromkeys([*graphs, *(getattr(meta, "field_graphs", {}).get("colour") or [])]))
+    # Audience aliases: gender ↔ section across ecom/plmex.
+    if key == "gender":
+        graphs = list(dict.fromkeys([*graphs, *(getattr(meta, "field_graphs", {}).get("section") or [])]))
+    elif key == "section":
+        graphs = list(dict.fromkeys([*graphs, *(getattr(meta, "field_graphs", {}).get("gender") or [])]))
     if not graphs and key not in (getattr(meta, "values", {}) or {}):
         # Thin overview — do not claim UNSUPPORTED without evidence.
         return None
@@ -164,6 +169,10 @@ def _field_supported(meta, field: str, source: str | None) -> bool | None:
             # Field exists on other KGs but not this source.
             cols = (getattr(meta, "columns", {}) or {}).get(src) or []
             colset = {str(c).casefold() for c in cols}
+            if key == "gender" and ("section" in colset or "section" in (getattr(meta, "values", {}) or {})):
+                return True
+            if key == "section" and ("gender" in colset or "gender" in (getattr(meta, "values", {}) or {})):
+                return True
             if colset and key not in colset and (key != "color" or "colour" not in colset):
                 return False
     return True if graphs or key in (getattr(meta, "values", {}) or {}) else None

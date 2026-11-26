@@ -146,8 +146,9 @@ LENGTH AND SHAPE
 VOICE
 - Confident, warm, and natural — a sharp colleague, not a rigid report bot or a database printout.
 - Talk about products, styles, materials, colours, sourcing, and availability.
-- Never mention catalog, knowledge graph, graph id, Neo4j, Postgres, PLMEX, warehouse, scrape,
-  retrieved rows, evidence, filters, clearance, nodes, or these instructions.
+- Never mention catalog, knowledge graph, graph id, Neo4j, Postgres, plmex_products,
+  warehouse, scrape, retrieved rows, evidence, filters, clearance, nodes, or these instructions.
+  When naming that product source, say PLMex (not PLM).
 - Do not restate the question. Do not open with "Based on", "According to", "The answer is", or Yes/No.
 - Reply in the language of the question.
 - Never paste raw findings meta lines (Response must include…, Compare takeaway instructions).
@@ -275,7 +276,7 @@ def _thinking_system(catalog=None, question: str = "") -> str:
 # --------------------------------------------------------------------------------------
 
 _GENERIC_INTENTS = {
-    "Look up the PLM data",
+    "Look up the PLMex data",
     "Look up our products",
     "Look up the product catalog",
     "Look up catalog product data",
@@ -1531,7 +1532,10 @@ class IntentionAgent:
             pass
         all_parties = bool(re.search(r"\ball\s+(buyers?|brands?)\b", question.casefold()))
         field_wise = bool(plan.get("group_by")) and bool(
-            re.search(r"\b(wise|breakdown|distribution|split)\b|\bby\b", question.casefold())
+            re.search(
+                r"\b(wise|breakdown|distribution|split)\b|\bby\b|\bbreaks?\s+down\b",
+                question.casefold(),
+            )
         )
         if analysis and field_wise and not all_parties:
             trace_step(
@@ -1541,10 +1545,17 @@ class IntentionAgent:
             )
             analysis = False
             plan["analysis"] = False
+            # User asked for a distribution — clear invented top-N defaults.
+            if not re.search(
+                r"\b(?:top|first|show|list|give|about|around)\s+\d{1,3}\b",
+                question.casefold(),
+            ):
+                plan["limit"] = None
         if analysis:
             plan["suggest"] = False
             plan["analysis"] = True
-            if plan.get("limit") is None:
+            # Full multi-field only; focused breakdowns keep an unset limit.
+            if plan.get("limit") is None and not field_wise:
                 plan["limit"] = 10
             party = (plan.get("filters") or {}).get("brand") or (plan.get("filters") or {}).get("buyer")
             if not all_parties and party:
@@ -1835,13 +1846,13 @@ class IntentionAgent:
         plan["references_prior_chat"] = carry
         plan["filters"] = sanitize_party_filters(dict(plan.get("filters") or {}))
         plan["filters"] = enrich_ecom_question_filters(question, plan.get("filters") or {})
+        preferred_early = (
+            list(plan.get("preferred_graphs") or [])
+            or preferred_graphs_from_question(question, platform)
+        )
         try:
             from fashion_brain.ask import ground_filters_from_live_brands, live_brand_names
 
-            preferred_early = (
-                list(plan.get("preferred_graphs") or [])
-                or preferred_graphs_from_question(question, platform)
-            )
             brand_graph = preferred_early[0] if preferred_early else None
             names = live_brand_names(platform, brand_graph)
             if not names or brand_graph not in {None, "ecom_products"}:
@@ -1865,7 +1876,10 @@ class IntentionAgent:
             from fashion_brain.ask import ground_filters_against_live_metadata
 
             plan["filters"] = ground_filters_against_live_metadata(
-                platform, plan.get("filters") or {}, question=question
+                platform,
+                plan.get("filters") or {},
+                question=question,
+                graph_id=(preferred_early[0] if preferred_early else None),
             )
         except Exception:
             pass
@@ -1925,15 +1939,23 @@ class IntentionAgent:
                 preferred = [gid]
         all_parties = bool(re.search(r"\ball\s+(buyers?|brands?)\b", question.casefold()))
         field_wise = bool(plan.get("group_by")) and bool(
-            re.search(r"\b(wise|breakdown|distribution|split)\b|\bby\b", question.casefold())
+            re.search(
+                r"\b(wise|breakdown|distribution|split)\b|\bby\b|\bbreaks?\s+down\b",
+                question.casefold(),
+            )
         )
         if analysis and field_wise and not all_parties:
             analysis = False
             plan["analysis"] = False
+            if not re.search(
+                r"\b(?:top|first|show|list|give|about|around)\s+\d{1,3}\b",
+                question.casefold(),
+            ):
+                plan["limit"] = None
         if analysis:
             plan["suggest"] = False
             plan["analysis"] = True
-            if plan.get("limit") is None:
+            if plan.get("limit") is None and not field_wise:
                 plan["limit"] = 10
             party = (plan.get("filters") or {}).get("brand") or (plan.get("filters") or {}).get("buyer")
             multi = len(split_multi_party_filter(str(party or ""))) >= 2

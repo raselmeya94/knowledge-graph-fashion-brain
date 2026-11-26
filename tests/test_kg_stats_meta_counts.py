@@ -170,6 +170,7 @@ def test_append_multi_filter_uses_cypher(tmp_path):
     platform = SimpleNamespace(settings=SimpleNamespace(generated=generated), kg_registry=None)
     lines: list[str] = []
     evidence: list[EvidenceItem] = []
+    caveats: list[str] = []
 
     def _fake_count(_platform, _gid, filters):
         assert filters.get("brand") and filters.get("color")
@@ -177,11 +178,10 @@ def test_append_multi_filter_uses_cypher(tmp_path):
 
     with (
         patch("knowledge_graph.retrieval.ecom.cypher_count_products", side_effect=_fake_count),
-        patch("knowledge_graph.retrieval.ecom.cypher_group_by", return_value=None),
+        patch("knowledge_graph.retrieval.ecom.cypher_group_by") as group_by,
         patch(
             "knowledge_graph.retrieval.ecom.search_neo4j_products",
-            return_value=([], 12),
-        ),
+        ) as search,
     ):
         append_neo4j_count_answer(
             platform,
@@ -192,11 +192,18 @@ def test_append_multi_filter_uses_cypher(tmp_path):
             None,
             lines,
             evidence,
-            [],
+            caveats,
             question="How many red Primark products?",
         )
-    assert lines
+    assert len(lines) == 1
     assert "12" in lines[0]
+    assert "primark" in lines[0].casefold()
+    assert "red" in lines[0].casefold()
+    assert evidence[0].record_id == "cypher_count"
+    assert not any("example" in ln.casefold() for ln in lines)
+    assert not any("open product listing" in c.casefold() for c in caveats)
+    search.assert_not_called()
+    group_by.assert_not_called()
 
 
 def test_qu_plm_question_not_brand():

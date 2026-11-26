@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from knowledge_graph.access import Principal
 from knowledge_graph.models import EvidenceItem
 
@@ -162,6 +164,16 @@ def run_product_analysis(
         )
         lines.append("")
 
+    # User "top/show N" → hard limit. Otherwise soft budget in ecom
+    # (all if ≤25 unique values, else top 20 + "Showing 20 of N").
+    explicit_n = bool(
+        re.search(
+            r"\b(?:top|first|show|list|give|about|around)\s+\d{1,3}\b",
+            (question or "").casefold(),
+        )
+    )
+    facet_limit = limit if explicit_n else None
+
     for gid in ids:
         if len(ids) > 1:
             label = _graph_display_name(platform, gid)
@@ -193,12 +205,13 @@ def run_product_analysis(
             principal,
             gid,
             mapped_filters,
-            limit,
+            facet_limit,
             lines,
             evidence,
             caveats,
             analysis_fields=fields,
             brief=brief_ask,
+            user_set_limit=explicit_n,
         )
         if len(ids) > 1:
             lines.append("")

@@ -454,9 +454,14 @@ def _value_match_score(want: str, candidate: str) -> float:
     if _plural_forms(w) & _plural_forms(c):
         return 0.96
     # Whole-token containment: sweater ⊂ cardigans sweaters
+    # Reject short single-token queries inside longer multi-word labels
+    # ("fashion" ⊂ "young fashion" / "girls fashion") — too weak to invent filters.
     wt, ct = set(w.split()), set(c.split())
     if wt and wt <= ct:
-        return 0.88
+        if len(ct) > len(wt) and (" " not in w) and len(w) < 8:
+            pass
+        else:
+            return 0.88
     if ct and ct <= wt and len(c) >= 3:
         return 0.84
     return float(SequenceMatcher(None, w, c).ratio())
@@ -1031,6 +1036,67 @@ def _monolith_filter_bucket(
     return values, unique
 
 
+def top_facet_examples(
+    graph_id: str,
+    attribute: str,
+    *,
+    generated: Path | None = None,
+    limit: int = 5,
+) -> list[tuple[str, int]]:
+    """Top ``(display_name, count)`` pairs for a facet — for enriching short counts."""
+
+    shard = load_filter_stats(graph_id, attribute, generated)
+    key = _norm_attr(attribute)
+    values: dict = {}
+    display_map: dict = {}
+    if shard:
+        values = dict(shard.get("values") or {})
+        display_map = {
+            str(k): str(v)
+            for k, v in dict(shard.get("display_values") or {}).items()
+            if v
+        }
+        key = _norm_attr(str(shard.get("filter") or attribute))
+    else:
+        bucket = load_filter_bucket(graph_id, attribute, generated)
+        if bucket is None:
+            mono = _monolith_filter_bucket(graph_id, attribute, generated)
+            if mono is None:
+                return []
+            values, _unique = mono
+        else:
+            values = dict(bucket)
+    if not display_map:
+        display_map = load_display_map(graph_id, key, generated) or {}
+    ranked = sorted(
+        (
+            (str(k), int(v))
+            for k, v in values.items()
+            if str(k).strip().casefold() not in _EMPTY_KEYS
+        ),
+        key=lambda kv: (-kv[1], kv[0].casefold()),
+    )
+    out: list[tuple[str, int]] = []
+    for name, count in ranked[: max(int(limit), 1)]:
+        shown = resolve_facet_display(
+            name,
+            graph_id=graph_id,
+            attribute=key,
+            generated=generated,
+            display_map=display_map,
+        )
+        if not shown:
+            try:
+                from knowledge_graph.retrieval.ecom import _display_label
+
+                shown = _display_label(name)
+            except Exception:
+                shown = name
+        if shown:
+            out.append((str(shown), int(count)))
+    return out
+
+
 def format_filter_reference(
     graph_id: str,
     attribute: str,
@@ -1059,36 +1125,11 @@ def format_filter_reference(
         key = _norm_attr(str(shard.get("filter") or attribute))
     if not values and unique <= 0:
         return None
-    ranked = sorted(
-        ((str(k), int(v)) for k, v in values.items() if str(k).strip().casefold() not in _EMPTY_KEYS),
-        key=lambda kv: (-kv[1], kv[0].casefold()),
+    examples = top_facet_examples(
+        graph_id, key, generated=generated, limit=max(int(top_n), 1)
     )
-    top = ranked[: max(int(top_n), 1)]
-    if top:
-        display_map = load_display_map(graph_id, key, generated)
-        if not display_map and shard:
-            display_map = {
-                str(k): str(v)
-                for k, v in dict(shard.get("display_values") or {}).items()
-                if v
-            }
-        bits = []
-        for name, count in top:
-            shown = resolve_facet_display(
-                name,
-                graph_id=graph_id,
-                attribute=key,
-                generated=generated,
-                display_map=display_map,
-            )
-            if not shown:
-                try:
-                    from knowledge_graph.retrieval.ecom import _display_label
-
-                    shown = _display_label(name)
-                except Exception:
-                    shown = name
-            bits.append(f"{shown}={count}")
+    if examples:
+        bits = [f"{name}={count}" for name, count in examples]
         return f"{key}: unique={unique}; top: {', '.join(bits)}"
     return f"{key}: unique={unique}"
 

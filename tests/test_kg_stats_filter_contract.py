@@ -371,6 +371,177 @@ def test_meta_fast_path_does_not_skip_context_resolution():
     )
 
 
+def test_fashion_brain_brand_count_does_not_invent_young_fashion(tmp_path):
+    """App name 'Fashion Brain' must never become brand/garment=young fashion."""
+
+    from fashion_brain.ask import (
+        _catalog_plan,
+        _facet_entity_count,
+        enrich_scope_from_question,
+        ground_free_tokens_against_stats,
+    )
+
+    q = "how many brand are available in fashion brain?"
+    assert _facet_entity_count(q) == "brand"
+    assert _catalog_plan(q).get("filters") == {}
+    assert enrich_scope_from_question(q, {})[0] == {}
+    assert ground_free_tokens_against_stats(q, {}) == {}
+
+    ecom = {
+        "version": 3,
+        "graph_id": "ecom_products",
+        "totals": {"products": 1000, "brands": 5, "columns_indexed": 2},
+        "unique_counts": {"brand": 5, "category": 2},
+        "value_counts": {
+            "brand": {"primark": 100, "zara": 80},
+            "category": {"young fashion": 27, "Sweater": 40},
+        },
+    }
+    plm = {
+        "version": 3,
+        "graph_id": "plmex_products",
+        "totals": {"products": 18000, "brands": 50, "columns_indexed": 2},
+        "unique_counts": {"brand": 50, "category": 1},
+        "value_counts": {
+            "brand": {"primark": 400, "young fashion": 1},
+            "category": {"Sweater": 100},
+        },
+    }
+    root = tmp_path / "kg_stats"
+    root.mkdir(parents=True)
+    (root / "ecom_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(ecom)), encoding="utf-8"
+    )
+    (root / "plmex_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(plm)), encoding="utf-8"
+    )
+    platform = SimpleNamespace(settings=SimpleNamespace(generated=tmp_path), kg_registry=None)
+    hit = _try_kg_stats_meta_answer(
+        platform,
+        question=q,
+        validated=None,
+        graph_id=None,
+        state={},
+        intention=Intention(intent="product_count", metrics=["count"]),
+    )
+    assert hit is not None
+    retrieved, intention, _gid = hit
+    text = (retrieved.text or "").casefold()
+    # Must be a distinct-brand count — never a product filter on young fashion.
+    assert "products with brand" not in text
+    assert "brand = young fashion" not in text
+    assert "distinct brand" in text
+    assert "including" in text  # short-count enrichment with example names
+    assert intention.filters == {}
+    assert intention.count_entity == "brand"
+    assert "2 distinct brands" in text
+
+
+def test_unscoped_garment_count_covers_all_product_sources(tmp_path):
+    """No plm/ecom named → Fashion Brain answers both catalogs, not strongest-only."""
+
+    ecom = {
+        "version": 3,
+        "graph_id": "ecom_products",
+        "graph_name": "E-Commerce",
+        "totals": {"products": 1000, "columns_indexed": 1},
+        "unique_counts": {"category": 1},
+        "value_counts": {"category": {"Sweater": 40}},
+    }
+    plm = {
+        "version": 3,
+        "graph_id": "plmex_products",
+        "graph_name": "PLMEX",
+        "totals": {"products": 18000, "columns_indexed": 1},
+        "unique_counts": {"category": 1},
+        "value_counts": {"category": {"Sweater": 10996}},
+    }
+    root = tmp_path / "kg_stats"
+    root.mkdir(parents=True)
+    (root / "ecom_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(ecom)), encoding="utf-8"
+    )
+    (root / "plmex_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(plm)), encoding="utf-8"
+    )
+    platform = SimpleNamespace(settings=SimpleNamespace(generated=tmp_path), kg_registry=None)
+    hit = _try_kg_stats_meta_answer(
+        platform,
+        question="how many product are sweater",
+        validated=ValidatedIntent(
+            filters={"category": "sweater"},
+            metrics=["count"],
+            analysis_depth="unset",
+        ),
+        graph_id=None,
+        state={"last_graph_id": "plmex_products", "last_result_id": "prior"},
+        intention=Intention(
+            intent="product_count",
+            filters={"category": "sweater"},
+            metrics=["count"],
+        ),
+    )
+    assert hit is not None
+    retrieved, intention, _gid = hit
+    text = (retrieved.text or "").casefold()
+    assert "across fashion brain" in text or "per source" in text
+    assert "10,996" in retrieved.text or "10996" in retrieved.text
+    assert "40" in retrieved.text
+    assert set(intention.preferred_graphs or []) >= {"plmex_products", "ecom_products"}
+    sources = {getattr(e, "source_id", None) or getattr(e, "graph", None) for e in retrieved.evidence}
+    assert "plmex_products" in sources
+    assert "ecom_products" in sources
+
+
+def test_explicit_plm_garment_count_stays_single_source(tmp_path):
+    ecom = {
+        "version": 3,
+        "graph_id": "ecom_products",
+        "totals": {"products": 1000, "columns_indexed": 1},
+        "unique_counts": {"category": 1},
+        "value_counts": {"category": {"Sweater": 40}},
+    }
+    plm = {
+        "version": 3,
+        "graph_id": "plmex_products",
+        "totals": {"products": 18000, "columns_indexed": 1},
+        "unique_counts": {"category": 1},
+        "value_counts": {"category": {"Sweater": 10996}},
+    }
+    root = tmp_path / "kg_stats"
+    root.mkdir(parents=True)
+    (root / "ecom_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(ecom)), encoding="utf-8"
+    )
+    (root / "plmex_products.json").write_text(
+        json.dumps(kg_stats.attach_products_by_breakdowns(plm)), encoding="utf-8"
+    )
+    platform = SimpleNamespace(settings=SimpleNamespace(generated=tmp_path), kg_registry=None)
+    hit = _try_kg_stats_meta_answer(
+        platform,
+        question="how many sweater products in plm?",
+        validated=ValidatedIntent(
+            source="plmex_products",
+            filters={"category": "sweater"},
+            metrics=["count"],
+        ),
+        graph_id="plmex_products",
+        state={},
+        intention=Intention(
+            intent="product_count",
+            filters={"category": "sweater"},
+            preferred_graphs=["plmex_products"],
+            metrics=["count"],
+        ),
+    )
+    assert hit is not None
+    retrieved, intention, gid = hit
+    assert gid == "plmex_products"
+    assert intention.preferred_graphs == ["plmex_products"]
+    assert "10,996" in retrieved.text
+    assert "across fashion brain" not in (retrieved.text or "").casefold()
+
+
 def test_meta_answer_category_includes_related_key_value(tmp_path):
     """Filtered kg_stats counts should carry optional_metadata (unique/top/products_total)."""
 
@@ -405,8 +576,8 @@ def test_meta_answer_category_includes_related_key_value(tmp_path):
     meta_items = [e for e in retrieved.evidence if e.record_id == "optional_metadata"]
     assert meta_items
     excerpt = " ".join(str(e.excerpt or "") for e in meta_items).casefold()
-    assert "products_total=" in excerpt or "category:" in excerpt
-    assert "unique=" in excerpt or "top:" in excerpt
+    # Simple counts attach lean context (products_total); analysis still gets unique/top.
+    assert "products_total=" in excerpt or "category:" in excerpt or "unique=" in excerpt
 
 
 def test_meta_answer_distinct_facet_includes_related_key_value(tmp_path):

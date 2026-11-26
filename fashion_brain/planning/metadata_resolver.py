@@ -374,6 +374,123 @@ def _sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+# When one token hits several fields, prefer party/color over nav category.
+# Stops "black Zara" becoming category=Black (name CONTAINS trap).
+_FIELD_MOVE_PRIORITY = {
+    "brand": 0,
+    "buyer": 1,
+    "color": 2,
+    "colour": 2,
+    "material": 3,
+    "availability": 4,
+    "section": 5,
+    "gender": 6,
+    "garment": 7,
+    "garment_type": 7,
+    "family": 8,
+    "subfamily": 8,
+    "category": 9,
+    "plm_main_category": 9,
+    "plm_sub_category": 9,
+    "plm_sub_sub_category": 9,
+}
+
+# Basic colour tokens that must never be treated as a product category.
+_BASIC_COLOR_TOKENS = frozenset(
+    {
+        "red",
+        "blue",
+        "green",
+        "black",
+        "white",
+        "yellow",
+        "pink",
+        "purple",
+        "grey",
+        "gray",
+        "brown",
+        "orange",
+        "beige",
+        "navy",
+        "burgundy",
+        "cream",
+        "ivory",
+        "khaki",
+        "olive",
+        "maroon",
+        "teal",
+        "gold",
+        "silver",
+        "multicolor",
+        "multicolour",
+    }
+)
+
+_TYPE_LIKE_KEYS = frozenset(
+    {
+        "category",
+        "garment",
+        "garment_type",
+        "family",
+        "subfamily",
+        "plm_main_category",
+        "plm_sub_category",
+        "plm_sub_sub_category",
+    }
+)
+
+
+def _looks_like_basic_color(value: str) -> bool:
+    norm = normalize_name(str(value or ""))
+    if not norm or " " in norm:
+        return False
+    return norm in _BASIC_COLOR_TOKENS
+
+
+def _pick_move_target(moved: list[tuple[str, str]]) -> tuple[str, str]:
+    return min(
+        moved,
+        key=lambda item: (_FIELD_MOVE_PRIORITY.get(item[0], 50), item[0], item[1]),
+    )
+
+
+def demote_color_words_from_category(filters: dict, index: dict | None = None) -> dict:
+    """Rewrite category/garment=Black → color=black when the token is a colour."""
+
+    out = {
+        str(k): str(v)
+        for k, v in dict(filters or {}).items()
+        if k not in (None, "") and v not in (None, "")
+    }
+    color_index = []
+    if index:
+        color_index = list(index.get("color") or []) + list(index.get("colour") or [])
+    for key in list(out):
+        if key not in _TYPE_LIKE_KEYS:
+            continue
+        raw = out.get(key)
+        if not raw:
+            continue
+        norm = normalize_name(raw)
+        color_hit = next((r for r, n in color_index if n == norm), None)
+        if color_hit is None and not _looks_like_basic_color(raw):
+            continue
+        if color_hit is None and _looks_like_basic_color(raw):
+            color_hit = str(raw).strip()
+        # Single-token colour masquerading as a type/nav facet.
+        if " " in norm and not _looks_like_basic_color(raw):
+            continue
+        out.setdefault("color", color_hit)
+        out.pop(key, None)
+    # Same token on both color and category → keep color only.
+    color_norm = normalize_name(str(out.get("color") or ""))
+    if color_norm:
+        for key in list(out):
+            if key in _TYPE_LIKE_KEYS and normalize_name(str(out.get(key) or "")) == color_norm:
+                out.pop(key, None)
+    return out
+
+
 # ---------------------------------------------------------------- repair
 def repair_filters(filters: dict, index: dict) -> tuple[dict, list[str]]:
     """Fix wrong-field picks using metadata. Returns (repaired, unresolved_values).
@@ -394,15 +511,42 @@ def repair_filters(filters: dict, index: dict) -> tuple[dict, list[str]]:
         fixed: list[str] = []
         for part in parts:
             norm = normalize_name(part)
+            # Known colour tokens on type-like keys → color (never keep category=Black).
+            if key_s in _TYPE_LIKE_KEYS and _looks_like_basic_color(part):
+                color_vals = list(index.get("color") or []) + list(index.get("colour") or [])
+                color_hit = next((r for r, n in color_vals if n == norm), None) or part
+                out.setdefault("color", color_hit)
+                continue
             vals = index.get(key_s) or []
             exact = next((r for r, n in vals if n == norm), None)
             if exact:
+                # color=black exact hit — never also keep a competing category=Black.
+                if key_s in {"color", "colour"}:
+                    fixed.append(exact)
+                    continue
+                # category=Black exact when color index also has black → prefer color.
+                if key_s in _TYPE_LIKE_KEYS:
+                    color_vals = list(index.get("color") or []) + list(index.get("colour") or [])
+                    color_hit = next((r for r, n in color_vals if n == norm), None)
+                    if color_hit is not None and (
+                        _looks_like_basic_color(part) or key_s == "category"
+                    ):
+                        out.setdefault("color", color_hit)
+                        continue
                 fixed.append(exact)
                 continue
             # same value under ANOTHER field (category=Zara -> brand=Zara)
             moved = [(f, r) for f, vs in index.items() if f != key_s for r, n in vs if n == norm]
-            if len(moved) == 1:
-                out.setdefault(moved[0][0], moved[0][1])
+            if moved:
+                # Never move color → category when both exist.
+                if key_s in {"color", "colour"}:
+                    color_only = [(f, r) for f, r in moved if f in {"color", "colour"}]
+                    if not color_only and exact is None:
+                        # Keep original color spelling when index missed it.
+                        fixed.append(part)
+                        continue
+                target_f, target_r = _pick_move_target(moved)
+                out.setdefault(target_f, target_r)
                 continue
             # near-miss spelling in the same field
             best = max(((_sim(norm, n), r) for r, n in vals), default=(0.0, ""))
@@ -416,6 +560,7 @@ def repair_filters(filters: dict, index: dict) -> tuple[dict, list[str]]:
                 fixed.append(part)
         if fixed:
             out[key_s] = " | ".join(dict.fromkeys(fixed))
+    out = demote_color_words_from_category(out, index)
     return out, unresolved
 
 
@@ -425,6 +570,7 @@ def ground_filters_against_live_metadata(
     *,
     question: str = "",
     fields: list[str] | None = None,
+    graph_id: str | None = None,
 ) -> dict[str, str]:
     """Drop every categorical filter value that is not in live multi-KG metadata.
 
@@ -441,28 +587,100 @@ def ground_filters_against_live_metadata(
     }
     if not raw or platform is None:
         return raw
-    probe = list(
-        dict.fromkeys(
-            [
-                *(fields or []),
-                *raw.keys(),
-                *CORE_METADATA_FIELDS,
-            ]
-        )
-    )
+    # Remap audience/party aliases before probing so ecom gender→section is not dropped.
     try:
-        index = build_value_index(platform, probe)
+        from fashion_brain.planning.semantic_field_map import apply_semantic_field_map
+
+        mapped, _ = apply_semantic_field_map(raw, graph_id)
+        raw = {
+            str(k).strip(): str(v).strip()
+            for k, v in dict(mapped or {}).items()
+            if k not in (None, "") and v not in (None, "")
+        }
     except Exception:
-        LOGGER.debug("live metadata index unavailable for filter grounding", exc_info=True)
-        return raw
-    if not index:
-        return raw
-    repaired, unresolved = repair_filters(raw, index)
-    if unresolved:
-        LOGGER.info(
-            "dropped filters not in live metadata: %s",
-            ", ".join(unresolved[:12]),
+        pass
+    # Preserve already-grounded live brands — never drop brand=zara because the
+    # metadata value probe timed out or truncated the brand list.
+    preserved_party: dict[str, str] = {}
+    try:
+        from fashion_brain.ask import (
+            live_brand_names,
+            live_brands_mentioned,
+            match_live_party_value,
         )
+
+        names = live_brand_names(platform, graph_id)
+        for key in ("brand", "buyer"):
+            if not raw.get(key):
+                continue
+            hit = match_live_party_value(str(raw[key]), names) if names else None
+            if hit:
+                preserved_party[key] = hit
+                raw[key] = hit
+        if question and not preserved_party.get("brand"):
+            mentioned = live_brands_mentioned(question, names)
+            if len(mentioned) == 1:
+                preserved_party["brand"] = mentioned[0]
+                raw["brand"] = mentioned[0]
+    except Exception:
+        preserved_party = {}
+    # Prefer local kg_stats value shards (fast) over /api/metadata/values fan-out.
+    index: dict[str, list[tuple[str, str]]] = {}
+    try:
+        from knowledge_graph.retrieval.kg_stats import load_graph_stats
+
+        gids = [graph_id] if graph_id else []
+        if not gids:
+            gids = _product_graph_ids(platform) or []
+        for gid in gids:
+            stats = load_graph_stats(str(gid))
+            if not stats:
+                continue
+            vc = dict(stats.get("value_counts") or {})
+            for attr, counts in vc.items():
+                if not isinstance(counts, dict):
+                    continue
+                bucket = index.setdefault(str(attr), [])
+                seen = {n for _, n in bucket}
+                for raw_val in counts:
+                    norm = normalize_name(str(raw_val))
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    bucket.append((str(raw_val), norm))
+    except Exception:
+        LOGGER.debug("kg_stats grounding index unavailable", exc_info=True)
+    if not index:
+        probe = list(
+            dict.fromkeys(
+                [
+                    *(fields or []),
+                    *raw.keys(),
+                    *CORE_METADATA_FIELDS,
+                ]
+            )
+        )
+        try:
+            index = build_value_index(platform, probe)
+        except Exception:
+            LOGGER.debug("live metadata index unavailable for filter grounding", exc_info=True)
+            return {**raw, **preserved_party}
+    if not index:
+        return {**raw, **preserved_party}
+    repaired, unresolved = repair_filters(raw, index)
+    repaired = demote_color_words_from_category(repaired, index)
+    repaired.update(preserved_party)
+    if unresolved:
+        leftover = [
+            u
+            for u in unresolved
+            if not any(u.startswith(f"{k}=") for k in preserved_party)
+        ]
+        if leftover:
+            LOGGER.info(
+                "dropped filters not in live metadata: %s",
+                ", ".join(leftover[:12]),
+            )
     # Stock-status mix / vs asks talk ABOUT availability labels — do not pin one side
     # (also undoes repair_filters remapping brand=mixed → availability=Mixed).
     try:
@@ -502,7 +720,14 @@ def match_spans(question: str, index: dict) -> list[Span]:
                     per_field.append((best[0], f, best[1]))
             if not per_field:
                 continue
-            per_field.sort(reverse=True)
+            # Prefer brand/color over category when scores are tied ("black").
+            per_field.sort(
+                key=lambda item: (
+                    -item[0],
+                    _FIELD_MOVE_PRIORITY.get(item[1], 50),
+                    item[1],
+                )
+            )
             top = per_field[0]
             rivals = [(f, v, s) for s, f, v in per_field[1:] if top[0] - s <= AMBIGUOUS_MARGIN and v != top[2]]
             found.append(Span(phrase, i, i + n, top[1], top[2], top[0], rivals))

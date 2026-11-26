@@ -340,8 +340,258 @@ def _explicit_graphs_in_question(question: str, platform: Platform) -> list[str]
         question_names_catalog_explicitly,
     )
 
+    if not question_names_catalog_explicitly(question, platform):
+        return []
     named = list(preferred_graphs_from_question(question, platform) or [])
-    return named if named and question_names_catalog_explicitly(question, platform) else []
+    if named:
+        return named
+    # Registry may be empty in tests — still honour plm/ecom tokens.
+    text = (question or "").casefold()
+    out: list[str] = []
+    if re.search(r"\bplm(?:ex)?\b", text):
+        out.append("plmex_products")
+    if re.search(r"\be[\s\-]?comm?(erce)?s?\b", text) or re.search(
+        r"\becom(?:m|merce)?\b", text
+    ):
+        out.append("ecom_products")
+    return out
+
+
+def _full_catalog_count_scope(question: str, state: dict | None, platform: Platform) -> bool:
+    """True when the user did not name a source — answer across all product KGs.
+
+    Sticky ``last_graph_id`` alone must not pin a fresh independent count to one
+    catalog. Deixis follow-ups ('of them') stay on the prior source.
+    """
+
+    if _explicit_graphs_in_question(question, platform):
+        return False
+    try:
+        from fashion_brain.ask import question_has_catalog_deixis
+
+        if question_has_catalog_deixis(question):
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _source_display_label(graph_id: str) -> str:
+    try:
+        from fashion_brain.agents.answer_card import SOURCE_LABELS
+
+        return str(SOURCE_LABELS.get(graph_id) or graph_id)
+    except Exception:
+        return str(graph_id)
+
+
+def _product_graph_candidates(
+    platform: Platform,
+    generated=None,
+    *seeds: str | None,
+) -> list[str]:
+    """Registry product graphs plus seeds and on-disk kg_stats shards."""
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str | None) -> None:
+        gid = str(raw or "").strip()
+        if (
+            not gid
+            or gid in seen
+            or gid
+            in {
+                "shared",
+                "master",
+                "kg_system",
+                "news",
+                "index",
+                "_meta",
+                "meta",
+            }
+            or gid.startswith("_")
+        ):
+            return
+        # On-disk shards must look like product catalogs (…_products / ecom / plmex).
+        low = gid.casefold()
+        if low.endswith(".json"):
+            return
+        if not (
+            "product" in low
+            or "ecom" in low
+            or "plm" in low
+            or low in {"own_products"}
+        ):
+            # Allow explicit seeds even when naming is atypical.
+            if raw not in seeds:
+                return
+        seen.add(gid)
+        out.append(gid)
+
+    try:
+        from knowledge_graph.retrieval.ecom import registry_product_graphs
+
+        for cand in registry_product_graphs(platform) or []:
+            _add(cand)
+    except Exception:
+        pass
+    for seed in seeds:
+        _add(seed)
+    try:
+        from pathlib import Path
+
+        root = Path(str(generated or "")) / "kg_stats"
+        if root.is_dir():
+            for path in sorted(root.glob("*.json")):
+                _add(path.stem)
+    except Exception:
+        pass
+    return out
+
+
+def _build_multi_source_meta_count(
+    platform: Platform,
+    *,
+    question: str,
+    hits: list[tuple[str, dict, dict]],
+    validated=None,
+    intention=None,
+    generated=None,
+    count_entity: str | None = None,
+) -> tuple[Retrieved, Intention, str] | None:
+    """Fashion Brain full view: per-source kg_stats counts (labels not merged)."""
+
+    from knowledge_graph.retrieval.ecom import append_neo4j_count_answer
+    from knowledge_graph.retrieval.kg_stats import normalize_filter_dict
+
+    if len(hits) < 2:
+        return None
+
+    entity = str(
+        count_entity
+        or getattr(intention, "count_entity", None)
+        or getattr(validated, "entity", None)
+        or ""
+    ).strip() or None
+    evidence: list = []
+    caveats: list[str] = [
+        "Answered across all product catalogs (no source named). "
+        "Totals stay per source — facet labels are not merged."
+    ]
+    bits: list[str] = []
+    gids: list[str] = []
+    primary_filters: dict = {}
+    distinct_noun = None
+
+    for gid, filters, meta in hits:
+        lines: list[str] = []
+        local_evidence: list = []
+        local_caveats: list[str] = []
+        append_neo4j_count_answer(
+            platform,
+            Principal(subject="meta", clearance="internal"),
+            str(gid),
+            dict(filters or {}),
+            None,
+            None,
+            lines,
+            local_evidence,
+            local_caveats,
+            question=question,
+            count_entity=entity,
+            meta_result=meta,
+            include_optional_metadata=False,
+        )
+        if not lines:
+            continue
+        label = _source_display_label(str(gid))
+        kind = str(meta.get("kind") or "")
+        # Prefer the enriched single-source sentence (includes example names).
+        enriched = str(lines[0] or "").strip().rstrip(".")
+        if kind == "distinct_facet":
+            distinct_noun = str(
+                meta.get("attribute") or entity or "value"
+            ).replace("_", " ")
+            bits.append(enriched)
+        elif enriched:
+            bits.append(enriched)
+        else:
+            n = meta.get("n")
+            try:
+                n_int = int(n) if n is not None else None
+            except Exception:
+                n_int = None
+            if n_int is not None:
+                bits.append(f"{n_int:,} in {label}")
+        gids.append(str(gid))
+        if not primary_filters:
+            primary_filters = normalize_filter_dict(
+                meta.get("applied_filters") or filters or {}
+            )
+        for item in local_evidence:
+            evidence.append(item)
+
+    if len(gids) < 2 or not bits:
+        return None
+
+    filter_bits = [
+        f"{k} {v}" for k, v in primary_filters.items() if v not in (None, "")
+    ]
+    scope = " and ".join(filter_bits)
+    if distinct_noun:
+        text = " ".join(f"{bit}." for bit in bits) + " Totals are per source."
+    elif scope:
+        text = (
+            f"Across Fashion Brain catalogs, products with {scope}: "
+            + "; ".join(bits)
+            + ". Totals are per source."
+        )
+    else:
+        text = " ".join(f"{bit}." for bit in bits) + " Totals are per source."
+
+    intention_out = Intention(
+        intent="product_count",
+        filters=primary_filters,
+        thinking=(
+            "Answered from kg_stats across all product catalogs "
+            "(no source named; skipped ThinkingBrain / Text2Cypher)"
+        ),
+        preferred_graphs=list(gids),
+        count_entity=entity,
+        retrieve_mode="template",
+        metrics=list(
+            getattr(validated, "metrics", None)
+            or getattr(intention, "metrics", None)
+            or []
+        )
+        or ["count"],
+    )
+    retrieved = Retrieved(
+        text=text,
+        evidence=list(evidence),
+        caveats=list(caveats),
+        unavailable=[],
+        retrieve_mode="template",
+        response_type="stats",
+    )
+    # Attach optional meta for the largest source only (keep answer lean).
+    try:
+        largest = max(
+            hits,
+            key=lambda row: int(row[2].get("n") or 0),
+        )
+        retrieved = _attach_selected_meta_reference(
+            retrieved,
+            graph_id=str(largest[0]),
+            question=question or "",
+            intention=intention_out,
+            validated=validated,
+            platform=platform,
+        )
+    except Exception:
+        pass
+    return retrieved, intention_out, str(gids[0])
 
 
 def _apply_explicit_graph_preferences(
@@ -366,9 +616,9 @@ def _resolve_meta_count_graph(
 ) -> str | None:
     """Pick the product KG for a simple metadata count.
 
-    Explicit catalog tokens (plm/ecom/…) win. Follow-ups with deixis or a sticky
-    ``last_graph_id`` stay pinned — weak facet tokens like ``brand`` must not
-    steal the session onto another KG.
+    Explicit catalog tokens (plm/ecom/…) win. Deixis follow-ups stay on sticky
+    ``last_graph_id``. Unscoped independent counts leave graph pick to the
+    full-catalog multi-source path (do not pin sticky alone).
     """
 
     from fashion_brain.ask import question_has_catalog_deixis
@@ -378,14 +628,18 @@ def _resolve_meta_count_graph(
     sticky = str(state.get("last_graph_id") or "").strip()
     if named:
         return named[0]
+    # Deixis follow-ups stay on the prior catalog.
+    if sticky and question_has_catalog_deixis(question):
+        return sticky
+    # Unscoped independent counts → no single-graph pin (multi-source path).
+    if _full_catalog_count_scope(question, state, platform):
+        return None
     if source:
         return source
-    # Buyer / PLM-only facets → prefer plmex when the session is not pinned.
+    # Buyer / PLM-only facets → prefer plmex when the ask is scoped to one catalog.
     low_q = (question or "").casefold()
     filt = {str(k).casefold(): v for k, v in dict(filters or {}).items() if v not in (None, "")}
-    needs_plm = bool(filt.get("buyer")) or bool(
-        re.search(r"\bbuyers?\b", low_q)
-    ) or bool(filt.get("color") or filt.get("gender"))
+    needs_plm = bool(filt.get("buyer")) or bool(re.search(r"\bbuyers?\b", low_q))
     if needs_plm and not sticky:
         try:
             from knowledge_graph.retrieval.ecom import registry_product_graphs
@@ -396,16 +650,9 @@ def _resolve_meta_count_graph(
         except Exception:
             pass
         return "plmex_products"
-    # "top 10 brands of them" after a plmex turn → sticky plmex, not default ecom.
-    if sticky and (
-        question_has_catalog_deixis(question)
-        or state.get("last_result_id")
-        or not named
-    ):
-        return sticky
     if graph_id:
         return str(graph_id)
-    return sticky or None
+    return sticky or source or None
 
 
 def _apply_request_graph_pin(
@@ -749,32 +996,73 @@ def _try_kg_stats_meta_answer(
     filters = clean_product_filters(
         _merge_query_filters(validated=validated, summary=summary, intention=intention, state=state)
     )
-    # Dynamic live-brand / facet grounding — never answer a named-party ask as global.
-    try:
-        from fashion_brain.ask import (
-            enrich_ecom_question_filters,
-            enrich_scope_from_question,
-            live_brand_names,
-        )
+    # Distinct-facet asks ("how many brands…") → kg_stats unique count only.
+    # Never keep invented product filters from leftover English / app name tokens.
+    distinct_facet = (
+        str(inferred_facet or "").casefold().replace(" ", "_")
+        if inferred_facet
+        else ""
+    )
+    if distinct_facet and distinct_facet not in {
+        "product",
+        "products",
+        "item",
+        "items",
+        "",
+    }:
+        filters = {}
+        if intention is not None:
+            intention.filters = {}
+            intention.count_entity = str(inferred_facet)
+        if validated is not None:
+            validated.filters = {}
+    else:
+        # Dynamic live-brand / facet grounding — never answer a named-party ask as global.
+        try:
+            from fashion_brain.ask import (
+                enrich_ecom_question_filters,
+                enrich_scope_from_question,
+                live_brand_names,
+            )
 
-        grounded, _gb = enrich_scope_from_question(
-            question,
-            filters,
-            brand_names=live_brand_names(platform, graph_id=graph_id),
-            platform=platform,
-        )
-        filters = clean_product_filters(enrich_ecom_question_filters(question, grounded))
-        if validated is not None and filters and not getattr(validated, "filters", None):
-            validated.filters = dict(filters)
-        # Do NOT mutate intention.filters here on cache-miss — that polluted
-        # brand+garment asks with schema-prose category/family and forced Text2Cypher.
-    except Exception:
-        pass
+            grounded, _gb = enrich_scope_from_question(
+                question,
+                filters,
+                brand_names=live_brand_names(platform, graph_id=graph_id),
+                platform=platform,
+            )
+            filters = clean_product_filters(
+                enrich_ecom_question_filters(question, grounded)
+            )
+            if validated is not None and filters and not getattr(validated, "filters", None):
+                validated.filters = dict(filters)
+            # Do NOT mutate intention.filters here on cache-miss — that polluted
+            # brand+garment asks with schema-prose category/family and forced Text2Cypher.
+        except Exception:
+            pass
 
     generated = getattr(getattr(platform, "settings", None), "generated", None)
     # Multi-attribute combination → metadata cache-miss → template/Cypher path.
     # Gate on pre-resolve filters so brand+sweater never becomes a false single-facet hit.
+    # Exception: enrich often sets category+garment to the same type token — still one facet.
     pre_resolve = normalize_filter_dict(filters or {})
+    type_keys = {
+        "category",
+        "garment",
+        "garment_type",
+        "family",
+        "subfamily",
+        "type",
+        "product_type",
+    }
+    if len(pre_resolve) >= 2 and set(pre_resolve).issubset(type_keys):
+        from knowledge_graph.ontology import normalize_name
+
+        vals = {normalize_name(str(v)) for v in pre_resolve.values() if v not in (None, "")}
+        if len(vals) == 1:
+            token = next(iter(pre_resolve.values()))
+            filters = {"garment": token}
+            pre_resolve = normalize_filter_dict(filters)
     if len(pre_resolve) >= 2:
         return None
     # Compare parties with a garment/facet also need Neo4j, not a single meta shard.
@@ -784,6 +1072,7 @@ def _try_kg_stats_meta_answer(
     ):
         return None
 
+    full_scope = _full_catalog_count_scope(question, state, platform)
     gid = _resolve_meta_count_graph(
         platform,
         question=question,
@@ -792,14 +1081,14 @@ def _try_kg_stats_meta_answer(
         state=state,
         filters=filters,
     )
-    if not gid and intention is not None:
+    if not gid and intention is not None and not full_scope:
         prefs = list(getattr(intention, "preferred_graphs", None) or [])
         gid = prefs[0] if prefs else None
 
     # Map garment=sweater → category=Sweaters/sweater via kg_stats (case/plural soft match).
     # Drop junk (buyer=dataset). Never answer a filtered ask as the global catalog total.
-    # When several KGs match the same user token, prefer the strongest live meta hit
-    # (plmex category=sweater 17287 beats ecom category=Sweaters 1).
+    # Unscoped asks: collect every product KG hit (Fashion Brain full view).
+    # Scoped / deixis asks: keep a single graph (strongest live meta hit when needed).
     garment_keys = {
         "category",
         "garment",
@@ -813,8 +1102,14 @@ def _try_kg_stats_meta_answer(
         len(pre_resolve) == 1
         and next(iter(pre_resolve)).casefold().replace(" ", "_") in garment_keys
     )
+    multi_hits: list[tuple[str, dict, dict]] = []
+    distinct_entity = str(
+        getattr(validated, "entity", None)
+        or getattr(intention, "count_entity", None)
+        or inferred_facet
+        or ""
+    ).strip()
     try:
-        from knowledge_graph.retrieval.ecom import registry_product_graphs
         from knowledge_graph.retrieval.kg_stats import (
             _value_match_score,
             find_value_in_stats,
@@ -822,15 +1117,20 @@ def _try_kg_stats_meta_answer(
             resolve_filters_against_stats,
         )
 
+        source_seed = (
+            str(getattr(validated, "source", None) or "").strip() if validated else ""
+        )
+        candidates = _product_graph_candidates(
+            platform,
+            generated,
+            gid,
+            graph_id,
+            source_seed or None,
+        )
+
         if single_garment:
             user_val = next(iter(pre_resolve.values()))
-            best: tuple[float, int, str, dict] | None = None
-            candidates = list(registry_product_graphs(platform) or [])
-            # Prefer live registry, but always consider the sticky / requested graph_id.
-            if gid and str(gid) not in candidates:
-                candidates = [str(gid), *candidates]
-            if not candidates and gid:
-                candidates = [str(gid)]
+            ranked: list[tuple[float, int, str, dict]] = []
             for cand in candidates:
                 if not stats_available(str(cand), generated):
                     continue
@@ -839,21 +1139,39 @@ def _try_kg_stats_meta_answer(
                     continue
                 attr, canon, n = hit
                 score = _value_match_score(str(user_val), canon)
-                if best is None or (score, n) > (best[0], best[1]):
-                    best = (score, int(n), str(cand), {attr: canon})
-            if best is None:
+                ranked.append((score, int(n), str(cand), {attr: canon}))
+            if not ranked:
                 return None
-            _, _, gid, filters = best
+            ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+            if full_scope and len(ranked) >= 2:
+                for _score, _n, cand, resolved in ranked:
+                    meta = answer_simple_count(
+                        cand, filters=resolved, generated=generated
+                    )
+                    if meta is None:
+                        continue
+                    applied = normalize_filter_dict(meta.get("applied_filters") or {})
+                    if not applied:
+                        continue
+                    multi_hits.append((cand, resolved, meta))
+                if len(multi_hits) < 2:
+                    multi_hits = []
+            if not multi_hits:
+                _score, _n, gid, filters = ranked[0]
         else:
-            # Prefer a graph that actually indexes the requested explicit facets.
-            if filters and (not gid or any(
-                k in {"color", "gender", "buyer", "material"}
-                and not has_dimension(str(gid), k, generated)
-                for k in filters
-            )):
-                best_gid = None
-                best_n = -1
-                for cand in registry_product_graphs(platform) or []:
+            # Prefer graphs that actually index the requested explicit facets.
+            resolved_by_gid: list[tuple[str, dict]] = []
+            scan = candidates if (full_scope or not gid) else [str(gid)]
+            if filters and (
+                full_scope
+                or not gid
+                or any(
+                    k in {"color", "gender", "buyer", "material"}
+                    and not has_dimension(str(gid), k, generated)
+                    for k in filters
+                )
+            ):
+                for cand in scan:
                     if not stats_available(str(cand), generated):
                         continue
                     resolved = resolve_filters_against_stats(
@@ -861,45 +1179,166 @@ def _try_kg_stats_meta_answer(
                     )
                     if not resolved or len(resolved) != len(pre_resolve):
                         continue
-                    # Prefer graphs that keep the same keys (no silent rebind) and
-                    # have the dims indexed.
                     if any(
-                        not has_dimension(str(cand), k, generated)
-                        for k in resolved
-                        if k in {"color", "gender", "buyer", "material", "brand"}
+                        k in pre_resolve and k not in resolved
+                        for k in ("color", "gender", "buyer")
                     ):
-                        # buyer/color missing on ecom — skip when those keys requested
-                        if any(
-                            k in pre_resolve and k not in resolved
-                            for k in ("color", "gender", "buyer")
-                        ):
+                        continue
+                    resolved_by_gid.append((str(cand), resolved))
+                if full_scope and len(resolved_by_gid) >= 2 and not pre_resolve:
+                    # Unfiltered totals across catalogs.
+                    pass
+                if full_scope and len(resolved_by_gid) >= 2 and pre_resolve:
+                    for cand, resolved in resolved_by_gid:
+                        meta = answer_simple_count(
+                            cand, filters=resolved, generated=generated
+                        )
+                        if meta is None:
                             continue
-                    score = sum(
-                        1 for k in resolved if has_dimension(str(cand), k, generated)
+                        applied = normalize_filter_dict(
+                            meta.get("applied_filters") or {}
+                        )
+                        if not applied:
+                            continue
+                        multi_hits.append((cand, resolved, meta))
+                    if len(multi_hits) < 2:
+                        multi_hits = []
+                if not multi_hits and resolved_by_gid:
+                    # Single best: most indexed dims, then first registry order.
+                    resolved_by_gid.sort(
+                        key=lambda item: (
+                            -sum(
+                                1
+                                for k in item[1]
+                                if has_dimension(item[0], k, generated)
+                            ),
+                            item[0],
+                        )
                     )
-                    if score > best_n:
-                        best_n = score
-                        best_gid = str(cand)
-                if best_gid:
-                    gid = best_gid
-            if not gid:
-                return None
-            if not stats_available(str(gid), generated):
-                return None
-            filters = resolve_filters_against_stats(str(gid), filters, generated=generated)
-            if pre_resolve and not filters:
-                return None
+                    gid, filters = resolved_by_gid[0]
+            if not multi_hits:
+                if not gid:
+                    for cand in candidates:
+                        if stats_available(str(cand), generated):
+                            gid = cand
+                            break
+                if not gid:
+                    return None
+                if not stats_available(str(gid), generated):
+                    return None
+                if filters:
+                    filters = resolve_filters_against_stats(
+                        str(gid), filters, generated=generated
+                    )
+                    if pre_resolve and not filters:
+                        return None
     except Exception:
+        if not gid:
+            for cand in _product_graph_candidates(
+                platform,
+                generated,
+                graph_id,
+                str(getattr(validated, "source", None) or "").strip() or None,
+            ):
+                if stats_available(str(cand), generated):
+                    gid = cand
+                    break
         if not gid:
             return None
         try:
             from knowledge_graph.retrieval.kg_stats import resolve_filters_against_stats
 
-            filters = resolve_filters_against_stats(str(gid), filters, generated=generated)
+            if filters:
+                filters = resolve_filters_against_stats(
+                    str(gid), filters, generated=generated
+                )
         except Exception:
             pass
         if pre_resolve and not filters:
             return None
+
+    # Unscoped distinct-facet counts ("how many brands…"): every product KG.
+    if (
+        full_scope
+        and not multi_hits
+        and not pre_resolve
+        and distinct_entity
+        and distinct_entity.casefold().replace(" ", "_")
+        not in {"product", "products", "item", "items"}
+    ):
+        for cand in _product_graph_candidates(
+            platform,
+            generated,
+            gid,
+            graph_id,
+            str(getattr(validated, "source", None) or "").strip() or None,
+        ):
+            if not stats_available(str(cand), generated):
+                continue
+            meta = answer_simple_count(
+                str(cand),
+                filters={},
+                count_entity=distinct_entity,
+                generated=generated,
+            )
+            if meta is None or meta.get("n") is None:
+                continue
+            multi_hits.append((str(cand), {}, meta))
+
+    # Unscoped unfiltered catalog totals: every product KG with stats.
+    if (
+        full_scope
+        and not multi_hits
+        and not pre_resolve
+        and not distinct_entity
+    ):
+        for cand in _product_graph_candidates(
+            platform,
+            generated,
+            gid,
+            graph_id,
+            str(getattr(validated, "source", None) or "").strip() or None,
+        ):
+            if not stats_available(str(cand), generated):
+                continue
+            meta = answer_simple_count(str(cand), filters={}, generated=generated)
+            if meta is None:
+                continue
+            multi_hits.append((str(cand), {}, meta))
+
+    if len(multi_hits) >= 2:
+        entity_for_multi = (
+            distinct_entity
+            if distinct_entity
+            and distinct_entity.casefold().replace(" ", "_")
+            not in {"product", "products", "item", "items"}
+            else None
+        )
+        multi = _build_multi_source_meta_count(
+            platform,
+            question=question,
+            hits=multi_hits,
+            validated=validated,
+            intention=intention,
+            generated=generated,
+            count_entity=entity_for_multi,
+        )
+        if multi is not None:
+            return multi
+    elif len(multi_hits) == 1:
+        gid, filters, _meta = multi_hits[0]
+
+    if not gid:
+        # Last resort: first available stats shard / validated source.
+        for cand in _product_graph_candidates(
+            platform,
+            generated,
+            graph_id,
+            str(getattr(validated, "source", None) or "").strip() or None,
+        ):
+            if stats_available(str(cand), generated):
+                gid = cand
+                break
     if not gid:
         return None
     if not stats_available(str(gid), generated):
@@ -1215,9 +1654,9 @@ def _try_cross_catalog_type_compare(
     lines: list[str] = [
         f"## Cross-catalog compare: `{token}`",
         "",
-        "**Category is a false friend** across PLMEX and e-commerce — the same "
+        "**Category is a false friend** across PLMex and e-commerce — the same "
         "string does not mean the same thing. Counts below stay **per source**, "
-        "using each graph's type roles (`garment_type` / `plm_sub_*` on PLMEX, "
+        "using each graph's type roles (`garment_type` / `plm_sub_*` on PLMex, "
         "`subfamily` / `family` on e-commerce) rather than merging category labels.",
         "",
     ]
@@ -2151,6 +2590,16 @@ def _retrieve_with_text2cypher(
                         value = getattr(extracted_obj, facet, None)
                         if value and not intention.filters.get(facet):
                             intention.filters[facet] = str(value)
+                    try:
+                        from fashion_brain.planning.metadata_resolver import (
+                            demote_color_words_from_category,
+                        )
+
+                        intention.filters = demote_color_words_from_category(
+                            intention.filters
+                        )
+                    except Exception:
+                        pass
                     # EntityExtract + live Brand nodes own party grounding.
                     from fashion_brain.ask import (
                         _compare_party_names,
@@ -2179,9 +2628,27 @@ def _retrieve_with_text2cypher(
                             intention.filters.pop("garment", None)
                             intention.filters.pop("garment_type", None)
                     if getattr(extracted_obj, "category", None):
-                        intention.filters["category"] = str(extracted_obj.category)
-                        if not composition_compare:
-                            intention.filters.pop("garment", None)
+                        cat_val = str(extracted_obj.category)
+                        from fashion_brain.planning.metadata_resolver import (
+                            _looks_like_basic_color,
+                            demote_color_words_from_category,
+                        )
+
+                        # "black Zara" → color=black, never overwrite with category=Black.
+                        color_same = (
+                            intention.filters.get("color")
+                            and normalize_name(str(intention.filters.get("color")))
+                            == normalize_name(cat_val)
+                        )
+                        if _looks_like_basic_color(cat_val) or color_same:
+                            intention.filters.setdefault("color", cat_val)
+                        else:
+                            intention.filters["category"] = cat_val
+                            if not composition_compare:
+                                intention.filters.pop("garment", None)
+                        intention.filters = demote_color_words_from_category(
+                            intention.filters
+                        )
                     if composition_compare:
                         intention.group_by = intention.group_by or "material"
                     intention.filters = ground_filters_from_live_brands(
@@ -2761,6 +3228,15 @@ def _meta_fast_path_eligible(
     if state.get("clarification") or state.get("confirmation"):
         return False
     try:
+        # Glossary / about / definition asks are not product totals — even when the
+        # term is a schema key (GSM, gauge, composition).
+        from fashion_brain.flow import _is_general_definition_ask
+
+        if _is_general_definition_ask(question):
+            return False
+    except Exception:
+        pass
+    try:
         from fashion_brain.ask import (
             _facet_entity_count,
             _is_analysis,
@@ -2830,7 +3306,13 @@ def _finalize_meta_orchestrator_hit(
             validated=validated,
             summary=validated.effective_question or retrieved.text,
         )
-    _remember_graph(state, [gid], gid)
+    prefs = [str(g) for g in (intention.preferred_graphs or []) if g]
+    if len(prefs) > 1:
+        # Full-catalog answer — do not pin the next turn to one source.
+        state["last_graph_ids"] = prefs
+        state.pop("last_graph_id", None)
+    else:
+        _remember_graph(state, prefs or [gid], gid)
     if conversation_state is not None:
         conversation_state.clear()
         conversation_state.update(state)
@@ -2838,11 +3320,19 @@ def _finalize_meta_orchestrator_hit(
         "retrieve",
         route_label,
         graph_id=gid,
+        graphs=prefs or [gid],
         filters=intention.filters,
         group_by=intention.group_by,
         limit=intention.limit,
     )
-    return retrieved, [intention.intent, "kg_stats", gid], intention, context, None
+    route_graphs = prefs if len(prefs) > 1 else [gid]
+    return (
+        retrieved,
+        [intention.intent, "kg_stats", *route_graphs],
+        intention,
+        context,
+        None,
+    )
 
 
 def draft_catalog_orchestrated(
@@ -2904,31 +3394,47 @@ def draft_catalog_orchestrated(
             explicit_named = _explicit_graphs_in_question(question, platform)
             filters = {}
             try:
+                from fashion_brain.ask import _facet_entity_count
+
+                distinct_facet = _facet_entity_count(question)
+            except Exception:
+                distinct_facet = None
+            try:
                 with timed("metadata_scope_resolution", graph_id=sticky or graph_id):
-                    grounded, _ = enrich_scope_from_question(
-                        question,
-                        {},
-                        brand_names=live_brand_names(
-                            platform, graph_id=sticky or graph_id
-                        ),
-                        platform=platform,
-                    )
-                    filters = clean_product_filters(
-                        enrich_ecom_question_filters(question, grounded)
-                    )
-                    # Typos / near-misses ("swweaters") → live category/garment values.
-                    filters = clean_product_filters(
-                        ground_free_tokens_against_stats(
+                    # Distinct-facet counts skip enrich/grounding entirely — leftover
+                    # English ("fashion" in Fashion Brain) must not become filters.
+                    if distinct_facet and str(distinct_facet).casefold() not in {
+                        "product",
+                        "products",
+                        "item",
+                        "items",
+                    }:
+                        filters = {}
+                    else:
+                        grounded, _ = enrich_scope_from_question(
                             question,
-                            filters,
-                            preferred_graphs=explicit_named or named or (
-                                [sticky] if sticky else []
+                            {},
+                            brand_names=live_brand_names(
+                                platform, graph_id=sticky or graph_id
                             ),
-                            generated=getattr(
-                                getattr(platform, "settings", None), "generated", None
-                            ),
+                            platform=platform,
                         )
-                    )
+                        filters = clean_product_filters(
+                            enrich_ecom_question_filters(question, grounded)
+                        )
+                        # Typos / near-misses ("swweaters") → live category/garment values.
+                        filters = clean_product_filters(
+                            ground_free_tokens_against_stats(
+                                question,
+                                filters,
+                                preferred_graphs=explicit_named or named or (
+                                    [sticky] if sticky else []
+                                ),
+                                generated=getattr(
+                                    getattr(platform, "settings", None), "generated", None
+                                ),
+                            )
+                        )
             except Exception:
                 filters = {}
             gid_hint = _resolve_meta_count_graph(
@@ -2947,8 +3453,202 @@ def draft_catalog_orchestrated(
                 not normalize_filter_dict(filters)
                 and not is_catalog_dataset_total_ask(question)
             )
-            # Multi-filter needs Cypher — do not fast-path.
-            if (not ungrounded_count) and len(normalize_filter_dict(filters)) < 2:
+            cleaned_filters = normalize_filter_dict(filters)
+            # Multi-filter product counts: Cypher COUNT (AND filters) — skip
+            # turn_planner / intention LLM (was ~2–3 minutes on local 31B).
+            # Unscoped asks count every product catalog; named source stays single.
+            if not ungrounded_count and len(cleaned_filters) >= 2:
+                try:
+                    from fashion_brain.ask import is_product_count_ask
+                    from fashion_brain.planning.semantic_field_map import (
+                        apply_semantic_field_map,
+                    )
+                    from knowledge_graph.models import EvidenceItem
+                    from knowledge_graph.retrieval.ecom import cypher_count_products
+
+                    if is_product_count_ask(question):
+                        generated = getattr(
+                            getattr(platform, "settings", None), "generated", None
+                        )
+                        count_targets = (
+                            [str(gid_hint)]
+                            if gid_hint
+                            else _product_graph_candidates(
+                                platform, generated, sticky, graph_id
+                            )
+                        )
+                        if not count_targets and sticky:
+                            count_targets = [str(sticky)]
+                        per_source: list[tuple[str, dict, int]] = []
+                        for target in count_targets:
+                            mapped, _ = apply_semantic_field_map(
+                                dict(cleaned_filters), str(target)
+                            )
+                            mapped = clean_product_filters(mapped)
+                            if len(normalize_filter_dict(mapped)) < 2:
+                                continue
+                            with timed(
+                                "cypher_multi_filter_count",
+                                graph_id=str(target),
+                                filter_count=len(mapped),
+                            ):
+                                n = cypher_count_products(
+                                    platform, str(target), mapped
+                                )
+                            if n is None:
+                                continue
+                            per_source.append((str(target), mapped, int(n)))
+                        if len(per_source) >= 2:
+                            bits = [
+                                f"{n:,} in {_source_display_label(gid)}"
+                                for gid, _mapped, n in per_source
+                            ]
+                            primary = per_source[0][1]
+                            phrase_bits = [
+                                f"{k} {v}"
+                                for k, v in primary.items()
+                                if v not in (None, "")
+                            ]
+                            phrase = " and ".join(phrase_bits)
+                            text = (
+                                f"Across Fashion Brain catalogs, products with {phrase}: "
+                                + "; ".join(bits)
+                                + ". Totals are per source."
+                                if phrase
+                                else (
+                                    "Across Fashion Brain catalogs: "
+                                    + "; ".join(bits)
+                                    + ". Totals are per source."
+                                )
+                            )
+                            evidence = [
+                                EvidenceItem(
+                                    source_id=gid,
+                                    record_id="cypher_count",
+                                    title="multi-filter product count",
+                                    excerpt=f"products={n}; filters={mapped}",
+                                    source_path=gid,
+                                    verification_status="observed",
+                                    graph=gid,
+                                    node_id=None,
+                                    synthetic=False,
+                                    requested_filters=dict(mapped),
+                                    applied_filters=dict(mapped),
+                                )
+                                for gid, mapped, n in per_source
+                            ]
+                            intention = Intention(
+                                intent="product_count",
+                                filters=dict(primary),
+                                preferred_graphs=[gid for gid, _, _ in per_source],
+                                metrics=["count"],
+                            )
+                            context = ContextDecision(
+                                decision="RETRIEVE",
+                                intent_type="continuation"
+                                if state.get("last_result_id")
+                                else "new_independent_question",
+                                is_contextual=bool(state.get("last_result_id")),
+                                active_filters=dict(primary),
+                                inheritance_reason=(
+                                    "cypher multi-filter full-catalog count "
+                                    "(skipped turn planner)"
+                                ),
+                            )
+                            return _finalize_meta_orchestrator_hit(
+                                retrieved=Retrieved(
+                                    text=text,
+                                    evidence=evidence,
+                                    caveats=[
+                                        "Answered across all product catalogs "
+                                        "(no source named). Totals stay per source."
+                                    ],
+                                    unavailable=[],
+                                    retrieve_mode="template",
+                                    response_type="stats",
+                                ),
+                                intention=intention,
+                                gid=str(per_source[0][0]),
+                                question=question,
+                                state=state,
+                                conversation_state=conversation_state,
+                                context=context,
+                                route_label=(
+                                    "cypher multi-filter full-catalog count — "
+                                    "skipped turn planner / Text2Cypher"
+                                ),
+                            )
+                        if len(per_source) == 1:
+                            gid_one, mapped, n = per_source[0]
+                            phrase_bits = [
+                                f"{k} {v}"
+                                for k, v in mapped.items()
+                                if v not in (None, "")
+                            ]
+                            phrase = " and ".join(phrase_bits)
+                            text = (
+                                f"There are {int(n):,} products with {phrase}."
+                                if phrase
+                                else f"There are {int(n):,} products."
+                            )
+                            intention = Intention(
+                                intent="product_count",
+                                filters=mapped,
+                                preferred_graphs=[gid_one],
+                                metrics=["count"],
+                            )
+                            context = ContextDecision(
+                                decision="RETRIEVE",
+                                intent_type="continuation"
+                                if state.get("last_result_id")
+                                else "new_independent_question",
+                                is_contextual=bool(state.get("last_result_id")),
+                                active_filters=dict(mapped),
+                                inheritance_reason=(
+                                    "cypher multi-filter count fast path "
+                                    "(skipped turn planner)"
+                                ),
+                            )
+                            return _finalize_meta_orchestrator_hit(
+                                retrieved=Retrieved(
+                                    text=text,
+                                    evidence=[
+                                        EvidenceItem(
+                                            source_id=str(gid_one),
+                                            record_id="cypher_count",
+                                            title="multi-filter product count",
+                                            excerpt=(
+                                                f"products={int(n)}; filters={mapped}"
+                                            ),
+                                            source_path=str(gid_one),
+                                            verification_status="observed",
+                                            graph=str(gid_one),
+                                            node_id=None,
+                                            synthetic=False,
+                                            requested_filters=dict(mapped),
+                                            applied_filters=dict(mapped),
+                                        )
+                                    ],
+                                    caveats=[],
+                                    unavailable=[],
+                                    retrieve_mode="template",
+                                    response_type="stats",
+                                ),
+                                intention=intention,
+                                gid=str(gid_one),
+                                question=question,
+                                state=state,
+                                conversation_state=conversation_state,
+                                context=context,
+                                route_label=(
+                                    "cypher multi-filter count — skipped turn "
+                                    "planner / Text2Cypher"
+                                ),
+                            )
+                except Exception:
+                    LOGGER.debug("cypher multi-filter fast path skipped", exc_info=True)
+            # Single-filter / unfiltered: kg_stats shards.
+            if (not ungrounded_count) and len(cleaned_filters) < 2:
                 facet_hit = _try_kg_stats_facet_ranking(
                     platform,
                     question=question,
@@ -3234,6 +3934,41 @@ def draft_catalog_orchestrated(
                 conversation_state=state,
                 graph_id=graph_id,
             )
+        # Definition / about asks must never clarify or retrieve catalog totals.
+        try:
+            from fashion_brain.flow import _is_general_definition_ask, _out_of_scope_topic_hint
+
+            if _is_general_definition_ask(question):
+                trace_step(
+                    "query_understanding",
+                    "Skipped catalog path for definition/about ask",
+                    qu_type=type(qu_result).__name__,
+                    slot=getattr(qu_result, "slot", None),
+                )
+                state.pop("clarification", None)
+                topic = _out_of_scope_topic_hint(question)
+                retrieved = Retrieved(
+                    text=(
+                        f"“{topic}” reads as a definition / about question, not a catalog lookup, "
+                        "so I won’t ask for a brand or product type. "
+                        "Ask a product-data question when you want counts or assortment from the catalog."
+                    ),
+                    evidence=[],
+                    caveats=["Definition asks are not catalog clarifications."],
+                    unavailable=[],
+                    result_id=None,
+                )
+                intention = Intention(
+                    intent="out_of_scope",
+                    filters={},
+                    thinking="Glossary ask — skipped catalog clarification.",
+                )
+                if conversation_state is not None:
+                    conversation_state.clear()
+                    conversation_state.update(state)
+                return retrieved, ["out_of_scope", "definition"], intention, context, None
+        except Exception:
+            LOGGER.debug("definition catalog skip failed", exc_info=True)
         if isinstance(qu_result, ClarifyResult):
             state["clarification"] = qu_result.state.to_dict()
             # Persist step-by-step analysis filters on the session for continuous turns.

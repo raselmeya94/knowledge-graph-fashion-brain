@@ -137,6 +137,142 @@ H10. Which shared materials appear most often across products?
 
 
 --------------------------------------------------------------------------------
+I. COMPLEX STRESS TESTS (grounded in current live stats)
+--------------------------------------------------------------------------------
+Data snapshot (approx): ecom ~18,183 products — zara 5804, matalan 5059,
+primark 4058, c-and-a 3261, calvin-klein 1. Top ecom colors: black, brown,
+white, blue. Top materials: polyester, elastane, cotton. Sections: Women
+dominant. PLMEX ~18k–27k samples — buyers PRIMARK / MATALAN / INDITEX(ZARA*).
+Mark: PASS / PARTIAL / FAIL. Prefer a fresh chat for each cluster.
+
+--- I1. Multi-filter composition (routing + AND filters) ---
+
+I1. How many black Zara products are there for women?
+    Expect: brand=zara + color=black + section/gender=women; a count, not a
+    whole-catalog dump. Do not ask “which brand?”.
+
+I2. Show me about 8 Primark cotton products that are in stock.
+    Expect: brand=primark + material=cotton + availability≈InStock; ~8 examples
+    with useful columns; total matching count if available.
+
+I3. Among Matalan jeans, what colours show up most?
+    Expect: brand=matalan + category/family≈jeans + color breakdown; soft cap
+    note if many colours (“Showing 20 of N”) unless user set N.
+
+I4. How many C&A jackets are currently mixed or out of stock?
+    Expect: brand=c-and-a + jacket-like slice + availability Mixed/OutOfStock
+    (not inventing Calvin Klein / empty).
+
+--- I2. Explicit limit vs full breakdown ---
+
+I5. Top 10 Zara colours by product count.
+    Expect: exactly ~10 rows; honor user limit; not invent top-5.
+
+I6. How do Zara colours break down?
+    Expect: no invented top-5; if >>25 colours → ~20 rows + “Showing 20 of N”.
+
+I7. Give me the full material breakdown for Primark — every material if it is
+    not too long.
+    Expect: all if ≤25 unique; else preview 20 + note. Not a 5-row stub.
+
+--- I3. Brand / party compares (must not merge totals) ---
+
+I8. Who has more products online — Primark or Zara — and by roughly how many?
+    Expect: separate counts (~4058 vs ~5804), delta; never one merged total.
+
+I9. Compare Primark and Zara on average price and top materials.
+    Expect: side-by-side metrics; materials per brand; no “Primark vs Material”
+    nonsense headings.
+
+I10. Between Matalan and C&A, which brand’s assortment is more concentrated in
+     black and white?
+     Expect: per-brand black/white shares or counts; not a single combined %.
+
+--- I4. Semantic map traps (false friends) ---
+
+I11. On e-commerce, analyse the women’s assortment by category and colour —
+     I mean women even if you store it as section.
+     Expect: section≈Women (~10k), not empty gender filter; category + color tables.
+
+I12. Full analysis for Matalan on PLMEX — merchants often say brand but PLM
+     usually has Matalan as buyer.
+     Expect: resolve buyer=matalan (not tiny brand=64 only); attribute tables;
+     no endless “is it brand or buyer?” loop.
+
+I13. PLMEX Primark sweater category — gender-wise breakdown.
+     Expect: PLM category=sweater (process family) + gender; do NOT remap to
+     ecom site-nav “Clothes”.
+
+I14. What is the category mix for Zara online?
+     Expect: ecom site-nav categories (Clothes, Jackets…), not PLM “sweater /
+     cut sew jersey” vocabulary.
+
+--- I5. Cross-catalog / shared knowledge ---
+
+I15. Which materials appear in both the e-commerce and PLMEX ranges, and which
+     of those are most common on each side?
+     Expect: overlap list + per-source counts; do not invent a fake join key.
+
+I16. Does Primark look bigger in ecom or in PLMEX samples, and why might those
+     numbers differ?
+     Expect: both counts + honest caveat (retail scrape vs sample library /
+     brand vs buyer).
+
+--- I6. Spec / brief under constraints ---
+
+I17. Based on typical Primark sweaters in PLMEX, draft a new product spec outline
+     (composition, gauge/gsm if present, construction, colour leaders). Do not
+     reuse a historical product code as the new identity.
+     Expect: proposed sheet + Pending identity; evidence grounded in leaders.
+
+I18. For Zara tops that mention cotton, what composition mixes show up most?
+     Expect: brand=zara + tops/garment slice + material/composition leaders;
+     not a global cotton product dump.
+
+--- I7. Price + availability compound ---
+
+I19. Which in-stock Zara products had the largest same-currency price drops?
+     Expect: price-history movers filtered or annotated by availability when
+     possible; same-currency caveat; no currency-label fake drops.
+
+I20. How are Primark prices moving overall, and is availability mostly InStock
+     or Mixed right now?
+     Expect: two coherent parts (trend + availability mix); scoped to Primark.
+
+--- I8. Ambiguity, scope, and anti-hallucination ---
+
+I21. What is GSM in fashion / knitwear?
+     Expect: definition via web/knowledge — NOT a catalog product_count and NOT
+     sticky “which brand?” clarification.
+
+I22. How many Tesco jumpers do we have?
+     Expect: honest empty / not in catalog; do not invent Tesco products.
+
+I23. Break Zara down by season.
+     Expect: weak/empty season on ecom → say so; do not invent SS/AW shares.
+
+I24. Analyse everything for Calvin Klein.
+     Expect: tiny slice (~1 product) handled honestly; no fake multi-thousand
+     Calvin Klein assortment.
+
+--- I9. Multi-step merchant briefs (long) ---
+
+I25. I need a Monday merchandising pack for Zara online: (1) total products and
+     average price, (2) top 10 colours, (3) top materials, (4) Women vs Men vs
+     Kids share, (5) one short risk note if black is too dominant.
+     Expect: all five parts; top 10 colours honored; Women/Men/Kids from section.
+
+I26. Side-by-side ecom readout for Primark vs Matalan: size, avg price, top 5
+     categories, top 5 colours, and InStock share. Keep brands separate.
+     Expect: two clear blocks or a compare table; top 5 respected; no merge.
+
+I27. Find cotton-rich black dresses or dress-like styles at Zara that are in
+     stock, show up to 10 examples with price and availability, then say what
+     material mixes dominate that slice.
+     Expect: multi-filter list (≤10) + material read on the same scope.
+
+
+--------------------------------------------------------------------------------
 SUGGESTED ASK ORDER
 --------------------------------------------------------------------------------
 
@@ -146,5 +282,7 @@ SUGGESTED ASK ORDER
 4. C1, C4              — specs
 5. F1–F4               — no hallucination
 6. H1, H5, H7          — shared materials across catalogs
+7. I5, I6, I8, I11     — limit policy + compare + section map
+8. I12, I15, I21, I25  — PLM buyer map, overlap, GSM, long brief
 
 END

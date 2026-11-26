@@ -22,7 +22,7 @@ from knowledge_graph.models import EvidenceItem
 
 
 def test_source_labels_are_plm_and_ecommerce():
-    assert SOURCE_LABELS["plmex_products"] == "PLM records"
+    assert SOURCE_LABELS["plmex_products"] == "PLMex"
     assert SOURCE_LABELS["ecom_products"] == "e-commerce listings"
 
 
@@ -83,13 +83,13 @@ def test_write_answer_appends_footer_and_validates_filters():
 
     def llm(_prompt: str) -> str:
         return (
-            "We have 26 white women's sweaters from Primark in our PLM records, "
+            "We have 26 white women's sweaters from Primark in our PLMex, "
             "and none on e-commerce listings."
         )
 
     out = write_answer(card, llm)
     assert "26" in out
-    assert "Sources: PLM records · E-commerce listings" in out
+    assert "Sources: PLMex · E-commerce listings" in out
     assert "Source:" not in out.split("Sources:")[0] or True
 
 
@@ -193,12 +193,12 @@ def test_intent_hint_and_write_answer_injects_hint():
 
     def llm(prompt: str) -> str:
         seen.append(prompt)
-        return "Primark has 100 products in our PLM records and 50 on e-commerce listings."
+        return "Primark has 100 products in our PLMex and 50 on e-commerce listings."
 
     out = write_answer(card, llm)
     assert "INTENT HINT" in seen[0]
     assert "simple count" in seen[0].casefold()
-    assert "Sources: PLM records · E-commerce listings" in out
+    assert "Sources: PLMex · E-commerce listings" in out
     assert "gap:" not in card.prompt_json().casefold()
 
 
@@ -213,7 +213,7 @@ def test_open_product_listing_does_not_force_ecom_footer():
         {"brand": "Primark", "garment": "sweater"},
         findings,
     )
-    assert card.footer() == "Source: PLM records"
+    assert card.footer() == "Source: PLMex"
     assert all(r.source_id != "ecom_products" for r in card.results)
 
 
@@ -302,7 +302,7 @@ def test_count_stays_simple_not_assortment_report():
         card,
     )
     assert any("count_inflated_to_report" in i for i in issues)
-    clean = "There are 5,026 products with category cut sew jersey in PLM records."
+    clean = "There are 5,026 products with category cut sew jersey in PLMex."
     assert not validate(clean, card)
 
 
@@ -325,7 +325,7 @@ def test_required_filters_in_prompt_and_fallback():
     assert "sweater" in fb.casefold()
     assert "44" in fb
     issues = validate(
-        "Our PLM records show 44 products, while e-commerce has 1.",
+        "Our PLMex show 44 products, while e-commerce has 1.",
         card,
     )
     assert any("missing_filter:color=white" in i for i in issues)
@@ -356,7 +356,7 @@ def test_filter_values_dedupe_garment_and_category():
     assert "white" in values
     assert sum(1 for v in values if "sweater" in v) == 1
     ok = validate(
-        "Primark has 44 white sweaters in our PLM records.",
+        "Primark has 44 white sweaters in our PLMex.",
         card,
     )
     assert not any(i.startswith("missing_filter:") for i in ok)
@@ -374,7 +374,7 @@ def test_validate_bans_gap_and_recorded_times_phrasing():
     )
     issues = validate(
         "Primark sweaters are recorded 560 times in PLM and 42 times in e-commerce "
-        "listings. PLM records lead e-commerce listings by a gap of 518 products.",
+        "listings. PLMex lead e-commerce listings by a gap of 518 products.",
         card,
     )
     banned = [i for i in issues if i.startswith("banned:")]

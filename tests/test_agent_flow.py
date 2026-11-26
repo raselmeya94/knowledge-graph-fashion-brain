@@ -1,3 +1,5 @@
+import re
+
 from fashion_brain.agent import answer_question, plan_routes, resolve_catalog_plan
 from fashion_brain.agents import (
     GraphRouterAgent,
@@ -49,10 +51,21 @@ class _Provider:
             ]
         }
 
-    def complete(self, prompt, *, timeout, system=None):
-        self.calls.append({"complete": system, "prompt": prompt})
+    def complete(self, prompt, *, timeout, system=None, temperature=None):
+        self.calls.append({"complete": system, "prompt": prompt, "temperature": temperature})
         if system and "own knowledge" in system:
             return "A seam joins two pieces of fabric."
+        if system and "out-of-scope replies for Fashion Brain" in system:
+            return (
+                "HTML is a web-technology topic, so it sits outside Fashion Brain’s fashion and garment focus. "
+                "I can help with product catalogs, materials, styles, and brand assortment questions. "
+                "Ask me something apparel-related and I’ll dig in."
+            )
+        if system and "capability replies for Fashion Brain" in system:
+            return (
+                "That fashion topic needs research I can’t run from the catalog right now. "
+                "Try a product, brand, material, or availability question instead."
+            )
         return prompt
 
     def iter_chat(self, messages, *, timeout, tools=None, tool_choice=None, sink=None):
@@ -895,7 +908,13 @@ def test_model_stage_timeouts_are_bounded():
 
 
 def test_catalog_fast_route_does_not_capture_general_questions():
-    from fashion_brain.flow import _is_explicit_catalog_question, _thinking_implies_catalog
+    from fashion_brain.flow import (
+        OUT_OF_SCOPE_REPLY,
+        _is_explicit_catalog_question,
+        _is_fashion_domain_ask,
+        _is_general_definition_ask,
+        _thinking_implies_catalog,
+    )
     from fashion_brain.agents.contracts import IntentSummary
 
     assert _is_explicit_catalog_question(
@@ -910,6 +929,26 @@ def test_catalog_fast_route_does_not_capture_general_questions():
     assert _is_explicit_catalog_question("Analyze PRIMARK", "product_count")
     assert _is_explicit_catalog_question("Analyse Zara", "product_count")
     assert not _is_explicit_catalog_question("What is GSM?", "product_count")
+    assert _is_general_definition_ask("what is html?")
+    assert _is_general_definition_ask("What is GSM?")
+    assert _is_general_definition_ask("What is a seam?")
+    assert _is_general_definition_ask("define HTML")
+    assert _is_general_definition_ask("tell me about gauge")
+    assert _is_general_definition_ask("meaning of composition")
+    assert _is_general_definition_ask("what does elastane stand for?")
+    assert _is_general_definition_ask("about knit machine type")
+    assert not _is_general_definition_ask("What is the product count for Primark?")
+    assert not _is_general_definition_ask("What are the top 10 brands?")
+    assert not _is_general_definition_ask("What is the latest cotton price?")
+    assert not _is_general_definition_ask("How many products have GSM 12?")
+    assert not _is_general_definition_ask("Show me products with composition cotton")
+    assert not _is_fashion_domain_ask("what is html?")
+    assert _is_fashion_domain_ask("What is GSM?")
+    assert _is_fashion_domain_ask("What is a seam?")
+    # Schema field names still count as conceptual asks — never meta product totals.
+    assert _is_general_definition_ask("what is GSM?")
+    assert _is_general_definition_ask("What does GSM mean?")
+    assert "Fashion Brain" in OUT_OF_SCOPE_REPLY
     assert _thinking_implies_catalog(
         IntentSummary(
             actual_intent="Analyse primark with attribute-wise product breakdowns",
@@ -917,6 +956,141 @@ def test_catalog_fast_route_does_not_capture_general_questions():
             filters={"brand": "primark", "buyer": "primark"},
         )
     )
+
+
+def test_off_domain_definition_is_politely_refused(demo, monkeypatch):
+    """Even if the LLM wrongly picks catalog, off-domain definitions stay refused."""
+
+    provider = _Provider("catalog")
+    _llm(demo, monkeypatch, provider)
+    history = [
+        {"role": "user", "content": "How many products are in plmex?"},
+        {"role": "assistant", "content": "There are 18,000 products in the PLM records."},
+    ]
+    events = list(iter_ask_events(demo, "what is html?", INTERNAL, history))
+    assert not any(
+        "Looking up the product catalog" in str(e.get("text") or "")
+        for e in events
+        if e.get("type") == "thinking"
+    )
+    done = next(e for e in events if e.get("type") == "done")
+    answer_text = str((done.get("answer") or {}).get("answer") or "")
+    assert "Fashion Brain" in answer_text
+    assert re.search(r"\bhtml\b", answer_text, re.I)
+    assert not re.search(r"\b\d{2,}\s+products?\b", answer_text, re.I)
+    assert done["answer"]["routes"] == ["out_of_scope"]
+
+
+def test_fashion_definition_uses_web_search_not_catalog(demo, monkeypatch):
+    """Even if the LLM wrongly picks catalog, fashion definitions go to web search."""
+
+    provider = _Provider("catalog")
+    _llm(demo, monkeypatch, provider)
+    monkeypatch.setattr("fashion_brain.flow._web_search_enabled", lambda _platform: True)
+    events = list(iter_ask_events(demo, "What is GSM?", INTERNAL, history=None))
+    thinking = " ".join(str(e.get("text") or "") for e in events if e.get("type") == "thinking")
+    assert "web" in thinking.casefold()
+    assert not any(
+        "Looking up the product catalog" in str(e.get("text") or "")
+        for e in events
+        if e.get("type") == "thinking"
+    )
+    done = next(e for e in events if e.get("type") == "done")
+    assert "web_search" in done["answer"]["routes"]
+
+
+def test_sticky_entity_clarification_does_not_trap_gsm(demo, monkeypatch):
+    """Prior 'name a brand?' state must not force catalog for 'what is GSM?'."""
+
+    provider = _Provider("catalog")
+    _llm(demo, monkeypatch, provider)
+    monkeypatch.setattr("fashion_brain.flow._web_search_enabled", lambda _platform: True)
+    state = {
+        "clarification": {
+            "pending_slot": "entity",
+            "question": "Could you rephrase it with a brand, product type, or attribute?",
+            "turn_count": 1,
+        }
+    }
+    events = list(
+        iter_ask_events(demo, "what is GSM?", INTERNAL, history=None, conversation_state=state)
+    )
+    assert not any(
+        "Looking up the product catalog" in str(e.get("text") or "")
+        for e in events
+        if e.get("type") == "thinking"
+    )
+    done = next(e for e in events if e.get("type") == "done")
+    assert "web_search" in done["answer"]["routes"]
+    assert not (state.get("clarification") or {}).get("pending_slot")
+
+
+def test_sticky_filter_validation_does_not_trap_product_count(demo, monkeypatch):
+    """Self-contained 'how many' must clear sticky clarify and take count fast path."""
+
+    from fashion_brain.agents.contracts import Intention, Retrieved
+    from knowledge_graph.models import EvidenceItem
+
+    provider = _Provider("catalog")
+    _llm(demo, monkeypatch, provider)
+
+    retrieved = Retrieved(
+        text=(
+            "There are 1,129 products with color Black and brand Zara "
+            "and section Women."
+        ),
+        evidence=[
+            EvidenceItem(
+                source_id="ecom_products",
+                record_id="cypher_count",
+                title="multi-filter product count",
+                excerpt="products=1129",
+                graph="ecom_products",
+                verification_status="observed",
+            )
+        ],
+        caveats=[],
+        unavailable=[],
+        retrieve_mode="template",
+        response_type="stats",
+    )
+    intention = Intention(
+        intent="product_count",
+        filters={"color": "Black", "brand": "Zara", "section": "Women"},
+        metrics=["count"],
+    )
+    monkeypatch.setattr(
+        "fashion_brain.agent.draft_catalog",
+        lambda *_a, **_k: (retrieved, ["product_count", "kg_stats", "ecom_products"], intention),
+    )
+    state = {
+        "clarification": {
+            "pending_slot": "filter_validation",
+            "question": "I could not match that filter — pick a catalog value?",
+            "turn_count": 1,
+        },
+        "active_filters": {"category": "Black"},
+    }
+    events = list(
+        iter_ask_events(
+            demo,
+            "How many black Zara products are there for women?",
+            INTERNAL,
+            history=None,
+            conversation_state=state,
+        )
+    )
+    statuses = [str(e.get("text") or "") for e in events if e.get("type") == "status"]
+    assert any("catalog totals" in s.casefold() for s in statuses)
+    assert not (state.get("clarification") or {}).get("pending_slot")
+    answer_text = "".join(
+        str(e.get("text") or "") for e in events if e.get("type") == "answer"
+    )
+    assert "1,129" in answer_text
+    assert "example products" not in answer_text.casefold()
+    assert "open product listing" not in answer_text.casefold()
+    # Must not have fallen into sticky-clarify catalog UX.
+    assert not any("Working on your catalog request" in s for s in statuses)
 
 
 def test_plain_catalog_counts_skip_text2cypher_model(demo, monkeypatch):

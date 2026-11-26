@@ -672,6 +672,31 @@ class QueryUnderstandingAgent:
         ctx_filters = dict((context.active_filters if context else None) or {})
         session_filters = dict(state.get("active_filters") or {})
         pending = bool(clar and clar.pending_slot)
+        # Glossary / about / definition asks are not catalog entity slots — never
+        # ask "rephrase with a brand…" for "what is GSM?" etc.
+        try:
+            from fashion_brain.flow import _is_general_definition_ask
+
+            if not pending and _is_general_definition_ask(question):
+                return ReadyResult(
+                    intent=self._ready_intent(
+                        question,
+                        {},
+                        analysis_depth="unset",
+                        objective="explain",
+                        available_dimensions=[],
+                        metrics=[],
+                    ),
+                    state=ClarificationState(
+                        pending_slot=None,
+                        confirmed={},
+                        offered_options=[],
+                        turn_count=0,
+                        original_question=question,
+                    ),
+                )
+        except Exception:
+            pass
         try:
             from fashion_brain.ask import (
                 is_capability_followup_ask,

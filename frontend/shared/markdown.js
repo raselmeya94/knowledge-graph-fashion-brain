@@ -152,6 +152,141 @@
     return parts.join("");
   }
 
+  function cellText(value) {
+    if (value == null) return "";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch (_err) {
+      return String(value);
+    }
+  }
+
+  /**
+   * Turn table-shaped JSON into a markdown table block.
+   * Supports: [{…}, {…}], { headers/columns + rows/data }, or { key: scalar, … }.
+   */
+  function jsonToTableBlock(data) {
+    if (Array.isArray(data)) {
+      if (!data.length) return null;
+      if (data.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+        const header = [];
+        const seen = new Set();
+        data.forEach((row) => {
+          Object.keys(row).forEach((key) => {
+            if (!seen.has(key)) {
+              seen.add(key);
+              header.push(key);
+            }
+          });
+        });
+        if (!header.length) return null;
+        return {
+          type: "table",
+          header,
+          rows: data.map((row) => header.map((key) => cellText(row[key]))),
+        };
+      }
+      if (data.every((row) => Array.isArray(row))) {
+        const width = Math.max(0, ...data.map((row) => row.length));
+        if (width < 1) return null;
+        const header = Array.from({ length: width }, (_, i) => "Col " + (i + 1));
+        return {
+          type: "table",
+          header,
+          rows: data.map((row) =>
+            Array.from({ length: width }, (_, i) => cellText(row[i]))
+          ),
+        };
+      }
+      // Scalar list → single-column table
+      return {
+        type: "table",
+        header: ["Value"],
+        rows: data.map((item) => [cellText(item)]),
+      };
+    }
+    if (!data || typeof data !== "object") return null;
+
+    const columns =
+      data.columns ||
+      data.headers ||
+      data.fields ||
+      (Array.isArray(data.keys) ? data.keys : null);
+    const rows = data.rows || data.data || data.items || data.records;
+    if (Array.isArray(columns) && Array.isArray(rows)) {
+      const header = columns.map((col) =>
+        typeof col === "string" ? col : cellText(col && (col.name || col.key || col))
+      );
+      return {
+        type: "table",
+        header,
+        rows: rows.map((row) => {
+          if (Array.isArray(row)) return header.map((_, i) => cellText(row[i]));
+          if (row && typeof row === "object") {
+            return header.map((key, i) => {
+              const col = columns[i];
+              const field =
+                (col && typeof col === "object" && (col.key || col.name)) || key;
+              return cellText(row[field] != null ? row[field] : row[key]);
+            });
+          }
+          return [cellText(row)];
+        }),
+      };
+    }
+
+    // Flat object of scalars → Key | Value
+    const entries = Object.entries(data);
+    if (
+      entries.length &&
+      entries.every(
+        ([, value]) =>
+          value == null ||
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean"
+      )
+    ) {
+      return {
+        type: "table",
+        header: ["Key", "Value"],
+        rows: entries.map(([key, value]) => [key, cellText(value)]),
+      };
+    }
+
+    // Object of arrays of equal length → columns
+    const keys = Object.keys(data);
+    if (
+      keys.length >= 2 &&
+      keys.every((key) => Array.isArray(data[key])) &&
+      keys.every((key) => data[key].length === data[keys[0]].length)
+    ) {
+      const height = data[keys[0]].length;
+      return {
+        type: "table",
+        header: keys,
+        rows: Array.from({ length: height }, (_, i) =>
+          keys.map((key) => cellText(data[key][i]))
+        ),
+      };
+    }
+    return null;
+  }
+
+  function tryParseJsonBlob(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    if (!(raw.startsWith("{") || raw.startsWith("["))) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_err) {
+      return null;
+    }
+  }
+
   /** Repair space-collapsed ```chart / sampleboard {…} ``` blobs so fences parse again. */
   function normalizeVizMarkdown(source) {
     let text = String(source || "")
@@ -188,7 +323,14 @@
   }
 
   function parseMarkdown(source) {
-    const lines = normalizeVizMarkdown(source).split("\n");
+    const normalized = normalizeVizMarkdown(source);
+    // Whole-answer JSON → markdown table when the shape is tabular.
+    const wholeJson = tryParseJsonBlob(normalized);
+    if (wholeJson != null) {
+      const table = jsonToTableBlock(wholeJson);
+      if (table) return [table];
+    }
+    const lines = normalized.split("\n");
     const blocks = [];
     let index = 0;
     while (index < lines.length) {
@@ -219,6 +361,18 @@
             blocks.push({ type: "sampleboard", data: JSON.parse(text) });
           } catch (_err) {
             blocks.push({ type: "code", lang: fence[1], text });
+          }
+        } else if (
+          lang === "json" ||
+          lang === "jsonc" ||
+          (!lang && tryParseJsonBlob(text) != null)
+        ) {
+          const parsed = tryParseJsonBlob(text);
+          const table = parsed != null ? jsonToTableBlock(parsed) : null;
+          if (table) {
+            blocks.push(table);
+          } else {
+            blocks.push({ type: "code", lang: fence[1] || "json", text });
           }
         } else {
           blocks.push({ type: "code", lang: fence[1], text });
@@ -281,8 +435,13 @@
         paragraph.push(lines[index]);
         index += 1;
       }
-      if (paragraph.length) blocks.push({ type: "paragraph", text: paragraph.join("\n") });
-      else index += 1;
+      if (paragraph.length) {
+        const joined = paragraph.join("\n");
+        const parsed = tryParseJsonBlob(joined);
+        const table = parsed != null ? jsonToTableBlock(parsed) : null;
+        if (table) blocks.push(table);
+        else blocks.push({ type: "paragraph", text: joined });
+      } else index += 1;
     }
     return blocks;
   }
@@ -1064,5 +1223,5 @@
     }
   }
 
-  global.FBMarkdown = { paint, parseMarkdown };
+  global.FBMarkdown = { paint, parseMarkdown, jsonToTableBlock };
 })(typeof window !== "undefined" ? window : globalThis);

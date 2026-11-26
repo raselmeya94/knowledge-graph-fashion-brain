@@ -127,14 +127,13 @@ def apply_semantic_field_map(
 
 
 def _map_for_ecom(out: dict[str, Any], gb: str | None) -> tuple[dict[str, Any], str | None]:
-    # Audience: Fashion Brain v2 writes FOR_TARGET_GROUP hubs; keep gender AND mirror to section
-    # so both TargetGroup and legacy Section filters match.
+    # Audience: ecom stores Women/Men under section (not gender). Mirror then drop
+    # gender so filter_validation does not block as UNSUPPORTED and burn an LLM clarify.
     if "target_group" in out:
         tg = out.pop("target_group")
-        out.setdefault("gender", tg)
         out.setdefault("section", tg)
-    if "gender" in out and "section" not in out:
-        out["section"] = out["gender"]
+    if "gender" in out:
+        out.setdefault("section", out.pop("gender"))
 
     # Garment noun: garment_type → subfamily (ecom controlled vocab).
     if "garment_type" in out and "subfamily" not in out and "garment" not in out:

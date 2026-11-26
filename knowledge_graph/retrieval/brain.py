@@ -576,16 +576,23 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                         fields=analysis_fields,
                         filters=request.filters,
                     )
+                    from knowledge_graph.retrieval.ecom import _explicit_facet_limit
+
+                    facet_limit = _explicit_facet_limit(
+                        getattr(request, "question", None) or "",
+                        request.limit,
+                    )
                     append_neo4j_analysis_answer(
                         platform,
                         principal,
                         gid,
                         dict(request.filters or {}),
-                        request.limit,
+                        facet_limit,
                         lines,
                         evidence,
                         caveats,
                         analysis_fields=analysis_fields,
+                        user_set_limit=facet_limit is not None,
                     )
                 if len(analysis_targets) > 1:
                     caveats.append(
@@ -850,7 +857,7 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
             if len(graphs_hit) > 1:
                 caveats.append("This answer merges facts from multiple individual knowledge graphs.")
             else:
-                caveats.append("This answer is from document/news graphs, not our PLM data.")
+                caveats.append("This answer is from document/news graphs, not our PLMex data.")
     elif request.unsupported:
         lines.append(_outside_catalog_message())
     else:

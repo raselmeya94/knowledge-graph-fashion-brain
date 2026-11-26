@@ -177,7 +177,9 @@ _MAKE_ADVERBS = _words("normally usually typically often frequently frequent fre
 _SYSTEM_WORDS = _words(
     "plm plmex plm-ex system database catalog catalogue ecom ecomm ecommerce commerce "
     "neo4j postgres sql kg graph graphs source sources knowledge "
-    "pricechangeevent availabilitysnapshot entity entities"
+    "pricechangeevent availabilitysnapshot entity entities "
+    # Product / app name — never a brand, garment, or category filter.
+    "fashion brain fashionbrain fashiongpt bettex assistant chatbot app"
 )
 # Legacy soft tokens used only to strip graph-scope noise from party filters.
 # Preferred graph ids come from the live registry (see preferred_graphs_from_question).
@@ -1416,12 +1418,14 @@ def answer_question(
     graph_id: str | None = None,
     conversation_state: dict | None = None,
 ) -> GroundedAnswer:
-    """Single ask entry for HTTP /ask, WS /ws/ask, and conversation messages.
+    """Single ask entry for HTTP /ask and conversation messages.
 
-    Always uses the catalog orchestrator (same internal route as WebSocket chat).
-    The LangGraph outer router is not used on this entry — keep HTTP/WS/eval aligned.
+    Uses the same ``iter_ask_events`` router as WebSocket chat (LLM route +
+    fashion-scope safety), so definition asks like ``what is GSM?`` never fall
+    straight into catalog entity clarification.
     """
 
+    from fashion_brain.flow import iter_ask_events
     from fashion_brain.trace import current_trace, end_trace, start_trace
     from fashion_brain.stage_timing import current_timing, end_timing, log_timing, start_timing, timed
 
@@ -1433,18 +1437,35 @@ def answer_question(
         start_trace(question, source="http/ask")
     try:
         with timed("ask_pipeline"):
-            # Empty dict is enough: same catalog path WS uses on the first turn.
             state = conversation_state if conversation_state is not None else {}
-            answer = answer_from_catalog(
+            final: dict | None = None
+            for event in iter_ask_events(
                 platform,
                 question,
                 principal,
                 history,
                 graph_id=graph_id,
                 conversation_state=state,
-            )
+            ):
+                if event.get("type") == "done" and isinstance(event.get("answer"), dict):
+                    final = event["answer"]
+            if final is not None:
+                answer = GroundedAnswer.model_validate(final)
+            else:
+                answer = answer_from_catalog(
+                    platform,
+                    question,
+                    principal,
+                    history,
+                    graph_id=graph_id,
+                    conversation_state=state,
+                )
         if owns_trace:
-            end_trace(status="ok", routes=getattr(answer, "routes", None), chars=len(getattr(answer, "answer", "") or ""))
+            end_trace(
+                status="ok",
+                routes=getattr(answer, "routes", None),
+                chars=len(getattr(answer, "answer", "") or ""),
+            )
         return answer
     except Exception:
         if owns_trace:
@@ -3014,14 +3035,26 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
 
     if analysis:
         suggest = False
-        if limit is None:
-            limit = 5
         # Task phrasing must never survive as garment/category on analysis asks.
         filters.pop("garment", None)
         filters.pop("garment_type", None)
-        field_wise = bool(group_by) and (
-            "wise" in tokens or bool(set(tokens) & _BREAKDOWN_HEADS) or "by" in tokens
+        spoken_break_down = any(
+            tokens[i] in {"break", "breaks", "broke"}
+            and i + 1 < len(tokens)
+            and tokens[i + 1] == "down"
+            for i in range(len(tokens))
         )
+        field_wise = bool(group_by) and (
+            "wise" in tokens
+            or bool(set(tokens) & _BREAKDOWN_HEADS)
+            or "by" in tokens
+            or spoken_break_down
+        )
+        # Full multi-field analysis: modest per-field sample. Focused breakdowns
+        # (e.g. "Zara colours break down") keep limit=None so every value is shown —
+        # never invent top-5 when the user did not ask for N.
+        if limit is None and not field_wise:
+            limit = 5
         if all_parties:
             # "analysis all buyers in ecomm" → breakdown of every party, no single-party filter.
             group_by = all_parties
@@ -3313,6 +3346,16 @@ def _party_filter_core(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _strip_app_scope_phrases(question: str) -> str:
+    """Drop product/app name phrases so they never become catalog filters."""
+
+    text = str(question or "")
+    text = re.sub(r"(?i)\bfashion\s*brains?\b", " ", text)
+    text = re.sub(r"(?i)\bfashion\s*gpts?\b", " ", text)
+    text = re.sub(r"(?i)\bbettex\b", " ", text)
+    return text
+
+
 def ground_free_tokens_against_stats(
     question: str,
     filters: dict | None = None,
@@ -3328,6 +3371,14 @@ def ground_free_tokens_against_stats(
     """
 
     out = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
+    # Distinct-facet asks ("how many brands…") must not invent garment/brand values
+    # from leftover English (e.g. "fashion" → "young fashion").
+    try:
+        facet = _facet_entity_count(question)
+        if facet and str(facet).casefold() not in {"product", "products", "item", "items"}:
+            return out
+    except Exception:
+        pass
     if any(
         out.get(k)
         for k in (
@@ -3354,7 +3405,8 @@ def ground_free_tokens_against_stats(
         if gid and str(gid) not in gids:
             gids.append(str(gid))
     # Prefer graphs the question named (plm / ecom); avoid importing QU (cycle risk).
-    low = normalize_name(question)
+    scope_question = _strip_app_scope_phrases(question)
+    low = normalize_name(scope_question)
     if re.search(r"\b(plm|plmex)\b", low) and "plmex_products" not in gids:
         gids.insert(0, "plmex_products")
     if re.search(r"\b(ecom|ecomm|ecommerce|commerce)\b", low) and "ecom_products" not in gids:
@@ -3385,12 +3437,12 @@ def ground_free_tokens_against_stats(
             "short thin long full every note notes fibre fiber blend blends "
             "composition compositions construction constructions concentrated "
             "produce assortment scrape report reports mix mixes dominate dominant "
-            "material materials commerce scrape brands brand"
+            "material materials commerce scrape brands brand fashion brain"
         )
     )
     tokens = [
         tok
-        for tok in _question_tokens(question)
+        for tok in _question_tokens(scope_question)
         if tok
         and len(tok) >= 4
         and _is_party_token(tok)  # leftover content word, not grammar
@@ -3906,8 +3958,17 @@ def enrich_scope_from_question(
     Returns ``(filters, group_by)``. Never hard-codes retailer names.
     """
 
+    # "how many brands in Fashion Brain" is a distinct-facet count — no product filters.
+    try:
+        facet = _facet_entity_count(question)
+        if facet and str(facet).casefold() not in {"product", "products", "item", "items"}:
+            plan = _catalog_plan(_strip_app_scope_phrases(question))
+            return {}, plan.get("group_by")
+    except Exception:
+        pass
+
     prior = sanitize_party_filters(dict(filters or {}))
-    plan = _catalog_plan(question)
+    plan = _catalog_plan(_strip_app_scope_phrases(question))
     plan_filters = sanitize_party_filters(dict(plan.get("filters") or {}))
     out = dict(prior)
 
@@ -4269,11 +4330,12 @@ def plan_catalog_question(
         if field_wise:
             # Focused: one facet via the same analytical engine.
             model_plan["group_by"] = keyword.get("group_by") or model_plan.get("group_by")
+            # Leave limit unset unless the user/model named an explicit N.
         else:
             # Full: every facet with distinct values — clear single-field group_by.
             model_plan["group_by"] = None
-        if model_plan.get("limit") is None:
-            model_plan["limit"] = 5
+            if model_plan.get("limit") is None:
+                model_plan["limit"] = 5
         if keyword.get("filters", {}).get("buyer") and not model_plan["filters"].get("buyer"):
             model_plan["filters"]["buyer"] = keyword["filters"]["buyer"]
         if keyword.get("filters", {}).get("brand") and not model_plan["filters"].get("brand"):
@@ -4660,11 +4722,11 @@ def _append_catalog_answer(platform, principal, plan, lines, evidence, caveats, 
     filters = _query_filters(plan)
     group_by = plan.get("group_by")
     if not visible:
-        lines.append("The PLM data contains 0 products.")
+        lines.append("The PLMex data contains 0 products.")
     elif filters or group_by:
         matched, total = platform.products.search(principal, limit=5, **filters)
         phrase = _filter_phrase(filters)
-        lines.append(f"The PLM data contains {total} products" + (f" {phrase}." if phrase else "."))
+        lines.append(f"The PLMex data contains {total} products" + (f" {phrase}." if phrase else "."))
         if group_by:
             groups = platform.products.count_by(principal, group_by, **filters)
             label = _GROUP_LABELS.get(group_by, group_by)
@@ -4674,7 +4736,7 @@ def _append_catalog_answer(platform, principal, plan, lines, evidence, caveats, 
                 lines.append(f"{label} counts for that selection: {_group_text(groups)}.")
         evidence.extend(_evidence_from_product(envelope) for envelope in matched)
     else:
-        lines.append(f"The PLM data contains {visible} products.")
+        lines.append(f"The PLMex data contains {visible} products.")
     if CATALOG_CAVEAT:
         caveats.append(CATALOG_CAVEAT)
     if hidden:
@@ -4733,7 +4795,7 @@ def _append_specification(platform, principal, plan, lines, evidence, caveats, u
             lines.append(f"No {season_name} style codes were stored, so the specification uses all {total} products for that buyer.")
             scope = f"all {total} products for that buyer"
     if not total:
-        lines.append(f"The PLM data has no styles for {buyer}, so there is no specification to build.")
+        lines.append(f"The PLMex data has no styles for {buyer}, so there is no specification to build.")
         if CATALOG_CAVEAT:
             caveats.append(CATALOG_CAVEAT)
         return

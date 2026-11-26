@@ -9,17 +9,22 @@ from fashion_brain.planning.metadata_resolver import (
     Understanding,
     check_understanding,
     cross_check_important_columns,
+    demote_color_words_from_category,
     match_spans,
     repair_filters,
 )
 from fashion_brain.agents.turn_planner import _pick_clarification_option
+from fashion_brain.ask import resolve_catalog_plan
+from knowledge_graph.ontology import normalize_name
 
 
 def _index():
     return {
         "brand": [("Zara", "zara"), ("Primark", "primark")],
         "garment": [("Sweater", "sweater"), ("Jumper", "jumper")],
-        "category": [("Clothes", "clothes")],
+        "category": [("Clothes", "clothes"), ("Black", "black")],
+        "color": [("black", "black"), ("white", "white")],
+        "section": [("Women", "women")],
     }
 
 
@@ -29,6 +34,43 @@ def test_repair_moves_brand_from_wrong_field():
     assert repaired.get("garment") == "Jumper"
     assert "category" not in repaired or repaired.get("category") != "Zara"
     assert unresolved == []
+
+
+def test_repair_prefers_color_over_category_for_black():
+    repaired, unresolved = repair_filters({"category": "Black"}, _index())
+    assert repaired.get("color")
+    assert normalize_name(repaired["color"]) == "black"
+    assert "category" not in repaired
+    assert unresolved == []
+
+
+def test_repair_keeps_color_black_not_category():
+    repaired, unresolved = repair_filters(
+        {"color": "black", "brand": "zara", "gender": "women"}, _index()
+    )
+    assert normalize_name(repaired.get("color") or "") == "black"
+    assert "category" not in repaired
+    assert unresolved == []
+
+
+def test_demote_color_words_from_category():
+    out = demote_color_words_from_category({"category": "Black", "brand": "zara"}, _index())
+    assert normalize_name(out.get("color") or "") == "black"
+    assert "category" not in out
+    assert out.get("brand") == "zara"
+
+
+def test_black_zara_women_keyword_plan():
+    plan = resolve_catalog_plan(
+        "How many black Zara products are there for women?",
+        brand_names=["zara", "primark", "matalan", "c-and-a"],
+    )
+    filters = plan.get("filters") or {}
+    assert normalize_name(str(filters.get("color") or "")) == "black"
+    assert normalize_name(str(filters.get("brand") or "")) == "zara"
+    assert "category" not in filters or normalize_name(str(filters.get("category"))) != "black"
+    genderish = normalize_name(str(filters.get("gender") or filters.get("section") or ""))
+    assert genderish in {"women", "woman", "female"}
 
 
 def test_repair_near_miss_spelling():
