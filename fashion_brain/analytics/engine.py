@@ -103,6 +103,19 @@ def run_product_analysis(
     )
 
     filters = ensure_compare_party_filters(dict(filters or {}), question)
+    # Merchant analysis asks often name a brand in prose; never run unscoped when
+    # a live brand is clearly mentioned (stops whole-catalog Primark/Matalan misses).
+    if question and not (filters.get("brand") or filters.get("buyer")):
+        try:
+            from fashion_brain.ask import live_brand_names, live_brands_mentioned
+
+            hits = live_brands_mentioned(question, live_brand_names(platform))
+            if len(hits) == 1:
+                filters["brand"] = hits[0]
+            elif len(hits) >= 2:
+                filters["brand"] = " | ".join(hits[:4])
+        except Exception:
+            pass
     lines: list[str] = []
     evidence: list[EvidenceItem] = []
     caveats: list[str] = []

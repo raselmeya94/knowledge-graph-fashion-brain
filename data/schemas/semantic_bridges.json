@@ -1,0 +1,141 @@
+{
+  "version": "2.0.0",
+  "description": "Cross-source synonym bridges for Fashion Brain (ecom ↔ plmex). Used by enrichment Cypher and optional MAPS_TO_CATEGORY linking.",
+  "retail_groups": [
+    {
+      "group": "Inditex",
+      "buyers": ["INDITEX", "INDITEX(ZARA KIDS)", "INDITEX(ZARA LADY)", "INDITEX(PULL&BEAR)", "INDITEX(STRADIVARIUS)"],
+      "brands": ["zara", "zara kids", "zara lady", "zara home", "pull&bear", "stradivarius", "oysho"]
+    },
+    {
+      "group": "Primark",
+      "buyers": ["PRIMARK"],
+      "brands": ["primark"]
+    },
+    {
+      "group": "Matalan",
+      "buyers": ["MATALAN"],
+      "brands": ["matalan", "papaya"]
+    },
+    {
+      "group": "C&A",
+      "buyers": ["C&A(Europe)", "C&A Mexico", "C&A (Brazil)"],
+      "brands": ["c-and-a", "c&a"]
+    },
+    {
+      "group": "Walmart",
+      "buyers": ["WALMART"],
+      "brands": ["walmart", "george"]
+    }
+  ],
+  "material_groups": {
+    "natural": ["cotton", "wool", "linen", "silk"],
+    "synthetic": ["polyester", "recycled polyester", "acrylic", "nylon", "polyamide", "elastane", "spandex"],
+    "semi-synthetic": ["viscose", "lyocell", "modal"]
+  },
+  "color_families": {
+    "neutrals": ["white", "off white", "off-white", "beige", "khaki", "cream", "ecru"],
+    "monochrome": ["black", "grey", "dark grey", "light grey", "white and black"],
+    "blues": ["blue", "dark blue", "navy"],
+    "reds_pinks": ["red", "pink", "dark red"],
+    "greens": ["green", "dark green"],
+    "earth_warm": ["yellow", "orange", "brown"],
+    "purples": ["purple"],
+    "multicolour": ["multicolour"]
+  },
+  "canonical_categories": {
+    "cardigan": {
+      "parent": "knitwear",
+      "ecom_aliases": ["cardigans", "cardigan", "knitted cardigans"],
+      "plmex_sub_sub_aliases": ["Cardigan Sweater", "Knit Cardigan", "Woven Cardigan"],
+      "plmex_garment_type_aliases": ["Top Cardigan"]
+    },
+    "jumper_pullover": {
+      "parent": "knitwear",
+      "ecom_aliases": ["jumpers", "pullovers", "sweaters", "knitwear jumpers"],
+      "plmex_sub_sub_aliases": ["Pullover Sweater", "Knit Pullover", "Woven Pullover"],
+      "plmex_garment_type_aliases": ["Jumper"]
+    },
+    "t_shirt": {
+      "parent": "tops",
+      "ecom_aliases": ["t-shirts", "tees", "t-shirt"],
+      "plmex_sub_sub_aliases": ["T-shirt", "Sports T-shirt"],
+      "plmex_garment_type_aliases": ["T-Shirt"]
+    },
+    "polo_shirt": {
+      "parent": "tops",
+      "ecom_aliases": ["polo shirts", "polos"],
+      "plmex_sub_sub_aliases": ["Knitwear Polo", "POLO"],
+      "plmex_garment_type_aliases": ["Polo Shirt"]
+    },
+    "sweatshirt_hoodie": {
+      "parent": "tops",
+      "ecom_aliases": ["sweatshirts", "hoodies", "hoodies & sweatshirts"],
+      "plmex_sub_sub_aliases": ["Pullover Sweatshirt", "Sweatshirt Set"],
+      "plmex_garment_type_aliases": ["Hoodies & Sweatshirts", "Sweatshirt"]
+    },
+    "dress": {
+      "parent": "dresses",
+      "ecom_aliases": ["dresses", "knitted dresses", "mini dresses", "midi dresses"],
+      "plmex_sub_sub_aliases": ["Knitwear Dress", "Knit Dress", "Woven Dress"],
+      "plmex_garment_type_aliases": ["Dress"]
+    },
+    "skirt": {
+      "parent": "bottoms",
+      "ecom_aliases": ["skirts", "knitted skirts"],
+      "plmex_sub_sub_aliases": ["Knitwear Skirt", "Woven Skirt"],
+      "plmex_garment_type_aliases": ["Skirt"]
+    },
+    "trousers_pants": {
+      "parent": "bottoms",
+      "ecom_aliases": ["trousers", "pants", "joggers", "leggings"],
+      "plmex_sub_sub_aliases": ["Knitwear Pants", "Knit Pants", "Woven Pants", "Sports Loose Pants", "Sports Leggings"],
+      "plmex_garment_type_aliases": ["Suit/Suit Pants"]
+    },
+    "jacket_coat": {
+      "parent": "outerwear",
+      "ecom_aliases": ["jackets", "coats", "outerwear", "bombers", "trench coats", "puffer jackets"],
+      "plmex_sub_sub_aliases": ["Woven Jacket Outerwear", "Knit Jacket Outerwear", "Flat-Padded Outerwear", "Woven Trench Coat"],
+      "plmex_garment_type_aliases": ["Jacket/Light Weight/Bomber", "Coat/Jacket/Outwear", "Padded/Down Jacket", "Brushed Jacket", "Shacket", "Raincoat"]
+    },
+    "vest_waistcoat": {
+      "parent": "tops",
+      "ecom_aliases": ["vests", "waistcoats", "gilets", "knitted vests", "camisoles"],
+      "plmex_sub_sub_aliases": ["Knitwear Vest", "Knit Vest", "Woven Vest"],
+      "plmex_garment_type_aliases": ["Vest/Waistcoat"]
+    },
+    "swimwear": {
+      "parent": "swimwear_beachwear",
+      "ecom_aliases": ["swimwear", "bikinis", "swimsuits", "beachwear"],
+      "plmex_sub_sub_aliases": ["Swimwear Set", "One-Piece Swimwear", "Swimwear Top", "Swimwear Bottom", "Beachwear One-Piece", "Beachwear Set"],
+      "plmex_garment_type_aliases": ["Swimwear", "Beachwear"]
+    }
+  },
+  "column_equivalents": {
+    "target_group": {
+      "ecom": ["section", "category_path"],
+      "plmex": ["gender", "brand_placeholders:OLDER GIRL|INFANT"]
+    },
+    "brand_retail_group": {
+      "ecom": ["brand"],
+      "plmex": ["brand", "buyer"]
+    },
+    "canonical_category": {
+      "ecom": ["category", "family", "subfamily"],
+      "plmex": ["plm_sub_category", "plm_sub_sub_category", "garment_type"],
+      "false_friend": "plmex.category is ProductionMethod, not garment category"
+    },
+    "reference": {
+      "ecom": ["reference", "display_reference"],
+      "plmex": ["style_reference", "customer_style_reference"]
+    },
+    "occasion": {
+      "ecom": ["occasion"],
+      "plmex": ["ai_event_tags"]
+    },
+    "construction": {
+      "ecom": ["construction"],
+      "plmex": ["ai_construction_tags", "gauge:CROCHET", "category:Sweater→knit"]
+    }
+  }
+}

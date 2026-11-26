@@ -127,11 +127,14 @@ def apply_semantic_field_map(
 
 
 def _map_for_ecom(out: dict[str, Any], gb: str | None) -> tuple[dict[str, Any], str | None]:
-    # Audience: gender → section (FOR_TARGET_GROUP often empty on ecom).
+    # Audience: Fashion Brain v2 writes FOR_TARGET_GROUP hubs; keep gender AND mirror to section
+    # so both TargetGroup and legacy Section filters match.
+    if "target_group" in out:
+        tg = out.pop("target_group")
+        out.setdefault("gender", tg)
+        out.setdefault("section", tg)
     if "gender" in out and "section" not in out:
-        out["section"] = out.pop("gender")
-    elif "gender" in out:
-        out.pop("gender", None)
+        out["section"] = out["gender"]
 
     # Garment noun: garment_type → subfamily (ecom controlled vocab).
     if "garment_type" in out and "subfamily" not in out and "garment" not in out:
@@ -157,7 +160,10 @@ def _map_for_ecom(out: dict[str, Any], gb: str | None) -> tuple[dict[str, Any], 
 
 
 def _map_for_plmex(out: dict[str, Any], gb: str | None) -> tuple[dict[str, Any], str | None]:
-    # Audience: section → gender.
+    # Audience: section / target_group → gender (HAS_GENDER + FOR_TARGET_GROUP).
+    if "target_group" in out:
+        tg = out.pop("target_group")
+        out.setdefault("gender", tg)
     if "section" in out and "gender" not in out:
         out["gender"] = out.pop("section")
     elif "section" in out:

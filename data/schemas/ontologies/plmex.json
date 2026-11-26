@@ -1,19 +1,25 @@
 {
   "name": "plmex-products-ontology",
-  "version": "1.1.0",
-  "description": "PLMEX ontology for Postgres plmex_live.public.plmex_products (43 columns). Product is central (code PK). Filterable columns map to entities/edges; measures stay Product properties. canonical_entities are exact distinct values from plmex_live (aliases = exact DB string only; no invented spellings). Materials parsed from composition percent tokens.",
+  "version": "2.0.0",
+  "description": "PLMEX ontology v2 for Fashion Brain. Product is central (code PK). Shared hubs (Brand, Material, Color, Reference, TargetGroup, Construction, Occasion) use fashion_brain IDs. category maps to ProductionMethod (not GarmentCategory). Materials are pure fiber names; percentages live on USES_MATERIAL edges.",
   "entity_types": [
     "Product",
     "Brand",
     "Buyer",
+    "RetailGroup",
     "Material",
-    "GarmentCategory",
+    "MaterialGroup",
+    "ProductionMethod",
     "PlmMainCategory",
     "PlmSubCategory",
     "PlmSubSubCategory",
     "GarmentType",
+    "CanonicalCategory",
     "Gender",
+    "TargetGroup",
     "Color",
+    "ColorFamily",
+    "Pattern",
     "Gauge",
     "SampleType",
     "DesignPurpose",
@@ -24,12 +30,13 @@
     "ShoppingDepartment",
     "SeasonYear",
     "Person",
-    "StyleReference",
-    "CustomerStyleReference",
+    "Reference",
     "Location",
     "InventoryRecord",
     "Shipment",
     "Unit",
+    "Occasion",
+    "Construction",
     "EventTag",
     "ConstructionTag",
     "AiMaterialTag",
@@ -61,12 +68,6 @@
         "Material"
       ]
     ],
-    "BELONGS_TO_CATEGORY": [
-      [
-        "Product",
-        "GarmentCategory"
-      ]
-    ],
     "HAS_PLM_MAIN_CATEGORY": [
       [
         "Product",
@@ -93,10 +94,6 @@
       [
         "PlmSubSubCategory",
         "PlmSubCategory"
-      ],
-      [
-        "GarmentCategory",
-        "PlmMainCategory"
       ]
     ],
     "HAS_GARMENT_TYPE": [
@@ -134,7 +131,7 @@
         "Product",
         "SampleType"
       ]
-      ],
+    ],
     "DESIGNED_FOR": [
       [
         "Product",
@@ -205,18 +202,6 @@
         "Buyer"
       ]
     ],
-    "HAS_STYLE_REFERENCE": [
-      [
-        "Product",
-        "StyleReference"
-      ]
-    ],
-    "HAS_CUSTOMER_STYLE_REFERENCE": [
-      [
-        "Product",
-        "CustomerStyleReference"
-      ]
-    ],
     "HAS_UNIT": [
       [
         "Product",
@@ -224,10 +209,6 @@
       ]
     ],
     "STORED_AT": [
-      [
-        "Product",
-        "Location"
-      ],
       [
         "InventoryRecord",
         "Location"
@@ -350,6 +331,100 @@
       ]
     ],
     "SIMILAR_TO": [
+      [
+        "Product",
+        "Product"
+      ]
+    ],
+    "MADE_WITH_METHOD": [
+      [
+        "Product",
+        "ProductionMethod"
+      ]
+    ],
+    "FOR_TARGET_GROUP": [
+      [
+        "Product",
+        "TargetGroup"
+      ]
+    ],
+    "HAS_REFERENCE": [
+      [
+        "Product",
+        "Reference"
+      ]
+    ],
+    "SUITED_FOR_OCCASION": [
+      [
+        "Product",
+        "Occasion"
+      ]
+    ],
+    "HAS_CONSTRUCTION": [
+      [
+        "Product",
+        "Construction"
+      ]
+    ],
+    "HAS_PATTERN": [
+      [
+        "Product",
+        "Pattern"
+      ]
+    ],
+    "IN_DEPARTMENT": [
+      [
+        "Person",
+        "Department"
+      ]
+    ],
+    "IN_GROUP": [
+      [
+        "Buyer",
+        "RetailGroup"
+      ],
+      [
+        "Brand",
+        "RetailGroup"
+      ]
+    ],
+    "IN_MATERIAL_GROUP": [
+      [
+        "Material",
+        "MaterialGroup"
+      ]
+    ],
+    "IN_COLOR_FAMILY": [
+      [
+        "Color",
+        "ColorFamily"
+      ]
+    ],
+    "MAPS_TO_CATEGORY": [
+      [
+        "GarmentType",
+        "CanonicalCategory"
+      ],
+      [
+        "PlmSubSubCategory",
+        "CanonicalCategory"
+      ],
+      [
+        "PlmSubCategory",
+        "CanonicalCategory"
+      ],
+      [
+        "Product",
+        "CanonicalCategory"
+      ]
+    ],
+    "REFERS_TO_MATERIAL": [
+      [
+        "AiMaterialTag",
+        "Material"
+      ]
+    ],
+    "RESOLVES_TO": [
       [
         "Product",
         "Product"
@@ -623,9 +698,9 @@
     {
       "id": "plmex:buyer:yagi-co-ltd",
       "type": "Buyer",
-      "name": "YAGI\uff06CO.\uff0cLTD.",
+      "name": "YAGI＆CO.，LTD.",
       "aliases": [
-        "YAGI\uff06CO.\uff0cLTD."
+        "YAGI＆CO.，LTD."
       ],
       "external_ids": []
     },
@@ -792,7 +867,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:primark",
+      "id": "brand:primark",
       "type": "Brand",
       "name": "PRIMARK",
       "aliases": [
@@ -801,7 +876,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:zara-kids",
+      "id": "brand:zara-kids",
       "type": "Brand",
       "name": "ZARA KIDS",
       "aliases": [
@@ -810,7 +885,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:river-island",
+      "id": "brand:river-island",
       "type": "Brand",
       "name": "RIVER ISLAND",
       "aliases": [
@@ -819,7 +894,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:zara",
+      "id": "brand:zara",
       "type": "Brand",
       "name": "ZARA",
       "aliases": [
@@ -828,7 +903,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:c-a",
+      "id": "brand:c-a",
       "type": "Brand",
       "name": "C&A",
       "aliases": [
@@ -837,7 +912,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:kmart",
+      "id": "brand:kmart",
       "type": "Brand",
       "name": "KMART",
       "aliases": [
@@ -846,7 +921,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:sainsburys",
+      "id": "brand:sainsburys",
       "type": "Brand",
       "name": "SAINSBURYS",
       "aliases": [
@@ -855,7 +930,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:bettex-industries-ltd",
+      "id": "brand:bettex-industries-ltd",
       "type": "Brand",
       "name": "BETTEX INDUSTRIES LTD.",
       "aliases": [
@@ -864,16 +939,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:uk-showroom-sample",
-      "type": "Brand",
-      "name": "UK SHOWROOM SAMPLE",
-      "aliases": [
-        "UK SHOWROOM SAMPLE"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:brand:h-m",
+      "id": "brand:h-m",
       "type": "Brand",
       "name": "H&M",
       "aliases": [
@@ -882,7 +948,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:stradivarius",
+      "id": "brand:stradivarius",
       "type": "Brand",
       "name": "STRADIVARIUS",
       "aliases": [
@@ -891,7 +957,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:juniors",
+      "id": "brand:juniors",
       "type": "Brand",
       "name": "JUNIORS",
       "aliases": [
@@ -900,7 +966,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:nutmeg",
+      "id": "brand:nutmeg",
       "type": "Brand",
       "name": "NUTMEG",
       "aliases": [
@@ -909,7 +975,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:next",
+      "id": "brand:next",
       "type": "Brand",
       "name": "NEXT",
       "aliases": [
@@ -918,7 +984,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:reserved",
+      "id": "brand:reserved",
       "type": "Brand",
       "name": "RESERVED",
       "aliases": [
@@ -927,7 +993,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:papaya",
+      "id": "brand:papaya",
       "type": "Brand",
       "name": "PAPAYA",
       "aliases": [
@@ -936,7 +1002,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:george",
+      "id": "brand:george",
       "type": "Brand",
       "name": "GEORGE",
       "aliases": [
@@ -945,7 +1011,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:zara-lady",
+      "id": "brand:zara-lady",
       "type": "Brand",
       "name": "ZARA LADY",
       "aliases": [
@@ -954,7 +1020,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:vilet",
+      "id": "brand:vilet",
       "type": "Brand",
       "name": "VILET",
       "aliases": [
@@ -963,7 +1029,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:m-s",
+      "id": "brand:m-s",
       "type": "Brand",
       "name": "M&S",
       "aliases": [
@@ -972,16 +1038,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:bd-design-team",
-      "type": "Brand",
-      "name": "BD DESIGN TEAM",
-      "aliases": [
-        "BD DESIGN TEAM"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:brand:mango",
+      "id": "brand:mango",
       "type": "Brand",
       "name": "MANGO",
       "aliases": [
@@ -990,7 +1047,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:babyshop",
+      "id": "brand:babyshop",
       "type": "Brand",
       "name": "BABYSHOP",
       "aliases": [
@@ -999,16 +1056,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:shopping-sample-uk",
-      "type": "Brand",
-      "name": "Shopping Sample(UK)",
-      "aliases": [
-        "Shopping Sample(UK)"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:brand:the-very-group",
+      "id": "brand:the-very-group",
       "type": "Brand",
       "name": "THE VERY GROUP",
       "aliases": [
@@ -1017,7 +1065,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:magnolia-grace",
+      "id": "brand:magnolia-grace",
       "type": "Brand",
       "name": "MAGNOLIA GRACE",
       "aliases": [
@@ -1026,7 +1074,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:tu",
+      "id": "brand:tu",
       "type": "Brand",
       "name": "TU",
       "aliases": [
@@ -1035,7 +1083,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:zara-home",
+      "id": "brand:zara-home",
       "type": "Brand",
       "name": "ZARA HOME",
       "aliases": [
@@ -1044,7 +1092,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:pull-bear",
+      "id": "brand:pull-bear",
       "type": "Brand",
       "name": "PULL&BEAR",
       "aliases": [
@@ -1053,7 +1101,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:bcbg",
+      "id": "brand:bcbg",
       "type": "Brand",
       "name": "BCBG",
       "aliases": [
@@ -1062,7 +1110,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:oysho",
+      "id": "brand:oysho",
       "type": "Brand",
       "name": "OYSHO",
       "aliases": [
@@ -1071,7 +1119,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:urban-revivo",
+      "id": "brand:urban-revivo",
       "type": "Brand",
       "name": "URBAN REVIVO",
       "aliases": [
@@ -1080,7 +1128,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:fashion-uk",
+      "id": "brand:fashion-uk",
       "type": "Brand",
       "name": "FASHION UK",
       "aliases": [
@@ -1089,26 +1137,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:brand:older-girl",
-      "type": "Brand",
-      "name": "OLDER GIRL",
-      "aliases": [
-        "OLDER GIRL"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:brand:infant",
-      "type": "Brand",
-      "name": "INFANT",
-      "aliases": [
-        "INFANT"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:garmentcategory:sweater",
-      "type": "GarmentCategory",
+      "id": "plmex:method:sweater",
+      "type": "ProductionMethod",
       "name": "Sweater",
       "aliases": [
         "Sweater"
@@ -1116,8 +1146,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:cut-sew-woven",
-      "type": "GarmentCategory",
+      "id": "plmex:method:cut-sew-woven",
+      "type": "ProductionMethod",
       "name": "Cut & Sew-Woven",
       "aliases": [
         "Cut & Sew-Woven"
@@ -1125,8 +1155,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:cut-sew-jersey",
-      "type": "GarmentCategory",
+      "id": "plmex:method:cut-sew-jersey",
+      "type": "ProductionMethod",
       "name": "Cut & Sew-Jersey",
       "aliases": [
         "Cut & Sew-Jersey"
@@ -1134,8 +1164,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:hybrid-garment",
-      "type": "GarmentCategory",
+      "id": "plmex:method:hybrid-garment",
+      "type": "ProductionMethod",
       "name": "Hybrid Garment",
       "aliases": [
         "Hybrid Garment"
@@ -1143,8 +1173,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:others",
-      "type": "GarmentCategory",
+      "id": "plmex:method:others",
+      "type": "ProductionMethod",
       "name": "Others",
       "aliases": [
         "Others"
@@ -1152,8 +1182,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:tp-cut-sew-design",
-      "type": "GarmentCategory",
+      "id": "plmex:method:tp-cut-sew-design",
+      "type": "ProductionMethod",
       "name": "TP-(Cut & Sew Design)",
       "aliases": [
         "TP-(Cut & Sew Design)"
@@ -1161,8 +1191,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:home-textile",
-      "type": "GarmentCategory",
+      "id": "plmex:method:home-textile",
+      "type": "ProductionMethod",
       "name": "Home Textile",
       "aliases": [
         "Home Textile"
@@ -1170,8 +1200,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:tp-sweater-design",
-      "type": "GarmentCategory",
+      "id": "plmex:method:tp-sweater-design",
+      "type": "ProductionMethod",
       "name": "TP-(Sweater Design)",
       "aliases": [
         "TP-(Sweater Design)"
@@ -1179,8 +1209,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:fabric-swatch",
-      "type": "GarmentCategory",
+      "id": "plmex:method:fabric-swatch",
+      "type": "ProductionMethod",
       "name": "Fabric Swatch",
       "aliases": [
         "Fabric Swatch"
@@ -1188,8 +1218,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:yarn-swatch",
-      "type": "GarmentCategory",
+      "id": "plmex:method:yarn-swatch",
+      "type": "ProductionMethod",
       "name": "Yarn Swatch",
       "aliases": [
         "Yarn Swatch"
@@ -1197,8 +1227,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:hardgoods",
-      "type": "GarmentCategory",
+      "id": "plmex:method:hardgoods",
+      "type": "ProductionMethod",
       "name": "Hardgoods",
       "aliases": [
         "Hardgoods"
@@ -1206,8 +1236,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:cad",
-      "type": "GarmentCategory",
+      "id": "plmex:method:cad",
+      "type": "ProductionMethod",
       "name": "CAD",
       "aliases": [
         "CAD"
@@ -1215,8 +1245,8 @@
       "external_ids": []
     },
     {
-      "id": "plmex:garmentcategory:flat-knit-pattern",
-      "type": "GarmentCategory",
+      "id": "plmex:method:flat-knit-pattern",
+      "type": "ProductionMethod",
       "name": "Flat Knit Pattern",
       "aliases": [
         "Flat Knit Pattern"
@@ -2655,7 +2685,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2026",
+      "id": "seasonyear:2026",
       "type": "SeasonYear",
       "name": "2026",
       "aliases": [
@@ -2664,16 +2694,17 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2025",
+      "id": "seasonyear:2025",
       "type": "SeasonYear",
       "name": "2025",
       "aliases": [
-        "2025"
+        "2025",
+        "2205"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2024",
+      "id": "seasonyear:2024",
       "type": "SeasonYear",
       "name": "2024",
       "aliases": [
@@ -2682,7 +2713,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2023",
+      "id": "seasonyear:2023",
       "type": "SeasonYear",
       "name": "2023",
       "aliases": [
@@ -2691,7 +2722,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2021",
+      "id": "seasonyear:2021",
       "type": "SeasonYear",
       "name": "2021",
       "aliases": [
@@ -2700,7 +2731,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2022",
+      "id": "seasonyear:2022",
       "type": "SeasonYear",
       "name": "2022",
       "aliases": [
@@ -2709,7 +2740,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2020",
+      "id": "seasonyear:2020",
       "type": "SeasonYear",
       "name": "2020",
       "aliases": [
@@ -2718,7 +2749,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2027",
+      "id": "seasonyear:2027",
       "type": "SeasonYear",
       "name": "2027",
       "aliases": [
@@ -2727,7 +2758,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2019",
+      "id": "seasonyear:2019",
       "type": "SeasonYear",
       "name": "2019",
       "aliases": [
@@ -2736,7 +2767,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2018",
+      "id": "seasonyear:2018",
       "type": "SeasonYear",
       "name": "2018",
       "aliases": [
@@ -2745,7 +2776,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2017",
+      "id": "seasonyear:2017",
       "type": "SeasonYear",
       "name": "2017",
       "aliases": [
@@ -2754,7 +2785,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2028",
+      "id": "seasonyear:2028",
       "type": "SeasonYear",
       "name": "2028",
       "aliases": [
@@ -2763,7 +2794,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2015",
+      "id": "seasonyear:2015",
       "type": "SeasonYear",
       "name": "2015",
       "aliases": [
@@ -2772,16 +2803,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:seasonyear:2205",
-      "type": "SeasonYear",
-      "name": "2205",
-      "aliases": [
-        "2205"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:7gg",
+      "id": "fashion:gauge:7gg",
       "type": "Gauge",
       "name": "7GG",
       "aliases": [
@@ -2790,7 +2812,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:12gg",
+      "id": "fashion:gauge:12gg",
       "type": "Gauge",
       "name": "12GG",
       "aliases": [
@@ -2799,16 +2821,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:12g",
-      "type": "Gauge",
-      "name": "12G",
-      "aliases": [
-        "12G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:5gg",
+      "id": "fashion:gauge:5gg",
       "type": "Gauge",
       "name": "5GG",
       "aliases": [
@@ -2817,25 +2830,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:7g",
-      "type": "Gauge",
-      "name": "7G",
-      "aliases": [
-        "7G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:5g",
-      "type": "Gauge",
-      "name": "5G",
-      "aliases": [
-        "5G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:3gg",
+      "id": "fashion:gauge:3gg",
       "type": "Gauge",
       "name": "3GG",
       "aliases": [
@@ -2844,16 +2839,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:3g",
-      "type": "Gauge",
-      "name": "3G",
-      "aliases": [
-        "3G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:5-7gg",
+      "id": "fashion:gauge:5-7gg",
       "type": "Gauge",
       "name": "5.7GG",
       "aliases": [
@@ -2862,7 +2848,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:3-5gg",
+      "id": "fashion:gauge:3-5gg",
       "type": "Gauge",
       "name": "3.5GG",
       "aliases": [
@@ -2871,7 +2857,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:14gg",
+      "id": "fashion:gauge:14gg",
       "type": "Gauge",
       "name": "14GG",
       "aliases": [
@@ -2880,187 +2866,7 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:3-5g",
-      "type": "Gauge",
-      "name": "3.5G",
-      "aliases": [
-        "3.5G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:18g",
-      "type": "Gauge",
-      "name": "18G",
-      "aliases": [
-        "18G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:crochet",
-      "type": "Gauge",
-      "name": "CROCHET",
-      "aliases": [
-        "CROCHET"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:10-2g",
-      "type": "Gauge",
-      "name": "10.2G",
-      "aliases": [
-        "10.2G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:14g",
-      "type": "Gauge",
-      "name": "14G",
-      "aliases": [
-        "14G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:15g",
-      "type": "Gauge",
-      "name": "15G",
-      "aliases": [
-        "15G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:5-7g",
-      "type": "Gauge",
-      "name": "5.7G",
-      "aliases": [
-        "5.7G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:6-2g",
-      "type": "Gauge",
-      "name": "6.2G",
-      "aliases": [
-        "6.2G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:15gg",
-      "type": "Gauge",
-      "name": "15GG",
-      "aliases": [
-        "15GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:2gg",
-      "type": "Gauge",
-      "name": "2GG",
-      "aliases": [
-        "2GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:9g",
-      "type": "Gauge",
-      "name": "9G",
-      "aliases": [
-        "9G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:10gg",
-      "type": "Gauge",
-      "name": "10GG",
-      "aliases": [
-        "10GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:3-5-7g",
-      "type": "Gauge",
-      "name": "3.5.7G",
-      "aliases": [
-        "3.5.7G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:9gg",
-      "type": "Gauge",
-      "name": "9GG",
-      "aliases": [
-        "9GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:2g",
-      "type": "Gauge",
-      "name": "2G",
-      "aliases": [
-        "2G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:16gg",
-      "type": "Gauge",
-      "name": "16GG",
-      "aliases": [
-        "16GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:10g",
-      "type": "Gauge",
-      "name": "10G",
-      "aliases": [
-        "10G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:16g",
-      "type": "Gauge",
-      "name": "16G",
-      "aliases": [
-        "16G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:6gg",
-      "type": "Gauge",
-      "name": "6GG",
-      "aliases": [
-        "6GG"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:4g",
-      "type": "Gauge",
-      "name": "4G",
-      "aliases": [
-        "4G"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:gauge:18gg",
+      "id": "fashion:gauge:18gg",
       "type": "Gauge",
       "name": "18GG",
       "aliases": [
@@ -3069,155 +2875,219 @@
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:12-2g",
-      "type": "Gauge",
-      "name": "12.2G",
+      "id": "fashion:construction:crochet",
+      "type": "Construction",
+      "name": "crochet",
       "aliases": [
-        "12.2G"
+        "CROCHET",
+        "crochet"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:5gg-12gg",
+      "id": "fashion:gauge:10-2gg",
       "type": "Gauge",
-      "name": "5GG,12GG",
+      "name": "10.2GG",
       "aliases": [
-        "5GG,12GG"
+        "10.2GG"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:7-2g",
+      "id": "fashion:gauge:15gg",
       "type": "Gauge",
-      "name": "7.2G",
+      "name": "15GG",
       "aliases": [
-        "7.2G"
+        "15GG"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:13-2g",
+      "id": "fashion:gauge:6-2gg",
       "type": "Gauge",
-      "name": "13.2G",
+      "name": "6.2GG",
       "aliases": [
-        "13.2G"
+        "6.2GG"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:12gg-7gg",
+      "id": "fashion:gauge:2gg",
       "type": "Gauge",
-      "name": "12GG,7GG",
+      "name": "2GG",
       "aliases": [
-        "12GG,7GG"
+        "2GG"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:7gg-3-5gg",
+      "id": "fashion:gauge:9gg",
       "type": "Gauge",
-      "name": "7GG,3.5GG",
+      "name": "9GG",
       "aliases": [
-        "7GG,3.5GG"
+        "9GG"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:gauge:7gg-12gg",
+      "id": "fashion:gauge:10gg",
       "type": "Gauge",
-      "name": "7GG,12GG",
+      "name": "10GG",
       "aliases": [
-        "7GG,12GG"
+        "10GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:3-5-7g",
+      "type": "Gauge",
+      "name": "3.5.7G",
+      "aliases": [
+        "3.5.7G"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:16gg",
+      "type": "Gauge",
+      "name": "16GG",
+      "aliases": [
+        "16GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:6gg",
+      "type": "Gauge",
+      "name": "6GG",
+      "aliases": [
+        "6GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:4gg",
+      "type": "Gauge",
+      "name": "4GG",
+      "aliases": [
+        "4GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:12-2gg",
+      "type": "Gauge",
+      "name": "12.2GG",
+      "aliases": [
+        "12.2GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:7-2gg",
+      "type": "Gauge",
+      "name": "7.2GG",
+      "aliases": [
+        "7.2GG"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:gauge:13-2gg",
+      "type": "Gauge",
+      "name": "13.2GG",
+      "aliases": [
+        "13.2GG"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d6",
       "type": "Department",
-      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6",
+      "name": "第六事业部··D6",
       "aliases": [
-        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6"
+        "第六事业部··D6"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d5",
       "type": "Department",
-      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5",
+      "name": "第五事业部··D5",
       "aliases": [
-        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5"
+        "第五事业部··D5"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d11",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11",
+      "name": "第十一事业部··D11",
       "aliases": [
-        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11"
+        "第十一事业部··D11"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d2",
       "type": "Department",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2",
+      "name": "第二事业部··D2",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2"
+        "第二事业部··D2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d9",
       "type": "Department",
-      "name": "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9",
+      "name": "第九事业部··D9",
       "aliases": [
-        "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9"
+        "第九事业部··D9"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d1",
       "type": "Department",
-      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1",
+      "name": "第一事业部··D1",
       "aliases": [
-        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1"
+        "第一事业部··D1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d4",
       "type": "Department",
-      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4",
+      "name": "第四事业部··D4",
       "aliases": [
-        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4"
+        "第四事业部··D4"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d15",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15",
+      "name": "第十五事业部··D15",
       "aliases": [
-        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15"
+        "第十五事业部··D15"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d7",
       "type": "Department",
-      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7",
+      "name": "第七事业部··D7",
       "aliases": [
-        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7"
+        "第七事业部··D7"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d6-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第六事业部··D6 - 1组··T1",
       "aliases": [
-        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 1\u7ec4\u00b7\u00b7T1"
+        "第六事业部··D6 - 1组··T1"
       ],
       "external_ids": []
     },
@@ -3233,117 +3103,117 @@
     {
       "id": "plmex:department:d1-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第一事业部··D1 - 1组··T1",
       "aliases": [
-        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 1\u7ec4\u00b7\u00b7T1"
+        "第一事业部··D1 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d11-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第十一事业部··D11 - 1组··T1",
       "aliases": [
-        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 1\u7ec4\u00b7\u00b7T1"
+        "第十一事业部··D11 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d5-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第五事业部··D5 - 1组··T1",
       "aliases": [
-        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 1\u7ec4\u00b7\u00b7T1"
+        "第五事业部··D5 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d9-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第九事业部··D9 - 1组··T1",
       "aliases": [
-        "\u7b2c\u4e5d\u4e8b\u4e1a\u90e8\u00b7\u00b7D9 - 1\u7ec4\u00b7\u00b7T1"
+        "第九事业部··D9 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d5-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第五事业部··D5 - 2组··T2",
       "aliases": [
-        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5 - 2\u7ec4\u00b7\u00b7T2"
+        "第五事业部··D5 - 2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d2-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第二事业部··D2 - 1组··T1",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 1\u7ec4\u00b7\u00b7T1"
+        "第二事业部··D2 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d3",
       "type": "Department",
-      "name": "\u7b2c\u4e09\u4e8b\u4e1a\u90e8\u00b7\u00b7D3",
+      "name": "第三事业部··D3",
       "aliases": [
-        "\u7b2c\u4e09\u4e8b\u4e1a\u90e8\u00b7\u00b7D3"
+        "第三事业部··D3"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d15-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第十五事业部··D15 - 1组··T1",
       "aliases": [
-        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 1\u7ec4\u00b7\u00b7T1"
+        "第十五事业部··D15 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d4-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第四事业部··D4 - 1组··T1",
       "aliases": [
-        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 1\u7ec4\u00b7\u00b7T1"
+        "第四事业部··D4 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d2-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第二事业部··D2 - 2组··T2",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 2\u7ec4\u00b7\u00b7T2"
+        "第二事业部··D2 - 2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d15-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第十五事业部··D15 - 2组··T2",
       "aliases": [
-        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 2\u7ec4\u00b7\u00b7T2"
+        "第十五事业部··D15 - 2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d1-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第一事业部··D1 - 2组··T2",
       "aliases": [
-        "\u7b2c\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D1 - 2\u7ec4\u00b7\u00b7T2"
+        "第一事业部··D1 - 2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d6-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第六事业部··D6 - 2组··T2",
       "aliases": [
-        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 2\u7ec4\u00b7\u00b7T2"
+        "第六事业部··D6 - 2组··T2"
       ],
       "external_ids": []
     },
@@ -3359,9 +3229,9 @@
     {
       "id": "plmex:department:d11-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第十一事业部··D11 - 2组··T2",
       "aliases": [
-        "\u7b2c\u5341\u4e00\u4e8b\u4e1a\u90e8\u00b7\u00b7D11 - 2\u7ec4\u00b7\u00b7T2"
+        "第十一事业部··D11 - 2组··T2"
       ],
       "external_ids": []
     },
@@ -3377,54 +3247,54 @@
     {
       "id": "plmex:department:d4-3-t3",
       "type": "Department",
-      "name": "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 3\u7ec4\u00b7\u00b7T3",
+      "name": "第四事业部··D4 - 3组··T3",
       "aliases": [
-        "\u7b2c\u56db\u4e8b\u4e1a\u90e8\u00b7\u00b7D4 - 3\u7ec4\u00b7\u00b7T3"
+        "第四事业部··D4 - 3组··T3"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d15-3-t3",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 3\u7ec4\u00b7\u00b7T3",
+      "name": "第十五事业部··D15 - 3组··T3",
       "aliases": [
-        "\u7b2c\u5341\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D15 - 3\u7ec4\u00b7\u00b7T3"
+        "第十五事业部··D15 - 3组··T3"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d10-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第十事业部··D10 - 1组··T1",
       "aliases": [
-        "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10 - 1\u7ec4\u00b7\u00b7T1"
+        "第十事业部··D10 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:showroom-sample-management",
       "type": "Department",
-      "name": "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management",
+      "name": "展厅与样品管理组··Showroom & Sample Management",
       "aliases": [
-        "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management"
+        "展厅与样品管理组··Showroom & Sample Management"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d2-6-t6",
       "type": "Department",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 6\u7ec4\u00b7\u00b7T6",
+      "name": "第二事业部··D2 - 6组··T6",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 6\u7ec4\u00b7\u00b7T6"
+        "第二事业部··D2 - 6组··T6"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d2-4-t4-shang-hai",
       "type": "Department",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 4\u7ec4(\u4e0a\u6d77\uff09\u00b7\u00b7T4(Shang Hai)",
+      "name": "第二事业部··D2 - 4组(上海）··T4(Shang Hai)",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2 - 4\u7ec4(\u4e0a\u6d77\uff09\u00b7\u00b7T4(Shang Hai)"
+        "第二事业部··D2 - 4组(上海）··T4(Shang Hai)"
       ],
       "external_ids": []
     },
@@ -3440,45 +3310,45 @@
     {
       "id": "plmex:department:d7-2-t2",
       "type": "Department",
-      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 2\u7ec4\u00b7\u00b7T2",
+      "name": "第七事业部··D7 - 2组··T2",
       "aliases": [
-        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 2\u7ec4\u00b7\u00b7T2"
+        "第七事业部··D7 - 2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:qd-p-d-qd-sample-merchandising",
       "type": "Department",
-      "name": "\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D - \u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising",
+      "name": "青岛产品开发部··QD P&D - 青岛样品跟单组··QD Sample Merchandising",
       "aliases": [
-        "\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D - \u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising"
+        "青岛产品开发部··QD P&D - 青岛样品跟单组··QD Sample Merchandising"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d7-1-t1",
       "type": "Department",
-      "name": "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 1\u7ec4\u00b7\u00b7T1",
+      "name": "第七事业部··D7 - 1组··T1",
       "aliases": [
-        "\u7b2c\u4e03\u4e8b\u4e1a\u90e8\u00b7\u00b7D7 - 1\u7ec4\u00b7\u00b7T1"
+        "第七事业部··D7 - 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:d6-3-t3-qing-dao",
       "type": "Department",
-      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao)",
+      "name": "第六事业部··D6 - 3组(青岛）··T3(Qing Dao)",
       "aliases": [
-        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6 - 3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao)"
+        "第六事业部··D6 - 3组(青岛）··T3(Qing Dao)"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:department:uk-d1",
       "type": "Department",
-      "name": "UK\u00b7\u00b7D1",
+      "name": "UK··D1",
       "aliases": [
-        "UK\u00b7\u00b7D1"
+        "UK··D1"
       ],
       "external_ids": []
     },
@@ -3494,9 +3364,9 @@
     {
       "id": "plmex:shoppingdepartment:1-t1",
       "type": "ShoppingDepartment",
-      "name": "1\u7ec4\u00b7\u00b7T1",
+      "name": "1组··T1",
       "aliases": [
-        "1\u7ec4\u00b7\u00b7T1"
+        "1组··T1"
       ],
       "external_ids": []
     },
@@ -3512,189 +3382,189 @@
     {
       "id": "plmex:shoppingdepartment:d2",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2",
+      "name": "第二事业部··D2",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2"
+        "第二事业部··D2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:2-t2",
       "type": "ShoppingDepartment",
-      "name": "2\u7ec4\u00b7\u00b7T2",
+      "name": "2组··T2",
       "aliases": [
-        "2\u7ec4\u00b7\u00b7T2"
+        "2组··T2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:uk-d2",
       "type": "ShoppingDepartment",
-      "name": "UK\u00b7\u00b7D2",
+      "name": "UK··D2",
       "aliases": [
-        "UK\u00b7\u00b7D2"
+        "UK··D2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:d2-1-t1",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2, 1\u7ec4\u00b7\u00b7T1",
+      "name": "第二事业部··D2, 1组··T1",
       "aliases": [
-        "\u7b2c\u4e8c\u4e8b\u4e1a\u90e8\u00b7\u00b7D2, 1\u7ec4\u00b7\u00b7T1"
+        "第二事业部··D2, 1组··T1"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:d6",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6",
+      "name": "第六事业部··D6",
       "aliases": [
-        "\u7b2c\u516d\u4e8b\u4e1a\u90e8\u00b7\u00b7D6"
+        "第六事业部··D6"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:3-t3-qing-dao-3",
       "type": "ShoppingDepartment",
-      "name": "3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao), \u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b73\u7ec4\uff08\u9752\u5c9b\uff09",
+      "name": "3组(青岛）··T3(Qing Dao), 第十事业部·3组（青岛）",
       "aliases": [
-        "3\u7ec4(\u9752\u5c9b\uff09\u00b7\u00b7T3(Qing Dao), \u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b73\u7ec4\uff08\u9752\u5c9b\uff09"
+        "3组(青岛）··T3(Qing Dao), 第十事业部·3组（青岛）"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:knitwear-development",
       "type": "ShoppingDepartment",
-      "name": "\u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development",
+      "name": "毛织开发组··Knitwear Development",
       "aliases": [
-        "\u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development"
+        "毛织开发组··Knitwear Development"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:qd-sample-merchandising-qd-p-d-qd-product-design-development",
       "type": "ShoppingDepartment",
-      "name": "\u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising, \u4ea7\u54c1\u5f00\u53d1\u4e2d\u5fc3\u00b7\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8, \u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development",
+      "name": "青岛样品跟单组··QD Sample Merchandising, 产品开发中心·青岛产品开发部, 青岛产品开发部··QD P&D, 青岛开发设计组··QD Product Design & Development",
       "aliases": [
-        "\u9752\u5c9b\u6837\u54c1\u8ddf\u5355\u7ec4\u00b7\u00b7QD Sample Merchandising, \u4ea7\u54c1\u5f00\u53d1\u4e2d\u5fc3\u00b7\u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8, \u9752\u5c9b\u4ea7\u54c1\u5f00\u53d1\u90e8\u00b7\u00b7QD P&D, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development"
+        "青岛样品跟单组··QD Sample Merchandising, 产品开发中心·青岛产品开发部, 青岛产品开发部··QD P&D, 青岛开发设计组··QD Product Design & Development"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:d13-sh",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u5341\u4e09\u4e8b\u4e1a\u90e8\uff08\u4e0a\u6d77\uff09\u00b7\u00b7 D13 (SH)",
+      "name": "第十三事业部（上海）·· D13 (SH)",
       "aliases": [
-        "\u7b2c\u5341\u4e09\u4e8b\u4e1a\u90e8\uff08\u4e0a\u6d77\uff09\u00b7\u00b7 D13 (SH)"
+        "第十三事业部（上海）·· D13 (SH)"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:d10",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10",
+      "name": "第十事业部··D10",
       "aliases": [
-        "\u7b2c\u5341\u4e8b\u4e1a\u90e8\u00b7\u00b7D10"
+        "第十事业部··D10"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:d5",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5",
+      "name": "第五事业部··D5",
       "aliases": [
-        "\u7b2c\u4e94\u4e8b\u4e1a\u90e8\u00b7\u00b7D5"
+        "第五事业部··D5"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:qd-product-design-development",
       "type": "ShoppingDepartment",
-      "name": "\u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development",
+      "name": "青岛开发设计组, 青岛开发设计组··QD Product Design & Development",
       "aliases": [
-        "\u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4, \u9752\u5c9b\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7QD Product Design & Development"
+        "青岛开发设计组, 青岛开发设计组··QD Product Design & Development"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:uk-d5",
       "type": "ShoppingDepartment",
-      "name": "UK\u00b7\u00b7D5",
+      "name": "UK··D5",
       "aliases": [
-        "UK\u00b7\u00b7D5"
+        "UK··D5"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:bettex-india-bettex-spain-bettex-usa-bettex-ireland-bettex-italy-bettex-turkey-bettex-uk-r-d-bettex-australia-logistics",
       "type": "ShoppingDepartment",
-      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS",
+      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, 海外中心, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS",
       "aliases": [
-        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS"
+        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, 海外中心, BETTEX UK, R&D, BETTEX AUSTRALIA, LOGISTICS"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:vp-office-2",
       "type": "ShoppingDepartment",
-      "name": "\u7b2c\u4e8c\u526f\u603b\u7ecf\u7406\u529e\u516c\u5ba4\u00b7\u00b7VP OFFICE\u00b7\u00b72",
+      "name": "第二副总经理办公室··VP OFFICE··2",
       "aliases": [
-        "\u7b2c\u4e8c\u526f\u603b\u7ecf\u7406\u529e\u516c\u5ba4\u00b7\u00b7VP OFFICE\u00b7\u00b72"
+        "第二副总经理办公室··VP OFFICE··2"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:showroom-sample-management",
       "type": "ShoppingDepartment",
-      "name": "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management",
+      "name": "展厅与样品管理组··Showroom & Sample Management",
       "aliases": [
-        "\u5c55\u5385\u4e0e\u6837\u54c1\u7ba1\u7406\u7ec4\u00b7\u00b7Showroom & Sample Management"
+        "展厅与样品管理组··Showroom & Sample Management"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:knitwear-r-d",
       "type": "ShoppingDepartment",
-      "name": "\u6bdb\u7ec7\u4ea7\u54c1\u7814\u53d1\u53ca\u5e02\u573a\u5f00\u53d1\u90e8\u00b7Knitwear R&D",
+      "name": "毛织产品研发及市场开发部·Knitwear R&D",
       "aliases": [
-        "\u6bdb\u7ec7\u4ea7\u54c1\u7814\u53d1\u53ca\u5e02\u573a\u5f00\u53d1\u90e8\u00b7Knitwear R&D"
+        "毛织产品研发及市场开发部·Knitwear R&D"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:t-jzh-product-design-development",
       "type": "ShoppingDepartment",
-      "name": "T\u00b7\u8bbe\u8ba1\u7814\u53d1\u90e8, \u6c5f\u6d59\u6caa\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7JZH Product Design & Development",
+      "name": "T·设计研发部, 江浙沪开发设计组··JZH Product Design & Development",
       "aliases": [
-        "T\u00b7\u8bbe\u8ba1\u7814\u53d1\u90e8, \u6c5f\u6d59\u6caa\u5f00\u53d1\u8bbe\u8ba1\u7ec4\u00b7\u00b7JZH Product Design & Development"
+        "T·设计研发部, 江浙沪开发设计组··JZH Product Design & Development"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:1-t1-knitwear-development",
       "type": "ShoppingDepartment",
-      "name": "1\u7ec4\u00b7\u00b7T1, \u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development",
+      "name": "1组··T1, 毛织开发组··Knitwear Development",
       "aliases": [
-        "1\u7ec4\u00b7\u00b7T1, \u6bdb\u7ec7\u5f00\u53d1\u7ec4\u00b7\u00b7Knitwear Development"
+        "1组··T1, 毛织开发组··Knitwear Development"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:6-t6",
       "type": "ShoppingDepartment",
-      "name": "6\u7ec4\u00b7\u00b7T6",
+      "name": "6组··T6",
       "aliases": [
-        "6\u7ec4\u00b7\u00b7T6"
+        "6组··T6"
       ],
       "external_ids": []
     },
     {
       "id": "plmex:shoppingdepartment:bettex-india-bettex-spain-bettex-usa-bettex-ireland-bettex-italy-bettex-turkey-bettex-uk-r-d-marketing-sourcing-d1-bettex-australia-logistics",
       "type": "ShoppingDepartment",
-      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS",
+      "name": "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, 海外中心, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS",
       "aliases": [
-        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, \u6d77\u5916\u4e2d\u5fc3, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS"
+        "BETTEX INDIA, BETTEX  SPAIN, BETTEX USA, BETTEX IRELAND, BETTEX ITALY, BETTEX TURKEY, 海外中心, BETTEX UK, R&D, MARKETING&SOURCING D1, BETTEX AUSTRALIA, LOGISTICS"
       ],
       "external_ids": []
     },
@@ -3780,569 +3650,366 @@
       "external_ids": []
     },
     {
-      "id": "plmex:color:white",
+      "id": "fashion:color:white",
       "type": "Color",
-      "name": "WHITE",
+      "name": "White",
       "aliases": [
-        "WHITE"
+        "WHITE",
+        "WHITE AND BLACK",
+        "White"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:black",
+      "id": "fashion:color:black",
       "type": "Color",
-      "name": "BLACK",
+      "name": "Black",
       "aliases": [
-        "BLACK"
+        "BLACK",
+        "Black"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:beige",
+      "id": "fashion:color:beige",
       "type": "Color",
-      "name": "BEIGE",
+      "name": "Beige",
       "aliases": [
-        "BEIGE"
+        "BEIGE",
+        "Beige"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:pink",
+      "id": "fashion:color:pink",
       "type": "Color",
-      "name": "PINK",
+      "name": "Pink",
       "aliases": [
-        "PINK"
+        "PINK",
+        "Pink"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:brown",
+      "id": "fashion:color:brown",
       "type": "Color",
-      "name": "BROWN",
+      "name": "Brown",
       "aliases": [
-        "BROWN"
+        "BROWN",
+        "Brown"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:blue",
+      "id": "fashion:color:blue",
       "type": "Color",
-      "name": "BLUE",
+      "name": "Blue",
       "aliases": [
-        "BLUE"
+        "BLUE",
+        "Blue"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:grey",
+      "id": "fashion:color:grey",
       "type": "Color",
-      "name": "GREY",
+      "name": "Grey",
       "aliases": [
-        "GREY"
+        "GREY",
+        "GERY",
+        "LIGHT GRAY",
+        "Grey"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:multicolour",
+      "id": "fashion:color:multicolour",
       "type": "Color",
-      "name": "MULTICOLOUR",
+      "name": "Multicolour",
       "aliases": [
-        "MULTICOLOUR"
+        "MULTICOLOUR",
+        "MULTI COLOUR",
+        "Multicolour"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:off-white",
+      "id": "fashion:color:off-white",
       "type": "Color",
-      "name": "OFF WHITE",
+      "name": "Off White",
       "aliases": [
-        "OFF WHITE"
+        "OFF WHITE",
+        "Off White"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:green",
+      "id": "fashion:color:green",
       "type": "Color",
-      "name": "GREEN",
+      "name": "Green",
       "aliases": [
-        "GREEN"
+        "GREEN",
+        "Green"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:red",
+      "id": "fashion:color:red",
       "type": "Color",
-      "name": "RED",
+      "name": "Red",
       "aliases": [
-        "RED"
+        "RED",
+        "Red"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:dark-blue",
+      "id": "fashion:color:dark-blue",
       "type": "Color",
-      "name": "DARK BLUE",
+      "name": "Dark Blue",
       "aliases": [
-        "DARK BLUE"
+        "DARK BLUE",
+        "Dark Blue"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:navy",
+      "id": "fashion:color:navy",
       "type": "Color",
-      "name": "NAVY",
+      "name": "Navy",
       "aliases": [
-        "NAVY"
+        "NAVY",
+        "Navy"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:khaki",
+      "id": "fashion:color:khaki",
       "type": "Color",
-      "name": "KHAKI",
+      "name": "Khaki",
       "aliases": [
-        "KHAKI"
+        "KHAKI",
+        "Khaki"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:purple",
+      "id": "fashion:color:purple",
       "type": "Color",
-      "name": "PURPLE",
+      "name": "Purple",
       "aliases": [
-        "PURPLE"
+        "PURPLE",
+        "Purple"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:yellow",
+      "id": "fashion:color:yellow",
       "type": "Color",
-      "name": "YELLOW",
+      "name": "Yellow",
       "aliases": [
-        "YELLOW"
+        "YELLOW",
+        "Yellow"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:gery",
+      "id": "fashion:color:dark-grey",
       "type": "Color",
-      "name": "GERY",
+      "name": "Dark Grey",
       "aliases": [
-        "GERY"
+        "DARK GREY",
+        "Dark Grey"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:dark-grey",
+      "id": "fashion:color:orange",
       "type": "Color",
-      "name": "DARK GREY",
+      "name": "Orange",
       "aliases": [
-        "DARK GREY"
+        "ORANGE",
+        "Orange"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:orange",
+      "id": "fashion:color:dark-green",
       "type": "Color",
-      "name": "ORANGE",
+      "name": "Dark Green",
       "aliases": [
-        "ORANGE"
+        "DARK GREEN",
+        "Dark Green"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:dark-green",
+      "id": "fashion:color:dark-red",
       "type": "Color",
-      "name": "DARK GREEN",
+      "name": "Dark Red",
       "aliases": [
-        "DARK GREEN"
+        "DARK RED",
+        "Dark Red"
       ],
       "external_ids": []
     },
     {
-      "id": "plmex:color:light-gray",
-      "type": "Color",
-      "name": "LIGHT GRAY",
+      "id": "fashion:pattern:stripes",
+      "type": "Pattern",
+      "name": "stripes",
       "aliases": [
-        "LIGHT GRAY"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:color:white-and-black",
-      "type": "Color",
-      "name": "WHITE AND BLACK",
-      "aliases": [
-        "WHITE AND BLACK"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:color:dark-red",
-      "type": "Color",
-      "name": "DARK RED",
-      "aliases": [
-        "DARK RED"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:color:multi-colour",
-      "type": "Color",
-      "name": "MULTI COLOUR",
-      "aliases": [
-        "MULTI COLOUR"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "plmex:color:stripes",
-      "type": "Color",
-      "name": "STRIPES",
-      "aliases": [
-        "STRIPES"
+        "STRIPES",
+        "stripes"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:polyester",
       "type": "Material",
-      "name": "POLYESTER",
+      "name": "polyester",
       "aliases": [
-        "POLYESTER"
+        "POLYESTER",
+        "POLYESTER 15",
+        "POLYESTER 5",
+        "POLYESTER 35",
+        "POLYESTER 2",
+        "POLYESTER 8",
+        "POLYESTER 20",
+        "POLYESTER 10",
+        "POLYESTER 16",
+        "POLYESTER 30",
+        "POLYESTER 3",
+        "POLYESTER 12",
+        "POLYESTER 40",
+        "polyester"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:cotton",
       "type": "Material",
-      "name": "COTTON",
+      "name": "cotton",
       "aliases": [
-        "COTTON"
+        "COTTON",
+        "COTTON 40",
+        "COTTON 5",
+        "COTTON 30",
+        "cotton"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:nylon",
       "type": "Material",
-      "name": "NYLON",
+      "name": "nylon",
       "aliases": [
-        "NYLON"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:spandex",
-      "type": "Material",
-      "name": "SPANDEX",
-      "aliases": [
-        "SPANDEX"
+        "NYLON",
+        "POLYAMIDE",
+        "nylon"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:elastane",
       "type": "Material",
-      "name": "ELASTANE",
+      "name": "elastane",
       "aliases": [
-        "ELASTANE"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:viscose-28",
-      "type": "Material",
-      "name": "VISCOSE 28",
-      "aliases": [
-        "VISCOSE 28"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic",
-      "type": "Material",
-      "name": "ACRYLIC",
-      "aliases": [
-        "ACRYLIC"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:wool",
-      "type": "Material",
-      "name": "WOOL",
-      "aliases": [
-        "WOOL"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyamide",
-      "type": "Material",
-      "name": "POLYAMIDE",
-      "aliases": [
-        "POLYAMIDE"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-15",
-      "type": "Material",
-      "name": "POLYESTER 15",
-      "aliases": [
-        "POLYESTER 15"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:cotton-40",
-      "type": "Material",
-      "name": "COTTON 40",
-      "aliases": [
-        "COTTON 40"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:viscose-30",
-      "type": "Material",
-      "name": "VISCOSE 30",
-      "aliases": [
-        "VISCOSE 30"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-5",
-      "type": "Material",
-      "name": "POLYESTER 5",
-      "aliases": [
-        "POLYESTER 5"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:wool-2",
-      "type": "Material",
-      "name": "WOOL 2",
-      "aliases": [
-        "WOOL 2"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic-31",
-      "type": "Material",
-      "name": "ACRYLIC 31",
-      "aliases": [
-        "ACRYLIC 31"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:wool-3",
-      "type": "Material",
-      "name": "WOOL 3",
-      "aliases": [
-        "WOOL 3"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic-25",
-      "type": "Material",
-      "name": "ACRYLIC 25",
-      "aliases": [
-        "ACRYLIC 25"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic-37",
-      "type": "Material",
-      "name": "ACRYLIC 37",
-      "aliases": [
-        "ACRYLIC 37"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-35",
-      "type": "Material",
-      "name": "POLYESTER 35",
-      "aliases": [
-        "POLYESTER 35"
+        "SPANDEX",
+        "ELASTANE",
+        "elastane"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:viscose",
       "type": "Material",
-      "name": "VISCOSE",
+      "name": "viscose",
       "aliases": [
-        "VISCOSE"
+        "VISCOSE 28",
+        "VISCOSE 30",
+        "VISCOSE",
+        "VISCOSE 25",
+        "viscose"
       ],
       "external_ids": []
     },
     {
-      "id": "fashion:material:acrylic-30",
+      "id": "fashion:material:acrylic",
       "type": "Material",
-      "name": "ACRYLIC 30",
+      "name": "acrylic",
       "aliases": [
-        "ACRYLIC 30"
+        "ACRYLIC",
+        "ACRYLIC 31",
+        "ACRYLIC 25",
+        "ACRYLIC 37",
+        "ACRYLIC 30",
+        "ACRYLIC 28",
+        "ACRYLIC 5",
+        "acrylic"
       ],
       "external_ids": []
     },
     {
-      "id": "fashion:material:polyester-2-2",
+      "id": "fashion:material:wool",
       "type": "Material",
-      "name": "POLYESTER 2",
+      "name": "wool",
       "aliases": [
-        "POLYESTER 2"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:cotton-5",
-      "type": "Material",
-      "name": "COTTON 5",
-      "aliases": [
-        "COTTON 5"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-8",
-      "type": "Material",
-      "name": "POLYESTER 8",
-      "aliases": [
-        "POLYESTER 8"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:recycled-polyester-50",
-      "type": "Material",
-      "name": "RECYCLED POLYESTER 50",
-      "aliases": [
-        "RECYCLED POLYESTER 50"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-20",
-      "type": "Material",
-      "name": "POLYESTER 20",
-      "aliases": [
-        "POLYESTER 20"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-10",
-      "type": "Material",
-      "name": "POLYESTER 10",
-      "aliases": [
-        "POLYESTER 10"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic-28",
-      "type": "Material",
-      "name": "ACRYLIC 28",
-      "aliases": [
-        "ACRYLIC 28"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-16",
-      "type": "Material",
-      "name": "POLYESTER 16",
-      "aliases": [
-        "POLYESTER 16"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:acrylic-5",
-      "type": "Material",
-      "name": "ACRYLIC 5",
-      "aliases": [
-        "ACRYLIC 5"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-30",
-      "type": "Material",
-      "name": "POLYESTER 30",
-      "aliases": [
-        "POLYESTER 30"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:viscose-25",
-      "type": "Material",
-      "name": "VISCOSE 25",
-      "aliases": [
-        "VISCOSE 25"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:recycled-polyester-30",
-      "type": "Material",
-      "name": "RECYCLED POLYESTER 30",
-      "aliases": [
-        "RECYCLED POLYESTER 30"
-      ],
-      "external_ids": []
-    },
-    {
-      "id": "fashion:material:polyester-3",
-      "type": "Material",
-      "name": "POLYESTER 3",
-      "aliases": [
-        "POLYESTER 3"
+        "WOOL",
+        "WOOL 2",
+        "WOOL 3",
+        "wool"
       ],
       "external_ids": []
     },
     {
       "id": "fashion:material:recycled-polyester",
       "type": "Material",
-      "name": "RECYCLED POLYESTER",
+      "name": "recycled polyester",
       "aliases": [
-        "RECYCLED POLYESTER"
+        "RECYCLED POLYESTER 50",
+        "RECYCLED POLYESTER 30",
+        "RECYCLED POLYESTER",
+        "recycled polyester"
       ],
       "external_ids": []
     },
     {
-      "id": "fashion:material:cotton-30",
+      "id": "fashion:material:linen",
       "type": "Material",
-      "name": "COTTON 30",
+      "name": "linen",
       "aliases": [
-        "COTTON 30"
+        "LINEN",
+        "linen"
       ],
       "external_ids": []
     },
     {
-      "id": "fashion:material:polyester-12",
+      "id": "fashion:material:silk",
       "type": "Material",
-      "name": "POLYESTER 12",
+      "name": "silk",
       "aliases": [
-        "POLYESTER 12"
+        "SILK",
+        "silk"
       ],
       "external_ids": []
     },
     {
-      "id": "fashion:material:polyester-40",
+      "id": "fashion:material:lyocell",
       "type": "Material",
-      "name": "POLYESTER 40",
+      "name": "lyocell",
       "aliases": [
-        "POLYESTER 40"
+        "LYOCELL",
+        "lyocell"
+      ],
+      "external_ids": []
+    },
+    {
+      "id": "fashion:material:modal",
+      "type": "Material",
+      "name": "modal",
+      "aliases": [
+        "MODAL",
+        "modal"
       ],
       "external_ids": []
     }

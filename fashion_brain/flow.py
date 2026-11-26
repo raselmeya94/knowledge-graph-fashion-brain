@@ -65,11 +65,14 @@ ROUTER_TOOLS = [
 ]
 ROUTER_SYSTEM = (
     "Choose exactly one tool after interpreting the latest request and relevant conversation context. "
-    "Use catalog only when the user wants facts from the registered product knowledge graph "
-    "(currently the e-commerce catalog): counts, product lists, field filters, comparisons, rankings, "
-    "breakdowns, brand analysis, price/availability history, product specifications from stored styles, "
-    "registered sources/graphs, or the shared interconnect. "
-    "This catalog is scraped/synced retail product data — not an internal PLM 'own products' system. "
+    "Use catalog only when the user wants facts from the registered product knowledge graphs "
+    "(e-commerce retail scrape AND capped PLMEX sample catalog linked by shared hubs): counts, product lists, "
+    "field filters (brand, section/target group, color, material including fibre percentage thresholds), "
+    "comparisons, rankings, breakdowns, brand analysis, price/availability history, product specifications "
+    "from stored styles, registered sources/graphs, shared Reference / RESOLVES_TO links, or the interconnect. "
+    "Ecom is scraped retail storefront data; PLMEX is internal sample/development data — pick the matching graph. "
+    "v0 publish scope does NOT cover visual lookalikes, vector-only search, or full unrestricted PLM dumps — "
+    "if asked, say that is out of scope for this release and answer with available catalog filters instead. "
     "Respect the distinction between a catalog data ask and a general question that merely mentions "
     "fashion, garments, materials, or brands. "
     "Use search_web for public research, current or emerging industry trends, news, market information, "
@@ -526,16 +529,17 @@ def _iter_ask_events_traced(
                 conversation_state["active_filters"] = {}
 
     # Pending clarify/confirm must never fall through to "direct" model chat.
+    # QU decides whether this message answers the slot or starts a new catalog turn.
     if pending_clar or pending_conf:
         trace_step(
             "route",
             "Selected catalog (pending clarification/confirmation)",
             pending_slot=(conversation_state or {}).get("clarification", {}).get("pending_slot"),
         )
-        yield {"type": "status", "text": "Continuing your previous catalog request…"}
+        yield {"type": "status", "text": "Working on your catalog request…"}
         yield {
             "type": "thinking",
-            "text": "Reading this as confirming and proceeding with the previous request.\n"
+            "text": "Understanding your request against the live catalog.\n"
             "Looking up the product catalog. ",
         }
         yield from _iter_catalog_stream(

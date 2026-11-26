@@ -40,8 +40,12 @@ turn_type (choose exactly one):
 - meta: about the system/data sources themselves.
 
 Filters: use ONLY real catalog parties/facets the user named (now, earlier, or confirmed). Never invent values.
-Task / modal words are NEVER filter values — including: analyze, best, frequently, all, possible,
-possibly, maybe, can, could, able, trend, price (as a party name).
+Every filter value for EVERY field (brand, buyer, color, material, category, availability, …) must exist in
+<schema> / live value matches for that field. If a word is not a known stored value, omit the filter —
+never assume. Prefer empty filters over guessed ones.
+Task / modal / report words are NEVER filter values — including: analyze, best, frequently, all, possible,
+possibly, maybe, can, could, able, trend, price (as a party name), mixed, in-stock, ops, brief, listings.
+"in-stock vs mixed" / stock-status mix is availability analysis language, NOT brand=mixed or availability=InStock.
 "is that possible [price trend]?" after a Primark (or other) analysis is a FOLLOW-UP on that party —
 carry prior brand/buyer; do NOT invent brand=possible.
 "make trending analysis" / "trend analysis" / "trending analysis" means PRICE CHANGE trends
@@ -380,8 +384,16 @@ def plan_turn(platform, question: str, history: list | None, state: dict | None,
         key = _field_key(k)
         if key and isinstance(v, str) and v.strip() and _reliable_filter(v):
             plan.filters[key] = " ".join(v.split())
-    # Drop modal/task leftovers the model still emitted (e.g. brand=possible).
+    # Drop modal/task leftovers and any value not present in live metadata.
     plan.filters = sanitize_party_filters(plan.filters)
+    try:
+        from fashion_brain.ask import ground_filters_against_live_metadata
+
+        plan.filters = ground_filters_against_live_metadata(
+            platform, plan.filters, question=question
+        )
+    except Exception:
+        LOGGER.debug("turn planner meta filter ground skipped", exc_info=True)
     plan.carry_filters = data.get("carry_filters") is True
     plan.drop_filters = [str(x) for x in (data.get("drop_filters") or []) if x]
     gb = data.get("group_by")

@@ -142,10 +142,18 @@ MULTI-GRAPH (when seed_params.graph_ids has 2+ product graphs):
 """
 
 
+_NON_RETRYABLE_LLM = re.compile(
+    r"prompt is longer than the context length|context[_ ]length|maximum context|"
+    r"too many tokens|context window|HTTP 400",
+    re.IGNORECASE,
+)
+
+
 class Text2CypherAgent:
     """Schema-aware LLM that writes Neo4j Cypher for product catalog questions."""
 
     _last_allowlist_error: str = ""
+    _last_llm_error: str = ""
 
     def applicable(self, intention: Intention) -> bool:
         if intention.unsupported:
@@ -241,8 +249,11 @@ class Text2CypherAgent:
         if schema_card:
             schema = schema_card
         else:
+            # Multi-graph schema cards already dwarf the model window — never also
+            # dump the full live brand inventory into each card.
+            brand_payload = None if multi else brands
             base = (
-                self.multi_schema_card(platform, selected, brands=brands)
+                self.multi_schema_card(platform, selected, brands=brand_payload)
                 if multi
                 else self.schema_card(platform, primary, brands=brands)
             )
@@ -308,12 +319,14 @@ class Text2CypherAgent:
                 question,
                 platform=platform,
                 graph_ids=selected or None,
-                limit=40,
+                limit=12 if multi else 40,
             )
             term_grounding = grounded.to_prompt_dict()
         except Exception:
             term_grounding = {}
         system = TEXT2CYPHER_SYSTEM + (_MULTI_GRAPH_RULES if multi else "")
+        # Cap brand dump hard on multi-graph — primary cause of context-overflow hangs.
+        brand_json = (brands or [])[:8] if multi else (brands or [])[:40]
         prompt = (
             f"<schema>\n{schema}\n</schema>\n"
             f"<intention>\n{json.dumps(intent_context, ensure_ascii=False)}\n</intention>\n"
@@ -321,7 +334,7 @@ class Text2CypherAgent:
             f"<resolved_entities>\n{json.dumps(resolved or {}, ensure_ascii=False)}\n</resolved_entities>\n"
             f"<extracted_entities>\n{json.dumps(extracted or {}, ensure_ascii=False)}\n</extracted_entities>\n"
             f"<term_grounding>\n{json.dumps(term_grounding, ensure_ascii=False)}\n</term_grounding>\n"
-            f"<live_brands>\n{json.dumps((brands or [])[:40], ensure_ascii=False)}\n</live_brands>\n"
+            f"<live_brands>\n{json.dumps(brand_json, ensure_ascii=False)}\n</live_brands>\n"
             f"<candidates>\n{json.dumps(candidates or [], ensure_ascii=False)}\n</candidates>\n"
             f"<seed_params>\n{json.dumps(seeded_params, ensure_ascii=False)}\n</seed_params>\n"
             f"{prior_block}"
@@ -347,6 +360,7 @@ class Text2CypherAgent:
                 "If the user asked for linked products, also sample product names (not internal ids).\n"
             )
 
+        self._last_llm_error = ""
         try:
             from fashion_brain.stage_timing import timed
 
@@ -358,6 +372,7 @@ class Text2CypherAgent:
                     temperature=0.0,
                 )
         except Exception as exc:
+            self._last_llm_error = str(exc)
             LOGGER.warning("text2cypher LLM failed: %s", exc)
             return []
         plans = _parse_plans(raw, default_graph=primary, allowed_graphs=allowed_ids or selected)
@@ -465,6 +480,17 @@ class Text2CypherAgent:
             )
             if not plans:
                 last_error = "no_cypher_plan"
+                # Context-overflow / HTTP 400 will never heal by regenerating the
+                # same oversized schema prompt — fail fast to templated/kg_stats.
+                if self._last_llm_error and _NON_RETRYABLE_LLM.search(self._last_llm_error):
+                    last_error = "llm_context_overflow"
+                    trace_step(
+                        "text2cypher",
+                        "Non-retryable LLM error — skip self-heal",
+                        attempt=attempt,
+                        error=self._last_llm_error[:200],
+                    )
+                    break
                 if self._last_allowlist_error:
                     last_error = "allowlist_reject"
                     repair_feedback = (

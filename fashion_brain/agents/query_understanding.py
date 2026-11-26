@@ -66,7 +66,8 @@ _ANALYSIS_RE = re.compile(
 _PRECISE_METRIC_RE = re.compile(
     r"\b(how\s+many|count|number\s+of|average|avg|mean|sum|total|"
     r"list|show\s+me|top\s+\d+|rank|compare|vs\.?|versus|"
-    r"percentage|percent|distribution\s+of)\b",
+    r"percentage|percent|distribution\s+of|"
+    r"breakdown|break\s*down|\w[\w-]*\s*-?\s*wise)\b",
     re.IGNORECASE,
 )
 
@@ -788,6 +789,57 @@ class QueryUnderstandingAgent:
             # Only edit / other free-form replies go to the LLM.
             # Budget cap is enforced inside _continue after scope/focus parsing fails.
             if kind in {"edit", "other"}:
+                # Clarification resume contract (no per-query shortcuts):
+                #   • yes / no / option → answer the pending slot (handled above)
+                #   • price-trend ask → NEW turn on PriceChangeEvent (never full_analysis)
+                #   • live brand hit with no party yet → answer entity via _continue
+                #   • otherwise executable catalog plan with no party → NEW turn
+                #   • party already confirmed → keep LLM/_continue (refinement thread)
+                conf = dict(clar.confirmed or {})
+                conf_filt = dict(conf.get("filters") or {})
+                has_party = bool(
+                    conf.get("entity") or conf_filt.get("brand") or conf_filt.get("buyer")
+                )
+                if _is_price_trend_ask(question):
+                    fresh_state = dict(state)
+                    fresh_state.pop("clarification", None)
+                    fresh_state.pop("understanding", None)
+                    return self.evaluate(
+                        platform,
+                        question,
+                        history=history,
+                        context=context,
+                        conversation_state=fresh_state,
+                        graph_id=graph_id,
+                    )
+                if not has_party:
+                    from fashion_brain.agents.qu_fast import resolve_entity
+
+                    brand_hit, _sugs = resolve_entity(platform, question, graph_id)
+                    if brand_hit:
+                        return self._continue(platform, question, clar, graph_id=graph_id)
+                    try:
+                        from fashion_brain.ask import enrich_scope_from_question
+
+                        _scoped, group_by = enrich_scope_from_question(question, {})
+                    except Exception:
+                        group_by = None
+                    if (
+                        group_by
+                        or _detect_graph_id(question)
+                        or _PRECISE_METRIC_RE.search(question or "")
+                    ):
+                        fresh_state = dict(state)
+                        fresh_state.pop("clarification", None)
+                        fresh_state.pop("understanding", None)
+                        return self.evaluate(
+                            platform,
+                            question,
+                            history=history,
+                            context=context,
+                            conversation_state=fresh_state,
+                            graph_id=graph_id,
+                        )
                 llm_hit = self._from_model(
                     platform,
                     question,
@@ -930,7 +982,13 @@ class QueryUnderstandingAgent:
             except Exception:
                 scoped, group_by = dict(confirmed), None
             # Gibberish / chitchat with no catalog signal → clarify, not a global total.
-            if not scoped and not metrics and not _PRECISE_METRIC_RE.search(question or ""):
+            # group_by alone is enough signal (e.g. "gender wise breakdown e-commerce data").
+            if (
+                not scoped
+                and not metrics
+                and not group_by
+                and not _PRECISE_METRIC_RE.search(question or "")
+            ):
                 try:
                     from fashion_brain.planning.metadata_resolver import check_understanding
 

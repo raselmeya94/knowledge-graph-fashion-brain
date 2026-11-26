@@ -757,7 +757,7 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
         params["season_name"] = _cypher_token(str(season_name)).replace("-", " ")
         where.append(
             "("
-            "EXISTS { MATCH (p)-[:HAS_EVENT_TAG]->(e:Entity) "
+            "EXISTS { MATCH (p)-[:HAS_EVENT_TAG|SUITED_FOR_OCCASION]->(e:Entity) "
             "WHERE toLower(coalesce(e.name,'')) = $season_name }"
             "OR toLower(coalesce(p.style_reference,'')) CONTAINS $season_name "
             ")"
@@ -770,26 +770,51 @@ def _filter_where(filters: dict, params: dict) -> list[str] | None:
         where.append(
             "("
             "ANY(needle IN $section_needles WHERE toLower(coalesce(p.category_path,'')) CONTAINS needle) "
-            "OR EXISTS { MATCH (p)-[:HAS_SECTION]->(s:Entity) "
+            "OR EXISTS { MATCH (p)-[:HAS_SECTION|FOR_TARGET_GROUP]->(s:Entity) "
             "WHERE ANY(needle IN $section_needles WHERE toLower(coalesce(s.name,'')) = needle "
             "OR toLower(coalesce(s.name,'')) CONTAINS needle) }"
             ")"
         )
         handled.add("section")
     material = filters.get("material")
+    material_min_pct = filters.get("material_min_pct")
+    if material_min_pct in (None, "") and filters.get("min_percentage") not in (None, ""):
+        material_min_pct = filters.get("min_percentage")
+    min_pct_value: float | None = None
+    if material_min_pct not in (None, ""):
+        try:
+            min_pct_value = float(material_min_pct)
+        except (TypeError, ValueError):
+            min_pct_value = None
     if material:
         needles = _soft_match_needles(str(material))
         params["material_needles"] = needles
         mat_rels = "|".join(_REL_FIELDS.get("material") or ("USES_MATERIAL", "PRIMARY_MATERIAL"))
-        where.append(
-            "("
-            "ANY(needle IN $material_needles WHERE toLower(coalesce(p.composition,'')) CONTAINS needle) "
-            f"OR EXISTS {{ MATCH (p)-[:{mat_rels}]->(m:Entity) "
-            "WHERE ANY(needle IN $material_needles WHERE toLower(coalesce(m.name,'')) = needle "
-            "OR toLower(coalesce(m.name,'')) CONTAINS needle) }"
-            ")"
-        )
+        if min_pct_value is not None:
+            params["material_min_pct"] = min_pct_value
+            # Percentage threshold requires real USES_MATERIAL/PRIMARY_MATERIAL edges.
+            where.append(
+                "("
+                f"EXISTS {{ MATCH (p)-[rm:{mat_rels}]->(m:Entity) "
+                "WHERE ANY(needle IN $material_needles WHERE toLower(coalesce(m.name,'')) = needle "
+                "OR toLower(coalesce(m.name,'')) CONTAINS needle) "
+                "AND rm.percentage IS NOT NULL AND rm.percentage >= $material_min_pct }"
+                ")"
+            )
+        else:
+            where.append(
+                "("
+                "ANY(needle IN $material_needles WHERE toLower(coalesce(p.composition,'')) CONTAINS needle) "
+                f"OR EXISTS {{ MATCH (p)-[:{mat_rels}]->(m:Entity) "
+                "WHERE ANY(needle IN $material_needles WHERE toLower(coalesce(m.name,'')) = needle "
+                "OR toLower(coalesce(m.name,'')) CONTAINS needle) }"
+                ")"
+            )
         handled.add("material")
+    if "material_min_pct" in filters:
+        handled.add("material_min_pct")
+    if "min_percentage" in filters:
+        handled.add("min_percentage")
     availability = filters.get("availability")
     if availability:
         params["availability"] = _avail_token(str(availability))
@@ -1505,6 +1530,159 @@ def append_neo4j_availability_history_answer(
     return True
 
 
+def cypher_availability_price_ops_brief(
+    platform,
+    graph_id: str,
+    filters: dict | None = None,
+) -> list[dict] | None:
+    """Current stock-status mix joined to PriceChangeEvent volume per availability."""
+
+    if platform is None:
+        return None
+    try:
+        session_factory = _session(platform)
+    except Exception:
+        return None
+    if not session_factory:
+        return None
+    params: dict = {"g": graph_id}
+    where = _filter_where(filters, params)
+    if where is None:
+        return None
+    query = (
+        "MATCH (p:Entity:Product) "
+        "WHERE " + " AND ".join(where) + " "
+        "WITH p, coalesce("
+        "head([(p)-[:HAS_AVAILABILITY]->(av) | av.name]), "
+        "nullif(p.availability, 'null'), '(unspecified)'"
+        ") AS availability "
+        "OPTIONAL MATCH (p)-[:HAS_PRICE_CHANGE]->(e:PriceChangeEvent) "
+        "WITH availability, "
+        "count(DISTINCT p) AS products, "
+        "count(e) AS price_events, "
+        "count(DISTINCT CASE WHEN e IS NOT NULL THEN p END) AS products_with_events "
+        "RETURN availability, products, price_events, products_with_events "
+        "ORDER BY products DESC"
+    )
+    try:
+        with session_factory() as session:
+            return [dict(row) for row in session.run(query, params)]
+    except Exception:
+        return None
+
+
+def answer_availability_price_ops_brief(
+    platform,
+    graph_id: str,
+    question: str,
+    filters: dict | None = None,
+) -> tuple[str, list[EvidenceItem], list[str]] | None:
+    """Ops brief: stock-status mix + whether price events concentrate on in-stock vs mixed."""
+
+    try:
+        from fashion_brain.ask import is_availability_price_ops_brief_ask
+    except Exception:
+        return None
+    if not is_availability_price_ops_brief_ask(question):
+        return None
+    rows = cypher_availability_price_ops_brief(platform, graph_id, filters)
+    if rows is None:
+        return None
+    party = (
+        str((filters or {}).get("brand") or (filters or {}).get("buyer") or "").strip()
+        or "this selection"
+    )
+    evidence: list[EvidenceItem] = []
+    caveats: list[str] = []
+    lines: list[str] = [
+        f"Ops brief for {party} — availability stock-status mix joined to price-change events.",
+        "",
+    ]
+    if not rows:
+        lines.append("No matching products were found for this scope.")
+        caveats.append("Scoped with current product filters on e-commerce listings.")
+        return "\n".join(lines), evidence, caveats
+
+    total_products = sum(int(r.get("products") or 0) for r in rows)
+    total_events = sum(int(r.get("price_events") or 0) for r in rows)
+    lines.append("## Stock-status mix")
+    lines.append("| Availability | Products | Share % |")
+    lines.append("| --- | ---: | ---: |")
+    for row in rows:
+        products = int(row.get("products") or 0)
+        share = (100.0 * products / total_products) if total_products else 0.0
+        lines.append(
+            f"| {_display_label(str(row.get('availability') or '—'))} | {products} | {share:.1f} |"
+        )
+
+    lines.append("")
+    lines.append("## Price events by stock status")
+    if total_events <= 0:
+        lines.append(
+            "No PriceChangeEvent rows were found on products in this scope, "
+            "so concentration by stock status cannot be measured yet."
+        )
+        caveats.append(
+            "Join uses current listing availability with HAS_PRICE_CHANGE events; "
+            "empty event volume means the price half of the brief is unavailable."
+        )
+    else:
+        lines.append(
+            "| Availability | Products | Products with events | Price events | "
+            "Events / product | Share of events % |"
+        )
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+        focus = []
+        for row in rows:
+            products = int(row.get("products") or 0)
+            events = int(row.get("price_events") or 0)
+            with_ev = int(row.get("products_with_events") or 0)
+            per = (events / products) if products else 0.0
+            share = (100.0 * events / total_events) if total_events else 0.0
+            label = _display_label(str(row.get("availability") or "—"))
+            lines.append(
+                f"| {label} | {products} | {with_ev} | {events} | {per:.2f} | {share:.1f} |"
+            )
+            token = _avail_token(str(row.get("availability") or ""))
+            if token in {"instock", "mixed"} or "stock" in token:
+                focus.append((label, events, share, per, products))
+        if focus:
+            focus.sort(key=lambda item: (-item[1], -item[2]))
+            top = focus[0]
+            lines.append("")
+            lines.append(
+                f"Price events are most concentrated on **{top[0]}** "
+                f"({top[1]} events, {top[2]:.1f}% of events"
+                + (f", {top[3]:.2f} per product" if top[4] else "")
+                + ")."
+            )
+        caveats.append(
+            "Join is current availability on the listing × PriceChangeEvent volume for those products "
+            "(not a historical availability-at-event-time reconstruction)."
+        )
+
+    evidence.append(
+        EvidenceItem(
+            source_id=graph_id,
+            record_id="availability_price_ops_brief",
+            title="Availability × price-event ops brief",
+            excerpt=(
+                f"party={party}; products={total_products}; price_events={total_events}; "
+                + "; ".join(
+                    f"{r.get('availability')}:{r.get('products')}/{r.get('price_events')}"
+                    for r in rows[:6]
+                )
+            ),
+            source_path="ecom_products",
+            verification_status="observed",
+            graph=graph_id,
+            node_id=None,
+            synthetic=False,
+        )
+    )
+    return "\n".join(lines), evidence, caveats
+
+
 def cypher_price_trend_by_category(platform, graph_id: str, *, limit: int = 20) -> list[dict] | None:
     session_factory = _session(platform)
     if not session_factory:
@@ -1797,6 +1975,16 @@ def price_history_mode(question: str) -> str | None:
         return None
     if trending_product_ask:
         return "trending_products"
+    # Explicit "price-trend analysis" / "trend analysis" phrasing → aggregate trend.
+    # Do not use bare price+change (that would steal events_by_brand / movers asks).
+    if re.search(
+        r"\b("
+        r"(?:price\s+)?(?:trend|trends|trending)(?:\s+analysis|\s+analyse|\s+analyze)"
+        r"|trending\s+analysis|trend\s+analysis|price\s*[- ]?\s*trend"
+        r")\b",
+        text,
+    ):
+        return "trend"
     # Strip negated "not history" so it does not trigger history mode.
     change_text = re.sub(r"\bnot\s+history\b", " ", text)
     has_change = bool(
@@ -5805,19 +5993,30 @@ def append_neo4j_analysis_answer(
         if not _facet_worth_showing(choices, total=total):
             continue
         field_label = _human_analysis_field_label(str(field))
-        display_choices = [
-            (
-                _display_label(
-                    name,
-                    graph_id=graph_id,
-                    attribute=str(field),
-                    generated=generated,
-                    platform=platform,
-                ),
-                count,
-            )
-            for name, count in choices
-        ]
+        # Country codes + names are usually disjoint product sets → sum after aliasing.
+        combine = (
+            "sum"
+            if field_key in {"country", "country_of_origin", "origin", "origin_country", "made_in"}
+            else "max"
+        )
+        display_choices = _merge_display_facet_rows(
+            [
+                (
+                    _display_label(
+                        name,
+                        graph_id=graph_id,
+                        attribute=str(field),
+                        generated=generated,
+                        platform=platform,
+                    ),
+                    count,
+                )
+                for name, count in choices
+            ],
+            combine=combine,
+        )
+        if not display_choices:
+            continue
         # Field-wise block: heading + leader + full value table (+ optional chart).
         lines.append(f"<!--fb:viz:{field}-->")
         lines.append(f"### {field_label}")
@@ -5830,7 +6029,7 @@ def append_neo4j_analysis_answer(
         for name, count in display_choices:
             row_share = round(100.0 * int(count) / total, 1) if total else 0.0
             lines.append(f"| {name} | {int(count)} | {row_share} |")
-        # Chart for denser mixes (skip 1-row noise).
+        # Chart for denser mixes (skip 1-row noise). One chart only — no second table dump.
         if len(display_choices) >= 2:
             lines.extend(
                 _chart_lines(
@@ -5900,11 +6099,88 @@ _FACET_DISPLAY_CANON: dict[str, str] = {
     "outofstock": "Out of stock",
     "comingsoon": "Coming soon",
     "lowonstock": "Low on stock",
+    "mixed": "Mixed",
     "coordsets": "Co-ord sets",
     "coord": "Co-ord",
     "canda": "C&A",
     "handm": "H&M",
 }
+
+_PRICE_BAND_TIERS: dict[str, str] = {
+    "budget": "Budget",
+    "value": "Value",
+    "mid": "Mid",
+    "premium": "Premium",
+}
+
+_CURRENCY_DISPLAY: dict[str, str] = {
+    "eur": "EUR",
+    "euro": "EUR",
+    "gbp": "GBP",
+    "usd": "USD",
+    "sek": "SEK",
+    "dkk": "DKK",
+    "nok": "NOK",
+    "pln": "PLN",
+}
+
+
+def _price_band_display_label(value: str) -> str | None:
+    """Turn internal ``eur:value`` codes into end-user ``EUR · Value`` labels."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    match = re.fullmatch(
+        r"([A-Za-z]{2,4})\s*[:_\-]\s*(budget|value|mid|premium)\b",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    cur = _CURRENCY_DISPLAY.get(match.group(1).casefold(), match.group(1).upper())
+    tier = _PRICE_BAND_TIERS.get(match.group(2).casefold(), match.group(2).capitalize())
+    return f"{cur} · {tier}"
+
+
+def _merge_display_facet_rows(
+    rows: list[tuple[str, int]],
+    *,
+    combine: str = "max",
+) -> list[tuple[str, int]]:
+    """Collapse rows that only differ by raw spelling once displayed (Women×2, In stock×2).
+
+    ``combine``:
+      - ``max`` — overlapping near-duplicate facet nodes (Women×2); default
+      - ``sum`` — disjoint aliases of the same concept (CN + China product sets)
+    """
+
+    use_sum = str(combine or "max").casefold() == "sum"
+    merged: dict[str, list] = {}
+    order: list[str] = []
+    for name, count in rows:
+        label = str(name or "").strip() or "—"
+        key = re.sub(r"[^a-z0-9]+", "", label.casefold())
+        if not key:
+            key = label.casefold()
+        n = int(count or 0)
+        if key not in merged:
+            merged[key] = [label, n]
+            order.append(key)
+            continue
+        if use_sum:
+            merged[key][1] = int(merged[key][1]) + n
+        elif n > int(merged[key][1]):
+            merged[key][1] = n
+        # Prefer the longer / better-cased surface when merging.
+        if len(label) > len(str(merged[key][0])) or (
+            any(ch.isupper() for ch in label)
+            and not any(ch.isupper() for ch in str(merged[key][0]))
+        ):
+            merged[key][0] = label
+    out = [(merged[k][0], int(merged[k][1])) for k in order]
+    out.sort(key=lambda item: (-item[1], item[0].casefold()))
+    return out
 
 
 def _title_case_facet(text: str) -> str:
@@ -5989,6 +6265,36 @@ def _display_label(
     raw = str(value or "").strip()
     if not raw:
         return raw
+    attr = str(attribute or "").strip().casefold().replace(" ", "_")
+    # Country of origin: CN / China / china → China (and multi-origin order-normalize).
+    if attr in {
+        "country",
+        "country_of_origin",
+        "origin",
+        "origin_country",
+        "made_in",
+    } or (
+        len(raw) <= 32
+        and (
+            re.fullmatch(r"[A-Za-z]{2}", raw)
+            or re.search(r"(?i)\b(china|bangladesh|turkey|cambodia|morocco|pakistan|vietnam|india)\b", raw)
+        )
+    ):
+        try:
+            from knowledge_graph.geo_country import country_display_label
+
+            country = country_display_label(raw)
+            if country:
+                return country
+        except Exception:
+            pass
+    # Price-band ETL codes (eur:value) — never show raw colon form to end users.
+    if attr in {"price_band", "priceband"} or re.search(
+        r"(?i)^[a-z]{2,4}[:_\-](budget|value|mid|premium)$", raw
+    ):
+        band = _price_band_display_label(raw)
+        if band:
+            return band
     compact = re.sub(r"[^a-z0-9]+", "", raw.casefold())
     if compact in _FACET_DISPLAY_CANON:
         return _FACET_DISPLAY_CANON[compact]
@@ -6173,17 +6479,20 @@ def _profile_nodes(
 
 
 _REL_FIELDS = {
-    "category": ("BELONGS_TO_CATEGORY",),
+    # Ecom garment category. PLM production craft is MADE_WITH_METHOD (false friend for "category").
+    "category": ("BELONGS_TO_CATEGORY", "MADE_WITH_METHOD"),
+    "production_method": ("MADE_WITH_METHOD",),
     "family": ("HAS_FAMILY",),
-    "subfamily": ("HAS_SUB_CATEGORY",),
+    "subfamily": ("HAS_SUBFAMILY", "HAS_SUB_CATEGORY"),
     "color": ("HAS_COLOR", "PRIMARY_COLOR"),
     "material": ("USES_MATERIAL", "PRIMARY_MATERIAL"),
     "availability": ("HAS_AVAILABILITY",),
     "brand": ("HAS_BRAND",),
     "buyer": ("HAS_BUYER",),
     "garment_type": ("HAS_GARMENT_TYPE",),
-    # PLM uses HAS_GENDER; ecom ontology uses FOR_TARGET_GROUP — accept both.
+    # PLM HAS_GENDER + shared TargetGroup hub (ecom + plmex).
     "gender": ("HAS_GENDER", "FOR_TARGET_GROUP"),
+    "target_group": ("FOR_TARGET_GROUP", "HAS_GENDER", "HAS_SECTION"),
     "gauge": ("HAS_GAUGE",),
     "sample_collection_type": ("HAS_SAMPLE_TYPE",),
     "plm_main_category": ("HAS_PLM_MAIN_CATEGORY",),
@@ -6195,12 +6504,17 @@ _REL_FIELDS = {
     "style_feature": ("HAS_STYLE_FEATURE",),
     "department": ("BELONGS_TO_DEPARTMENT",),
     "fit": ("HAS_FIT",),
-    "construction": ("HAS_CONSTRUCTION",),
-    "section": ("HAS_SECTION",),
-    "family": ("HAS_FAMILY",),
-    "subfamily": ("HAS_SUBFAMILY", "HAS_SUB_CATEGORY"),
-    "ai_event_tags": ("HAS_EVENT_TAG",),
-    "ai_construction_tags": ("HAS_CONSTRUCTION_TAG",),
+    "construction": ("HAS_CONSTRUCTION", "HAS_CONSTRUCTION_TAG"),
+    "section": ("HAS_SECTION", "FOR_TARGET_GROUP"),
+    "occasion": ("SUITED_FOR_OCCASION", "HAS_EVENT_TAG"),
+    "pattern": ("HAS_PATTERN",),
+    "price_band": ("IN_PRICE_BAND",),
+    "reference": ("HAS_REFERENCE", "HAS_STYLE_REFERENCE", "HAS_CUSTOMER_STYLE_REFERENCE"),
+    "style_reference": ("HAS_REFERENCE", "HAS_STYLE_REFERENCE"),
+    "customer_style_reference": ("HAS_REFERENCE", "HAS_CUSTOMER_STYLE_REFERENCE"),
+    # New unified Occasion/Construction + legacy AI tag edges (backward compatible).
+    "ai_event_tags": ("SUITED_FOR_OCCASION", "HAS_EVENT_TAG"),
+    "ai_construction_tags": ("HAS_CONSTRUCTION", "HAS_CONSTRUCTION_TAG"),
     "ai_material_tags": ("HAS_AI_MATERIAL_TAG",),
     "ai_finish_tags": ("HAS_FINISH_TAG",),
     "ai_special_tags": ("HAS_SPECIAL_TAG",),

@@ -419,6 +419,62 @@ def repair_filters(filters: dict, index: dict) -> tuple[dict, list[str]]:
     return out, unresolved
 
 
+def ground_filters_against_live_metadata(
+    platform,
+    filters: dict | None,
+    *,
+    question: str = "",
+    fields: list[str] | None = None,
+) -> dict[str, str]:
+    """Drop every categorical filter value that is not in live multi-KG metadata.
+
+    Use after any LLM / keyword extraction so Scope and Cypher never carry invented
+    values (brand=mixed, color=ops, …). Freeform keys pass through. When the
+    metadata index cannot be built, returns the input unchanged (callers should
+    still run grammar sanitize separately).
+    """
+
+    raw = {
+        str(k).strip(): str(v).strip()
+        for k, v in dict(filters or {}).items()
+        if k not in (None, "") and v not in (None, "")
+    }
+    if not raw or platform is None:
+        return raw
+    probe = list(
+        dict.fromkeys(
+            [
+                *(fields or []),
+                *raw.keys(),
+                *CORE_METADATA_FIELDS,
+            ]
+        )
+    )
+    try:
+        index = build_value_index(platform, probe)
+    except Exception:
+        LOGGER.debug("live metadata index unavailable for filter grounding", exc_info=True)
+        return raw
+    if not index:
+        return raw
+    repaired, unresolved = repair_filters(raw, index)
+    if unresolved:
+        LOGGER.info(
+            "dropped filters not in live metadata: %s",
+            ", ".join(unresolved[:12]),
+        )
+    # Stock-status mix / vs asks talk ABOUT availability labels — do not pin one side
+    # (also undoes repair_filters remapping brand=mixed → availability=Mixed).
+    try:
+        from fashion_brain.ask import mentions_stock_status_comparison
+
+        if question and mentions_stock_status_comparison(question):
+            repaired.pop("availability", None)
+    except Exception:
+        pass
+    return repaired
+
+
 # ---------------------------------------------------------------- span matching
 @dataclass
 class Span:

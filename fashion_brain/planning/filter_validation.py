@@ -52,6 +52,27 @@ _VALUE_ALIASES: dict[str, tuple[str, ...]] = {
     "in stock": ("instock", "available"),
     "instock": ("in stock", "available"),
     "out of stock": ("outofstock",),
+    # Country of origin: ISO ↔ English (filters accept either form).
+    "cn": ("china",),
+    "china": ("cn",),
+    "bd": ("bangladesh",),
+    "bangladesh": ("bd",),
+    "tr": ("turkey", "turkiye"),
+    "turkey": ("tr", "turkiye"),
+    "turkiye": ("tr", "turkey"),
+    "kh": ("cambodia",),
+    "cambodia": ("kh",),
+    "ma": ("morocco",),
+    "morocco": ("ma",),
+    "pk": ("pakistan",),
+    "pakistan": ("pk",),
+    "vn": ("vietnam",),
+    "vietnam": ("vn",),
+    "in": ("india",),
+    "india": ("in",),
+    "gb": ("united kingdom", "uk"),
+    "uk": ("united kingdom", "gb"),
+    "united kingdom": ("gb", "uk"),
 }
 
 _REMOVE_RE = re.compile(
@@ -149,14 +170,35 @@ def _field_supported(meta, field: str, source: str | None) -> bool | None:
 
 
 def _token_in_label(label: str, token: str) -> bool:
-    """True when ``token`` appears as a whole word inside ``label`` (white ∈ arctic white)."""
+    """True when ``token`` appears as a whole word inside ``label`` (white ∈ arctic white).
+
+    Plural-safe: sweater ∈ Cardigans Sweaters / sweaters.
+    """
 
     hay = normalize_name(label)
     needle = normalize_name(token)
     if not hay or not needle:
         return False
     parts = hay.split()
-    return needle == hay or needle in parts or f" {needle} " in f" {hay} "
+    if needle == hay or needle in parts or f" {needle} " in f" {hay} ":
+        return True
+    try:
+        from knowledge_graph.retrieval.kg_stats import _plural_forms
+
+        forms = _plural_forms(needle)
+    except Exception:
+        forms = {needle, needle.rstrip("s") if len(needle) > 3 else needle}
+    part_forms: set[str] = set()
+    for part in parts:
+        try:
+            from knowledge_graph.retrieval.kg_stats import _plural_forms
+
+            part_forms |= _plural_forms(part)
+        except Exception:
+            part_forms.add(part)
+            if len(part) > 3:
+                part_forms.add(part.rstrip("s"))
+    return bool(forms & part_forms) or bool(forms & {hay})
 
 
 def _contains_family_match(requested: str, labels: list[str]) -> bool:

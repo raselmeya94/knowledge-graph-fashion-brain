@@ -7,17 +7,13 @@ wiring comes next; this module is the schema→graph contract for e-comm v1.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
+from knowledge_graph import etl_normalizer as norm
 from knowledge_graph.config import DATA_ROOT
 from knowledge_graph.ontology import normalize_name
 
 _MAPPING_PATH = DATA_ROOT / "schemas" / "ecom_master_products_mapping.json"
-
-_COMPOSITION_PART = re.compile(
-    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<name>[A-Za-z][A-Za-z0-9 \-/]+)|(?P<only>[A-Za-z][A-Za-z0-9 \-/]{1,40})"
-)
 
 
 def load_mapping() -> dict:
@@ -43,15 +39,21 @@ def normalize_master_row(row: dict[str, Any]) -> dict[str, Any]:
 
     colors = _as_list(row.get("colors"))
     composition_detail = _as_list(row.get("composition_detail"))
-    return {
+    price_num = parse_price_num(row.get("price"))
+    original_price_num = parse_price_num(row.get("original_price"))
+    ref_norm = norm.coalesce_reference(row.get("reference"), row.get("display_reference"))
+    target_group = norm.target_group_from_section(row.get("section"), row.get("category_path"))
+    product = {
         "product_id": product_id(brand, master_id),
         "source": "ecom",
         "source_table": "master_products",
         "master_id": master_id,
         "brand": brand,
         "product_name": _text(row.get("name")),
+        "name": _text(row.get("name")),
         "reference": _text(row.get("reference")),
         "display_reference": _text(row.get("display_reference")),
+        "ref_norm": ref_norm,
         "description": _text(row.get("description")),
         "composition": _text(row.get("composition")),
         "composition_detail": composition_detail,
@@ -69,9 +71,10 @@ def normalize_master_row(row: dict[str, Any]) -> dict[str, Any]:
         "out_stock_count": row.get("out_stock_count"),
         "currency": _text(row.get("currency")),
         "price": _text(row.get("price")),
-        "price_num": parse_price_num(row.get("price")),
+        "price_num": price_num,
         "original_price": _text(row.get("original_price")),
-        "original_price_num": parse_price_num(row.get("original_price")),
+        "original_price_num": original_price_num,
+        "discount_pct": norm.pct_discount(original_price_num, price_num),
         "price_min": _text(row.get("price_min")),
         "price_max": _text(row.get("price_max")),
         "image": _text(row.get("image")),
@@ -88,7 +91,12 @@ def normalize_master_row(row: dict[str, Any]) -> dict[str, Any]:
         "content_hash": _text(row.get("content_hash")),
         "pdp_enriched": bool(row.get("pdp_enriched")),
         "material": _text(row.get("composition")),
+        "_target_group": target_group,
+        "_price_band": norm.price_band(price_num, row.get("currency")),
+        "_ref_norm": ref_norm,
     }
+    product["search_text"] = norm.synthesize_ecom_search_text(product)
+    return product
 
 
 def build_relationships(product: dict[str, Any]) -> list[dict[str, Any]]:
@@ -97,18 +105,48 @@ def build_relationships(product: dict[str, Any]) -> list[dict[str, Any]]:
     pid = product["product_id"]
     rels: list[dict[str, Any]] = []
 
-    def edge(rel_type: str, end_type: str, name: str, *, field_ref: str, properties: dict | None = None) -> None:
+    def edge(
+        rel_type: str,
+        end_type: str,
+        name: str,
+        *,
+        field_ref: str,
+        properties: dict | None = None,
+        end_id: str | None = None,
+    ) -> None:
         value = _present(name)
-        if not value:
+        if not value and not end_id:
             return
+        resolved = end_id
+        if not resolved:
+            if end_type == "Brand":
+                resolved = norm.hub_id("brand", value)
+            elif end_type == "Material":
+                resolved = norm.hub_id("material", value)
+            elif end_type == "Color":
+                resolved = norm.hub_id("color", value)
+            elif end_type == "Construction":
+                resolved = norm.hub_id("construction", value)
+            elif end_type == "Fit":
+                resolved = norm.hub_id("fit", value)
+            elif end_type == "CareInstruction":
+                resolved = norm.hub_id("care", value)
+            elif end_type == "TargetGroup":
+                resolved = norm.hub_id("targetgroup", value)
+            elif end_type == "PriceBand":
+                resolved = norm.hub_id("priceband", value)
+            elif end_type == "Reference":
+                resolved = norm.reference_id(value)
+            else:
+                resolved = f"{end_type.lower()}:{normalize_name(value).replace(' ', '-')}"
         rels.append(
             {
                 "rel_type": rel_type,
                 "start_id": pid,
                 "start_type": "Product",
                 "end_type": end_type,
-                "end_name": value,
-                "end_id": f"{end_type.lower()}:{normalize_name(value).replace(' ', '-')}",
+                "end_name": value or resolved,
+                "end_id": resolved,
                 "field_ref": field_ref,
                 "properties": properties or {},
             }
@@ -127,28 +165,73 @@ def build_relationships(product: dict[str, Any]) -> list[dict[str, Any]]:
     edge("HAS_FIT", "Fit", product.get("fit", ""), field_ref="fit")
     edge("HAS_CARE", "CareInstruction", product.get("care", ""), field_ref="care")
     edge("MADE_IN", "Country", product.get("country_of_origin", ""), field_ref="country_of_origin")
-    ref = _present(product.get("reference")) or _present(product.get("display_reference"))
+    ref = product.get("_ref_norm") or product.get("ref_norm")
     if ref:
-        edge("HAS_REFERENCE", "Reference", ref, field_ref="reference")
+        edge(
+            "HAS_REFERENCE",
+            "Reference",
+            ref,
+            field_ref="reference",
+            properties={
+                "raw_reference": _present(product.get("reference")) or _present(product.get("display_reference")),
+                "ref_kind": "ecom_ref",
+            },
+            end_id=norm.reference_id(str(ref)),
+        )
     edge("HAS_MAIN_IMAGE", "Image", product.get("image", ""), field_ref="image")
 
-    colors = [str(c) for c in (product.get("colors") or []) if _present(c)]
-    for index, color in enumerate(colors):
-        edge("HAS_COLOR", "Color", color, field_ref="colors", properties={"position": index, "is_primary": index == 0})
-    if colors:
-        edge("PRIMARY_COLOR", "Color", colors[0], field_ref="colors")
+    tg = _present(product.get("_target_group"))
+    if tg:
+        edge("FOR_TARGET_GROUP", "TargetGroup", tg, field_ref="section", properties={"provenance": "rule"})
+    band = _present(product.get("_price_band"))
+    if band:
+        edge("IN_PRICE_BAND", "PriceBand", band, field_ref="price")
 
-    materials = _materials(product)
-    for material, percentage in materials:
-        props = {"percentage": percentage} if percentage is not None else {}
-        edge("USES_MATERIAL", "Material", material, field_ref="composition", properties=props)
+    colors, patterns = norm.parse_colors(product.get("colors"))
+    for index, color in enumerate(colors):
+        edge(
+            "HAS_COLOR",
+            "Color",
+            color["name"],
+            field_ref="colors",
+            properties={"position": index, "is_primary": index == 0},
+            end_id=color["id"],
+        )
+    if colors:
+        edge("PRIMARY_COLOR", "Color", colors[0]["name"], field_ref="colors", end_id=colors[0]["id"])
+    for pattern in patterns:
+        edge("HAS_PATTERN", "Pattern", pattern["name"], field_ref="colors", end_id=pattern["id"])
+
+    materials = norm.parse_composition_detail(
+        product.get("composition_detail"), product.get("composition")
+    )
+    for material in materials:
+        props = {"percentage": material["percentage"]} if material["percentage"] is not None else {}
+        edge(
+            "USES_MATERIAL",
+            "Material",
+            material["name"],
+            field_ref="composition",
+            properties=props,
+            end_id=material["id"],
+        )
     if materials:
         primary = max(
             materials,
-            key=lambda item: (item[1] is not None, item[1] if item[1] is not None else -1.0),
+            key=lambda item: (
+                item["percentage"] is not None,
+                item["percentage"] if item["percentage"] is not None else -1.0,
+            ),
         )
-        primary_props = {"percentage": primary[1]} if primary[1] is not None else {}
-        edge("PRIMARY_MATERIAL", "Material", primary[0], field_ref="composition", properties=primary_props)
+        primary_props = {"percentage": primary["percentage"]} if primary["percentage"] is not None else {}
+        edge(
+            "PRIMARY_MATERIAL",
+            "Material",
+            primary["name"],
+            field_ref="composition",
+            properties=primary_props,
+            end_id=primary["id"],
+        )
 
     # Hierarchy: Subfamily → Family → GarmentCategory (ontology PARENT_CATEGORY pairs)
     family = _present(product.get("family"))
@@ -173,6 +256,8 @@ def graph_sketch(product: dict[str, Any]) -> dict[str, Any]:
     }
     props["name"] = product.get("product_name") or props.get("name")
     props["source"] = "ecom"
+    if product.get("search_text"):
+        props["search_text"] = product["search_text"]
     # Ensure numeric price props even when mapping filter skipped 0.0
     if product.get("price_num") is not None:
         props["price_num"] = product.get("price_num")
@@ -186,6 +271,10 @@ def graph_sketch(product: dict[str, Any]) -> dict[str, Any]:
         parsed = parse_price_num(product.get("original_price"))
         if parsed is not None:
             props["original_price_num"] = parsed
+    if product.get("discount_pct") is not None:
+        props["discount_pct"] = product.get("discount_pct")
+    if product.get("ref_norm"):
+        props["ref_norm"] = product.get("ref_norm")
     return {
         "product_id": product["product_id"],
         "labels": ["Product", "Entity"],
@@ -212,34 +301,6 @@ def _parent_link(
         "field_ref": note,
         "properties": {},
     }
-
-
-def _materials(product: dict[str, Any]) -> list[tuple[str, float | None]]:
-    detail = product.get("composition_detail") or []
-    found: list[tuple[str, float | None]] = []
-    for item in detail:
-        if isinstance(item, dict):
-            name = _present(item.get("name") or item.get("material") or item.get("fiber"))
-            pct = item.get("percentage")
-            if pct is None:
-                pct = item.get("percent")
-            if name:
-                found.append((name, _number(pct)))
-        elif isinstance(item, str) and _present(item):
-            found.append((item.strip(), None))
-    if found:
-        return found
-    text = _present(product.get("composition"))
-    if not text:
-        return []
-    for match in _COMPOSITION_PART.finditer(text):
-        if match.group("name"):
-            found.append((match.group("name").strip(), _number(match.group("pct"))))
-        elif match.group("only"):
-            token = match.group("only").strip()
-            if token.lower() not in {"and", "with", "of"}:
-                found.append((token, None))
-    return found
 
 
 def _as_list(value: Any) -> list:
@@ -272,29 +333,7 @@ def _present(value: Any) -> str:
     return text
 
 
-def _number(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def parse_price_num(value: Any) -> float | None:
     """Parse display prices like €219.00 / $14.00 / £7.00 into a float."""
 
-    if value is None or value == "":
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value)
-    for ch in ("€", "$", "£", ",", " "):
-        text = text.replace(ch, "")
-    text = text.strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    return norm.parse_decimal(value)

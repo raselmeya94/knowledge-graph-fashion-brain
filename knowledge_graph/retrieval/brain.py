@@ -408,6 +408,29 @@ def retrieve(platform: Platform, principal: Principal, request: BrainRetrieveReq
                         request.graph_id = target
                     special_done = True
 
+            if not special_done:
+                try:
+                    from fashion_brain.ask import is_availability_price_ops_brief_ask
+                    from knowledge_graph.retrieval.ecom import answer_availability_price_ops_brief
+
+                    if is_availability_price_ops_brief_ask(request.question or ""):
+                        ops = answer_availability_price_ops_brief(
+                            platform,
+                            target,
+                            request.question or "",
+                            dict(request.filters or {}),
+                        )
+                        if ops is not None:
+                            text, ev, cav = ops
+                            if text:
+                                lines.append(text)
+                            evidence.extend(ev or [])
+                            caveats.extend(cav or [])
+                            if not request.graph_id:
+                                request.graph_id = target
+                            special_done = True
+                except Exception:
+                    pass
             if not special_done and (tlabel == "AvailabilitySnapshot" or avail_mode):
                 handled = append_neo4j_availability_history_answer(
                     platform,

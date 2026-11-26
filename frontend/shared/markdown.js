@@ -51,7 +51,7 @@
     const line = lines[index];
     if (!line || !line.trim()) return false;
     if (/^```/.test(line)) return true;
-    if (/^#{1,3}\s+/.test(line)) return true;
+    if (/^#{1,6}\s+/.test(line)) return true;
     if (/^\s*>/.test(line)) return true;
     if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) return true;
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) return true;
@@ -230,7 +230,7 @@
         index += 1;
         continue;
       }
-      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      const heading = line.match(/^(#{1,6})\s+(.+)$/);
       if (heading) {
         blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
         index += 1;

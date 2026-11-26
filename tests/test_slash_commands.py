@@ -72,3 +72,11 @@ def test_ranking_top_is_not_a_garment():
     assert garment_type_from_question("top counts by category") is None
     assert garment_type_from_question("what is trending top brands") is None
     assert garment_type_from_question("crop top for summer") == "crop-top"
+    # Report briefs: "top constructions / top materials" must not become garment=tops.
+    assert (
+        garment_type_from_question(
+            "composition mix report: top constructions if composition is thin, "
+            "and how concentrated the top materials are"
+        )
+        is None
+    )

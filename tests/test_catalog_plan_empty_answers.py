@@ -101,6 +101,25 @@ def test_zara_tops_material_mixes_not_material_mixes_filter():
     assert plan["group_by"] == "material"
 
 
+def test_full_ecom_material_report_not_scoped_to_garment_tops():
+    """'top constructions / top materials' is ranking language, not garment=tops."""
+
+    from fashion_brain.ask import garment_type_from_question
+
+    q = (
+        "For the full e-commerce assortment (every brand in the scrape), produce a "
+        "composition / material mix report: which fibre blends dominate, top "
+        "constructions if composition is thin, and a short note on how concentrated "
+        "the top materials are."
+    )
+    assert garment_type_from_question(q) is None
+    plan = resolve_catalog_plan(q, None, carry=False)
+    assert not plan["filters"].get("garment")
+    assert not plan["filters"].get("garment_type")
+    assert not plan["filters"].get("subfamily")
+    assert plan["group_by"] == "material"
+
+
 def test_dresses_stem_and_brand_garment_pairs():
     from fashion_brain.ask import garment_type_from_question
 
@@ -137,3 +156,118 @@ def test_plmex_zara_composition_mixes_plan():
     plan = resolve_catalog_plan("PLMEX Zara composition mixes", None, carry=False)
     assert plan["filters"].get("brand", "").casefold() == "zara"
     assert plan["group_by"] == "material"
+
+
+def test_swweaters_typo_grounds_to_sweater_not_brand_or_total():
+    """Typo 'swweaters' must map via kg_stats to sweater — never a fake brand.
+
+    Meta fast path used to drop the unknown token and answer the whole PLMEX
+    total (~18000). Schema grounding should recover garment/category=sweater.
+    """
+
+    from fashion_brain.ask import is_catalog_dataset_total_ask
+
+    q = "how many swweaters in plmex"
+    assert is_catalog_dataset_total_ask(q) is False
+    plan = resolve_catalog_plan(q, None, carry=False)
+    brand = str(plan["filters"].get("brand") or "").casefold()
+    assert "swweater" not in brand
+    garment = str(
+        plan["filters"].get("garment")
+        or plan["filters"].get("category")
+        or plan["filters"].get("garment_type")
+        or ""
+    ).casefold()
+    assert "sweater" in garment
+
+
+def test_a17_cross_catalog_sweater_not_fake_brands_or_group_by():
+    """A17 report English must not become brand=shows|like|careful|… or group_by."""
+
+    q = (
+        "Compare how 'sweater' shows up in PLMEX versus how sweater-like product "
+        "types appear in e-commerce. Be careful: category is a false friend across "
+        "graphs — explain using garment_type / subfamily roles rather than merging "
+        "category values blindly, and give separate counts per source."
+    )
+    plan = resolve_catalog_plan(q, None, carry=False)
+    brand = str(plan["filters"].get("brand") or "").casefold()
+    for junk in (
+        "shows",
+        "like",
+        "careful",
+        "false",
+        "friend",
+        "merging",
+        "blindly",
+        "separate",
+        "counts",
+    ):
+        assert junk not in brand.split("|")
+        assert junk not in brand
+    assert "sweater" in str(plan["filters"].get("garment") or "").casefold()
+    assert plan.get("group_by") in (None, "")
+
+
+def test_sweater_token_in_cardigans_sweaters_label():
+    from fashion_brain.planning.filter_validation import (
+        _contains_family_match,
+        _token_in_label,
+    )
+
+    assert _token_in_label("Cardigans Sweaters", "sweater") is True
+    assert _contains_family_match("sweater", ["Cardigans Sweaters", "Sweaters"]) is True
+
+
+def test_cross_catalog_sweater_compare_uses_kg_stats_not_cypher():
+    """A17 must answer from per-source kg_stats — not hang in Text2Cypher."""
+
+    from fashion_brain.agents.contracts import Intention
+    from fashion_brain.ask import _is_grammar_party_name
+    from fashion_brain.orchestration.catalog_pipeline import (
+        _normalize_cross_catalog_type_intention,
+        _try_cross_catalog_type_compare,
+    )
+
+    class _P:
+        class settings:
+            generated = None
+
+    q = (
+        "Compare how sweater shows up in PLMEX versus how sweater-like product "
+        "types appear in e-commerce. Give separate counts per source."
+    )
+    # Agent pollution seen in prod: brand=thinking, subfamily=sweater, group_by=subfamily.
+    assert _is_grammar_party_name("thinking") is True
+    intention = Intention(
+        intent="analysis",
+        filters={
+            "subfamily": "sweater",
+            "brand": "thinking",
+            "buyer": "thinking",
+        },
+        group_by="subfamily",
+        metrics=[],
+    )
+    _normalize_cross_catalog_type_intention(
+        intention, q, ["plmex_products", "ecom_products"]
+    )
+    assert intention.filters.get("garment") == "sweater"
+    assert "subfamily" not in intention.filters
+    assert "brand" not in intention.filters
+    assert intention.group_by in (None, "")
+    hit = _try_cross_catalog_type_compare(
+        _P(),
+        question=q,
+        intention=intention,
+        product_ids=["plmex_products", "ecom_products"],
+    )
+    assert hit is not None
+    text = hit.text.casefold()
+    assert "false friend" in text
+    assert "10,996" in hit.text or "10996" in hit.text.replace(",", "")
+    assert "plmex_products" in text and "ecom_products" in text
+    assert "subfamily" in text or "garment_type" in text or "cardigan" in text
+    # Ecom exact "sweaters" is sparse — must clarify compounds / synonyms.
+    assert "almost unused" in text or "closest labels that include" in text
+    assert "cardigan" in text or "jumper" in text

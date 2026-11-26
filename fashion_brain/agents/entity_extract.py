@@ -209,6 +209,13 @@ Rules:
 - Product types (t-shirts, dresses, sweaters, …) go in category — never confuse them with brand names.
 - "in each family / per family / by family" → group_by="family" (not a category filter named family).
 - Price words without a numeric bound are NOT price_min/price_max filters.
+- Stock-status mix / "in-stock vs mixed" ops briefs: set availability=null (statuses are
+  analysis axes, not a single filter). Never put mixed/instock/outofstock into brand.
+- Filter values must be real catalog values the user named (or Live brand / hint list).
+  Never invent unknown words as brand/category/material/color/availability.
+- Country of origin: ISO codes and English names are the same place (CN = China,
+  BD = Bangladesh, TR = Turkey, MA = Morocco, …). Prefer the English name in country
+  when the user says either form.
 - Never write Cypher. Never invent node ids.
 """
 
@@ -585,6 +592,20 @@ class EntityExtractAgent:
         parsed = sanitize_extracted(
             parsed, scope_tokens=scope, facet_types=facets, question=question, schema=schema
         )
+        # Every extracted categorical value must exist in live metadata for that field.
+        try:
+            from fashion_brain.ask import ground_filters_against_live_metadata
+
+            grounded = ground_filters_against_live_metadata(
+                platform, parsed.as_link_dict(), question=question
+            )
+            for key in ("brand", "category", "material", "color", "availability", "country"):
+                if key in grounded:
+                    setattr(parsed, key, grounded[key])
+                elif getattr(parsed, key, None):
+                    setattr(parsed, key, None)
+        except Exception:
+            LOGGER.debug("entity extract meta ground skipped", exc_info=True)
         if not any(
             [
                 parsed.brand,
@@ -822,7 +843,14 @@ def _heuristic_extract(question: str, *, schema=None) -> ExtractedEntities:
             )
             if m:
                 country = m.group(1).strip().casefold()
-    if re.search(r"\binstock\b|\bin[\s_-]?stock\b", text, re.I):
+    # Filter TO in-stock only when that is the ask — not "in-stock vs mixed" mix briefs.
+    try:
+        from fashion_brain.ask import mentions_stock_status_comparison
+
+        stock_compare = mentions_stock_status_comparison(text)
+    except Exception:
+        stock_compare = False
+    if not stock_compare and re.search(r"\binstock\b|\bin[\s_-]?stock\b", text, re.I):
         availability = "InStock"
 
     metric_breakdown = looks_like_metric_breakdown(text, schema)

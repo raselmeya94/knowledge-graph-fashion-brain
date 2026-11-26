@@ -53,7 +53,7 @@ _GARMENT_TYPE_WORDS = _words(
     sweater sweaters jumper jumpers cardigan cardigans dress dresses jacket jackets
     coat coats shirt shirts tshirt tshirts hoodie hoodies jean jeans trouser trousers
     pant pants knitwear knit knits top tops blouse blouses skirt skirts tee tees
-    polo polos short shorts sock socks scarf scarves bag bags shoe shoes sneaker sneakers
+    polo polos shorts sock socks scarf scarves bag bags shoe shoes sneaker sneakers
     blazer blazers swimwear loungewear pyjama pyjamas pajama pajamas
     """
 )
@@ -104,7 +104,8 @@ _COUNT_STOPWORDS = _words(
     information overview stored inside within ecommerce ecommerces commerce commerces ecom ecomm
     node nodes event events snapshot snapshots exist exists
     up range ranges assortment assortments catalog catalogs catalogue catalogues
-    break breaks broke down dominate dominates mix mixes mixture mixtures blend blends
+    break breaks broke down dominate dominates mix mixes mixed mixture mixtures blend blends
+    listing listings ops brief briefs online concentrated supports join
     see seen seeing detail details detailled construction constructions fit fits
     """
 )
@@ -143,6 +144,10 @@ _TASK_WORDS = _words(
     confirm confirming confirmed accurate reply report dimension dimensions
     aspect aspects yes yeah yep ok okay sure proceed correct fine alright
     getting got gone recorded recording ignore ignoring than actually
+    show shows showing shown like likes careful false friend friends
+    merge merging merged blindly separate separately role roles rather
+    give gives giving source sources count counts value values
+    up how versus vs blind
     """
 )
 # Modal / capability language — never a brand or buyer ("is that possible…?").
@@ -155,10 +160,16 @@ _MODAL_WORDS = _words(
 )
 # Measure / property names that are not garment types when used alone in ranking asks.
 _MEASURE_PROPERTY_WORDS = _words(
-    "price prices cost costs amount amounts rating ratings discount discounts "
+    "price prices pricing cost costs amount amounts rating ratings discount discounts "
     "margin margins stock quantity qty average avg mean median "
     "availability availabilities care construction constructions fit fits "
     "supplier suppliers origin origins season seasons"
+)
+# Stock-status labels (and report English around them) — never brand/buyer.
+# They may be availability VALUES only when the user clearly filters to that status.
+_AVAILABILITY_STATUS_WORDS = _words(
+    "instock in-stock instocked mixed outofstock out-of-stock "
+    "available unavailable stockstatus"
 )
 _MAKE_VERBS = _words("make makes making produce produces producing manufacture manufactures manufacturing")
 _MAKE_ADVERBS = _words("normally usually typically often frequently frequent frequency commonly mostly")
@@ -202,6 +213,7 @@ _FILTER_NOISE = _words(
     "analyse analyze analysis attribute wise breakdown takeaway leading "
     "cheaper expensive mover movers more than getting recorded "
     "mix mixes mixture mixtures blend blends common commonly often "
+    "listing listings ops brief briefs online concentrated supports join "
     "break breaks broke down dominate dominates "
     "tell tells telling told say says saying said ask asks asking asked "
     "explore exploring explored focus focusing focused narrow narrowing "
@@ -230,6 +242,15 @@ _SPEC_MODE_CUES = _words(
     "typical typically usual usually common commonly sample samples new"
 )
 _ANALYSIS_WORDS = _words("analysis analyze analysing analyzing analyse profile review overview study")
+# UI / agent status words and rewrite leftovers — never brand/buyer values.
+_AGENT_UI_NOISE = _words(
+    """
+    thinking thought thoughts hidden providing provided provide occurrence
+    occurrences categorized categorised differences difference explaining
+    explained carefully careful blindly merging merge merged roles role
+    source sources selected catalogs catalog looking resolved ask
+    """
+)
 _HISTORY_WORDS = _words("past previous prior historic historical history earlier old existing")
 _UPCOMING_WORDS = _words("upcoming upcomming coming comming next")
 _BY_WORDS = _words("by per each")
@@ -534,16 +555,70 @@ def product_ref_from_question(question: str) -> str | None:
     return m.group(1) if m else None
 
 
+def mentions_stock_status_comparison(question: str) -> bool:
+    """True when stock statuses are analysis axes (mix / A vs B), not a single filter."""
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    if re.search(
+        r"\b(stock[\s_-]?status|availability)\b.{0,40}\b(mix|mixes|mixture|breakdown|profile|brief)\b",
+        text,
+    ):
+        return True
+    if re.search(
+        r"\b(in[\s_-]?stock|instock)\b.{0,40}\b(vs|versus|or)\b.{0,40}\b(mixed|outofstock|out of stock)\b",
+        text,
+    ):
+        return True
+    if re.search(
+        r"\b(mixed|outofstock|out of stock)\b.{0,40}\b(vs|versus|or)\b.{0,40}\b(in[\s_-]?stock|instock)\b",
+        text,
+    ):
+        return True
+    return False
+
+
+def is_availability_price_ops_brief_ask(question: str) -> bool:
+    """Availability + pricing ops brief (stock mix + price events by stock status).
+
+    Not a full attribute-wise assortment profile (A16-style asks).
+    """
+
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    has_avail = bool(
+        re.search(r"\b(availability|stock[\s_-]?status|instock|in stock|mixed listings)\b", text)
+        or mentions_stock_status_comparison(question)
+    )
+    has_price = bool(
+        re.search(r"\b(price|prices|pricing|pricechangeevent)\b", text)
+        and re.search(r"\b(event|events|change|changes|join|concentrated)\b", text)
+    )
+    has_ops = bool(
+        re.search(r"\b(ops|brief|combine|join)\b", text)
+        or mentions_stock_status_comparison(question)
+    )
+    return bool(has_avail and has_price and has_ops)
+
+
 def _is_availability_history_question(question: str) -> bool:
     text = normalize_name(question)
     if not re.search(r"\bavailability\b", text):
         return False
+    # Ops brief / stock-status mix is current assortment + price join, not snapshot history.
+    if mentions_stock_status_comparison(question):
+        return False
+    if re.search(
+        r"\b(history|historical|changed|change|changes|recent|recently|snapshot|snapshots)\b",
+        text,
+    ):
+        return True
+    # Status labels alone only count with an explicit transition ("from … to …").
     return bool(
-        re.search(
-            r"\b(history|historical|changed|change|changes|recent|recently|"
-            r"snapshot|snapshots|instock|mixed|outofstock)\b",
-            text,
-        )
+        re.search(r"\bfrom\b.+\bto\b", text)
+        and re.search(r"\b(instock|in stock|mixed|outofstock|out of stock)\b", text)
     )
 
 
@@ -627,17 +702,67 @@ def garment_type_from_question(question: str) -> str | None:
         if raw.endswith("s") and len(raw) > 3:
             return raw[:-1]
         return raw
-    # Bare "tops" / contextual "top" is a garment — not ranking ("top 10", "top brands").
-    # Keep plural "tops" so CONTAINS matching stays reliable (singular "top" is a rank stopword).
-    if re.search(r"\btops\b", text):
+    # Ranking "top/tops <schema field|measure>" is never a garment.
+    # Objects come from CATALOG_FIELDS aliases + measure/property keys — not an English guess list.
+    cleaned = _strip_ranking_top_collocations(text)
+    # Bare "tops" / contextual "top" is a garment after ranking phrases are removed.
+    if re.search(r"\btops\b", cleaned):
         return "tops"
-    if re.search(r"\btop\b", text) and not re.search(
-        r"\btop\s+(\d+|brands?|buyers?|counts?|products?|items?|movers?|categories)\b",
-        text,
-    ):
-        if re.search(r"\b(in|for|among|across|of)\s+\w[\w&'-]*\s+top\b|\b\w[\w&'-]*\s+top\b", text):
+    if re.search(r"\btop\b", cleaned):
+        if re.search(
+            r"\b(in|for|among|across|of)\s+\w[\w&'-]*\s+top\b|\b\w[\w&'-]*\s+top\b",
+            cleaned,
+        ):
             return "tops"
     return None
+
+
+def _strip_ranking_top_collocations(text: str) -> str:
+    """Drop ``top/tops <facet>`` ranking phrases using schema aliases, not noun lists."""
+
+    tokens = normalize_name(text or "").split()
+    if not tokens:
+        return ""
+    # Non-schema ranking heads (still grammar, not catalog values).
+    rank_heads = frozenset(
+        {
+            "products",
+            "items",
+            "counts",
+            "count",
+            "movers",
+            "results",
+            "values",
+            "n",
+            "shares",
+            "sellers",
+            "styles",
+            "attributes",
+            "fields",
+        }
+    )
+    out: list[str] = []
+    index = 0
+    while index < len(tokens):
+        tok = tokens[index]
+        if tok in {"top", "tops"}:
+            nxt = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if nxt.isdigit():
+                index += 2
+                continue
+            alias = _alias_at(tokens, index + 1)
+            if alias:
+                index += 1 + alias[1]
+                continue
+            if nxt in _MEASURE_PROPERTY_WORDS or nxt in rank_heads:
+                index += 2
+                continue
+            if nxt in _FIELD_ALIASES:
+                index += 2
+                continue
+        out.append(tok)
+        index += 1
+    return " ".join(out)
 
 
 def catalog_metric_family(question: str) -> str:
@@ -659,6 +784,8 @@ def catalog_metric_family(question: str) -> str:
     except Exception:
         if _is_price_history_question(text):
             return "price"
+    if is_availability_price_ops_brief_ask(text):
+        return "availability_price"
     if availability_history_mode(text):
         return "availability"
     if _is_average_price_question(text):
@@ -749,18 +876,32 @@ def is_catalog_dataset_total_ask(question: str) -> bool:
     Examples: "How many products are in the e-comm data?",
     "How many products are in the PLM data?"
     Not: "How many products does Primark have?"
+    Not: "How many sweaters in plmex" (scoped type, even with typos).
     """
 
     if not is_product_count_ask(question):
         return False
     text = normalize_name(question)
+    graph_scope = re.search(
+        r"\b(?:in|across|from|within)\s+(?:the\s+)?(?:"
+        r"e[\s-]?comm(?:erce)?|ecom|plm(?:ex)?|catalog|assortment|"
+        r"data(?:set|base)?|product\s+(?:data|catalog|graph|source)|"
+        r"knowledge\s+graph"
+        r")\b",
+        text,
+    )
+    if not graph_scope:
+        return False
+    # Require a generic countable noun — "how many X in plmex" where X is a
+    # type/typo (sweaters / swweaters) is a filtered count, not the catalog total.
     return bool(
         re.search(
-            r"\b(?:in|across|from|within)\s+(?:the\s+)?(?:"
-            r"e[\s-]?comm(?:erce)?|ecom|plm(?:ex)?|catalog|assortment|"
-            r"data(?:set|base)?|product\s+(?:data|catalog|graph|source)|"
-            r"knowledge\s+graph"
-            r")\b",
+            r"\b(?:"
+            r"how\s+many\s+(?:(?:total|overall)\s+)?(?:products?|items?|skus?|styles?|records?|rows?)\b|"
+            r"(?:number|count|total)\s+(?:of\s+)?(?:products?|items?|skus?|styles?|records?|rows?)\b|"
+            r"(?:products?|items?|skus?|styles?)\s+(?:are\s+)?(?:in|across|from|within)\b|"
+            r"(?:product|item|sku|style)\s+count\b"
+            r")",
             text,
         )
     )
@@ -1122,8 +1263,16 @@ def _is_analysis(question: str) -> bool:
     Full: \"full analysis of Primark\" → every facet with distinct values.
     Focused: \"Primark category breakdown\" / \"analysis material wise\" → one facet.
     Compare assortment profiles also belong here.
+
+    Price-trend / PriceChangeEvent asks are NOT assortment analysis even when the
+    user says \"price-trend analysis\".
     """
 
+    if is_price_trend_analysis_ask(question) or _is_price_history_question(question):
+        return False
+    # Stock-status + price-events ops brief is NOT full assortment analysis.
+    if is_availability_price_ops_brief_ask(question):
+        return False
     tokens = set(normalize_name(question).split())
     if tokens & _ANALYSIS_WORDS:
         return True
@@ -1430,7 +1579,12 @@ def enrich_ecom_question_filters(question: str, filters: dict | None = None) -> 
 
     out = {key: value for key, value in dict(filters or {}).items() if value not in (None, "")}
     text = (question or "").casefold()
-    if "availability" not in out and re.search(
+    stock_compare = mentions_stock_status_comparison(question)
+    # Mix / vs asks talk ABOUT stock statuses — do not pin availability to one side.
+    if stock_compare:
+        out.pop("availability", None)
+    # Filter TO in-stock only when that is the ask — never when comparing stock statuses.
+    elif "availability" not in out and re.search(
         r"\b(in[\s_-]?stock|instock|available now|currently available)\b", text
     ):
         out["availability"] = "InStock"
@@ -1460,8 +1614,9 @@ def enrich_ecom_question_filters(question: str, filters: dict | None = None) -> 
             )
         ):
             out["garment"] = garment
+    # Brand compares only — never promote stock-status "in-stock vs mixed" into brand=.
     parties = _compare_party_names(question)
-    if len(parties) >= 2:
+    if len(parties) >= 2 and not stock_compare:
         out["brand"] = " | ".join(parties)
     return out
 
@@ -1643,12 +1798,34 @@ def _count_dimension(question: str) -> str | None:
 
 
 def _product_type_breakdown(question: str) -> str | None:
-    """'Which type of products' asks for a garment-type ranking, not a garment named type."""
+    """'Which type of products' asks for a garment-type ranking, not a garment named type.
+
+    Do not fire on narrative phrases like "sweater-like product types appear in
+    e-commerce" — that is compare/scope language, not a breakdown ask.
+    """
 
     tokens = normalize_name(question).split()
+    rank_cues = frozenset(
+        {
+            "which",
+            "what",
+            "list",
+            "show",
+            "rank",
+            "top",
+            "breakdown",
+            "break",
+            "wise",
+            "by",
+            "per",
+        }
+    )
     for index in range(len(tokens)):
         for pattern in _TYPE_PATTERNS:
-            if tuple(tokens[index : index + len(pattern)]) == pattern:
+            if tuple(tokens[index : index + len(pattern)]) != pattern:
+                continue
+            window = tokens[max(0, index - 4) : index + len(pattern) + 2]
+            if set(window) & rank_cues:
                 return "garment_type"
     return None
 
@@ -1715,16 +1892,28 @@ def _is_product_details_request(question: str) -> bool:
 def _is_party_token(token: str) -> bool:
     """A buyer/brand name, not a material, color, field, metric, or task word."""
 
+    raw = str(token or "").strip()
+    if not raw:
+        return False
+    # Multi-word / hyphenated labels: every piece must itself be a party token
+    # (stops "in stock" / "in-stock" surviving as a brand compare side).
+    parts = [p for p in normalize_name(raw).split() if p]
+    if len(parts) > 1:
+        return all(_is_party_token(part) for part in parts)
+    token = parts[0] if parts else normalize_name(raw)
     if (
         token in _MAKE_VERBS
         or token in _MAKE_ADVERBS
         or token in _COUNT_STOPWORDS
         or token in _SYSTEM_WORDS
         or token in _ANALYSIS_WORDS
+        or token in _AGENT_UI_NOISE
         or token in _HISTORY_WORDS
         or token in _METRIC_OPERATOR_WORDS
         or token in _MEASURE_PROPERTY_WORDS
+        or token in _AVAILABILITY_STATUS_WORDS
         or token in _TASK_WORDS
+        or token in _MODAL_WORDS
         or token in _RANK_WORDS
         or token in _MATERIAL_WORDS
         or token in _COLOR_WORDS
@@ -1733,6 +1922,7 @@ def _is_party_token(token: str) -> bool:
         or token in _GENDER_VALUES
         or token in _SEASON_WORDS
         or token in _FILTER_NOISE
+        or token in _GRAPH_SCORE_STOPWORDS
         or token in _BREAKDOWN_HEADS
         or token in _BREAKDOWN_SUFFIXES
     ):
@@ -1860,6 +2050,11 @@ def _compare_party_names(question: str) -> list[str]:
             if not a or not b or a == b:
                 continue
             if not (_is_party_token(a) and _is_party_token(b)):
+                continue
+            # Stock-status axes ("in-stock vs mixed") are not brand compares.
+            if a in _AVAILABILITY_STATUS_WORDS or b in _AVAILABILITY_STATUS_WORDS:
+                continue
+            if set(a.split()) & _AVAILABILITY_STATUS_WORDS or set(b.split()) & _AVAILABILITY_STATUS_WORDS:
                 continue
             # Keep original casing for display; filters normalize later.
             return [left, right]
@@ -2640,12 +2835,23 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
             filters.setdefault("material", []).append(token)
         elif (
             token in _GARMENT_TYPE_WORDS
-            and token not in {"shirt", "shirts", "top", "tops"}  # prefer t-shirt / full-phrase detect
+            and token not in {"shirt", "shirts", "top", "tops", "short"}  # prefer phrase detect
             and not filters.get("garment")
             and not filters.get("garment_type")
         ):
-            # Named product type as filter (sweater / knitwear), not a brand.
-            filters.setdefault("garment", []).append(token)
+            # Do not promote a closed lexicon hit alone (unknown English ≠ catalog value).
+            # Only keep it when the full-question phrase detector agrees on a product type.
+            detected = garment_type_from_question(question)
+            det_key = normalize_name(detected or "")
+            tok_key = normalize_name(token)
+            if detected and (
+                tok_key == det_key
+                or tok_key.rstrip("s") == det_key
+                or det_key.rstrip("s") == tok_key
+                or tok_key in det_key
+                or det_key in tok_key
+            ):
+                filters.setdefault("garment", []).append(detected)
         elif re.fullmatch(r"(19|20)\d{2}", token):
             filters.setdefault("season", []).append(token)
         elif token in _FIELD_ALIASES:
@@ -2653,14 +2859,14 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
             index += 1
             continue
         elif group_by:
-            # Breakdown / ranking: leftover party token is brand only when live metadata agrees.
+            # Breakdown / ranking: leftover party token may be the brand
+            # ("Primark colours…"). Never vacuum report English into brand=A|B|C.
             if (
                 _is_party_token(token)
                 and token not in _GARMENT_TYPE_WORDS
                 and (not live_brand_keys or normalize_name(token) in live_brand_keys)
             ):
-                if live_brand_keys:
-                    filters.setdefault("brand", []).append(token)
+                filters.setdefault("brand", []).append(token)
             index += 1
             continue
         elif analysis:
@@ -2773,6 +2979,21 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
             # Count-style "who has more" → brand breakdown.
             group_by = group_by if group_by in {"brand", "buyer"} else "brand"
 
+    # Long briefs dump many leftover English tokens into brand under group_by.
+    # Real multi-party compares come from _compare_party_names (exactly 2) or live inventory.
+    for party_key in ("brand", "buyer"):
+        vals = list(filters.get(party_key) or [])
+        if len(vals) <= 1:
+            continue
+        if live_brand_keys:
+            kept = [v for v in vals if normalize_name(str(v)) in live_brand_keys]
+            if kept:
+                filters[party_key] = kept
+            else:
+                filters.pop(party_key, None)
+        elif len(vals) > 2:
+            filters.pop(party_key, None)
+
     flat: dict[str, str] = {}
     for key, values in filters.items():
         if key in {"brand", "buyer"} and len(values) > 1:
@@ -2800,10 +3021,12 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
         for junk in ("garment", "garment_type", "category", "family", "subfamily"):
             flat.pop(junk, None)
         group_by = None
-    # Price / availability history asks: drop invented facet noise.
+    # Price / availability history asks: drop invented facet noise + assortment flag.
     if _is_price_history_question(question) or _is_availability_history_question(question):
         for junk in ("garment", "garment_type"):
             flat.pop(junk, None)
+        analysis = False
+        group_by = None
 
     # Listing / ranking asks that name a product type: keep garment filter.
     # Prefer full-phrase detect (t-shirt) over raw token leftovers (shirts).
@@ -2857,8 +3080,17 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
     ):
         group_by = "material"
 
-    # "most common … garment type" / "garment types are most common"
-    if group_by is None and re.search(r"\bgarment\s+types?\b", " ".join(tokens)):
+    # "most common … garment type" / "which garment types" / "by garment type"
+    # Not: "explain using garment_type / subfamily roles" or "counts per source".
+    if group_by is None and re.search(
+        r"\b(?:"
+        r"(?:which|what|list|show|rank|top|most\s+common|common)\s+garment\s+types?\b|"
+        r"\bgarment\s+types?\s+(?:are\s+)?(?:most\s+)?common\b|"
+        r"\b(?:by|per)\s+garment\s+types?\b|"
+        r"\bgarment\s+types?\s+wise\b"
+        r")",
+        " ".join(tokens),
+    ):
         group_by = "garment_type"
     # Construction / fit attribute frequency ("what construction … most common").
     if group_by is None and re.search(
@@ -2874,6 +3106,13 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
             else "fit"
         )
 
+    # Ground leftover content tokens onto live kg_stats values (category/garment/…)
+    # before inventing a brand — typos like "swweaters" → category=sweater.
+    flat = ground_free_tokens_against_stats(
+        question,
+        flat,
+        preferred_graphs=preferred_graphs,
+    )
     # "PLMEX Zara …" / "ecom Primark …" — catalog token then party name.
     if not flat.get("brand") and not flat.get("buyer"):
         for index, token in enumerate(tokens[:-1]):
@@ -2881,11 +3120,15 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
                 continue
             nxt = tokens[index + 1]
             if _is_party_token(nxt) and nxt not in _GARMENT_TYPE_WORDS:
+                # Only attach when the next token is a live brand (never a typo garment).
+                if live_brand_keys and normalize_name(nxt) not in live_brand_keys:
+                    continue
                 flat["brand"] = nxt
                 flat["buyer"] = nxt
                 break
     # Lone party in "how many Primark products…" when no brand was attached yet.
-    if not flat.get("brand") and not flat.get("buyer"):
+    # Unknown tokens (swweaters) are NOT brands — stats grounding above owns those.
+    if not flat.get("brand") and not flat.get("buyer") and live_brand_keys:
         parties = [
             tok
             for tok in tokens
@@ -2893,6 +3136,7 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
             and tok not in _GARMENT_TYPE_WORDS
             and tok not in _GRAPH_SCOPE_NOISE
             and tok not in _SYSTEM_WORDS
+            and normalize_name(tok) in live_brand_keys
         ]
         if len(parties) == 1:
             flat["brand"] = parties[0]
@@ -2930,6 +3174,127 @@ def _party_filter_core(value: str) -> str:
     text = re.sub(r"^(at|from|for|by|of)\s+", "", text)
     text = re.sub(r"\b(brands?|buyers?)\b", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def ground_free_tokens_against_stats(
+    question: str,
+    filters: dict | None = None,
+    *,
+    preferred_graphs: list[str] | None = None,
+    generated=None,
+) -> dict:
+    """Map free question tokens onto live kg_stats values (schema-driven).
+
+    Used when the keyword planner missed a typo/near-miss ("swweaters" → sweater)
+    so we ground against indexed catalog values instead of inventing a brand.
+    Prefer type/hierarchy dims over brand/buyer so typos do not become parties.
+    """
+
+    out = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
+    if any(
+        out.get(k)
+        for k in (
+            "garment",
+            "garment_type",
+            "category",
+            "family",
+            "subfamily",
+            "brand",
+            "buyer",
+            "color",
+            "material",
+            "gender",
+        )
+    ):
+        return out
+    try:
+        from knowledge_graph.retrieval.kg_stats import find_value_in_stats, stats_available
+    except Exception:
+        return out
+
+    gids: list[str] = []
+    for gid in preferred_graphs or []:
+        if gid and str(gid) not in gids:
+            gids.append(str(gid))
+    # Prefer graphs the question named (plm / ecom); avoid importing QU (cycle risk).
+    low = normalize_name(question)
+    if re.search(r"\b(plm|plmex)\b", low) and "plmex_products" not in gids:
+        gids.insert(0, "plmex_products")
+    if re.search(r"\b(ecom|ecomm|ecommerce|commerce)\b", low) and "ecom_products" not in gids:
+        gids.insert(0, "ecom_products")
+    if not gids:
+        gids = ["plmex_products", "ecom_products"]
+
+    prefer = (
+        "category",
+        "garment_type",
+        "family",
+        "subfamily",
+        "plm_main_category",
+        "plm_sub_category",
+        "plm_sub_sub_category",
+        "section",
+    )
+    type_attrs = set(prefer)
+    # Report / ranking English — never treat as a misspelled product type.
+    # ("a short note", "top constructions", "fibre blends dominate", …)
+    ground_skip = (
+        _SYSTEM_WORDS
+        | _GRAPH_SCOPE_NOISE
+        | _GRAPH_SCORE_STOPWORDS
+        | _FILTER_NOISE
+        | _GARMENT_TYPE_WORDS
+        | _words(
+            "short thin long full every note notes fibre fiber blend blends "
+            "composition compositions construction constructions concentrated "
+            "produce assortment scrape report reports mix mixes dominate dominant "
+            "material materials commerce scrape brands brand"
+        )
+    )
+    tokens = [
+        tok
+        for tok in _question_tokens(question)
+        if tok
+        and len(tok) >= 4
+        and _is_party_token(tok)  # leftover content word, not grammar
+        and tok not in ground_skip
+    ]
+    best: tuple[float, str, str, str] | None = None  # score, gid, attr, canon
+    for tok in tokens:
+        tok_key = normalize_name(tok)
+        for gid in gids:
+            if not stats_available(gid, generated):
+                continue
+            hit = find_value_in_stats(
+                gid, tok, generated=generated, prefer_attrs=prefer, min_score=0.86
+            )
+            if hit is None:
+                continue
+            attr, canon, _n = hit
+            if attr not in type_attrs:
+                continue
+            canon_key = normalize_name(canon)
+            # Exact / simple-plural hits belong to enrich/lexicon — this helper is
+            # for typos ("swweaters"). Exact "short"↔category short is report noise.
+            if tok_key == canon_key or tok_key.rstrip("s") == canon_key.rstrip("s"):
+                continue
+            from difflib import SequenceMatcher
+
+            score = float(SequenceMatcher(None, tok_key, canon_key).ratio())
+            if best is None or score > best[0]:
+                best = (score, gid, attr, canon)
+    if best is None:
+        return out
+    _score, _gid, attr, canon = best
+    if attr in {"category", "garment_type", "family", "subfamily"}:
+        # Planner / retrieve treat product-type as garment; stats resolve maps later.
+        out["garment"] = canon
+    else:
+        out[attr] = canon
+    if _gid and _gid not in (preferred_graphs or []):
+        # Caller may pick preferred_graphs from the plan; leave that to preferred_graphs_from_question.
+        pass
+    return out
 
 
 def promote_live_brand_filters(filters: dict | None, brand_names: list[str] | set[str] | None) -> dict:
@@ -3083,6 +3448,33 @@ def match_live_party_value(raw: str, allowed: list[str] | set[str] | None) -> st
         if key.replace(" ", "").replace("-", "").replace("_", "") == compact:
             return surface
     return None
+
+
+def ground_filters_against_live_metadata(
+    platform,
+    filters: dict | None,
+    *,
+    question: str = "",
+) -> dict:
+    """Grammar-sanitize then keep only categorical values present in live metadata.
+
+    Applies to every strict field (brand, buyer, color, material, availability, …),
+    not only parties. Call after LLM/keyword extraction so invented values never
+    reach Scope or Cypher.
+    """
+
+    cleaned = sanitize_party_filters(dict(filters or {}))
+    if platform is None:
+        return cleaned
+    try:
+        from fashion_brain.planning.metadata_resolver import (
+            ground_filters_against_live_metadata as _meta_ground,
+        )
+
+        return _meta_ground(platform, cleaned, question=question)
+    except Exception:
+        LOGGER.debug("ground_filters_against_live_metadata skipped", exc_info=True)
+        return cleaned
 
 
 def ground_party_filters_against_metadata(
@@ -3240,8 +3632,11 @@ def _is_grammar_party_name(name: str) -> bool:
         | _MODAL_WORDS
         | _METRIC_OPERATOR_WORDS
         | _ANALYSIS_WORDS
+        | _AGENT_UI_NOISE
         | _RANK_WORDS
         | _MEASURE_PROPERTY_WORDS
+        | _AVAILABILITY_STATUS_WORDS
+        | _FILTER_NOISE
         | _CURRENCY_PARTY_NOISE
     )
     # Whole value is stopword grammar — never a real brand/buyer filter from the question.
@@ -3679,23 +4074,29 @@ def plan_catalog_question(
     model_plan["filters"] = _ground_filters(model_plan["filters"], texts)
     if not carry:
         model_plan["filters"] = _ground_filters(model_plan["filters"], [question])
-    # User said it (_ground_filters) + it exists in that field (repair_filters).
+    # User said it (_ground_filters) + it exists in live metadata for that field.
     try:
-        idx_fields = list(
-            dict.fromkeys(
-                [
-                    *(catalog.all_attributes() or []),
-                    *(model_plan.get("filters") or {}).keys(),
-                ]
-            )
+        model_plan["filters"] = ground_filters_against_live_metadata(
+            platform, model_plan.get("filters") or {}, question=question
         )
-        index = build_value_index(platform, idx_fields) if idx_fields else {}
-        if index:
-            model_plan["filters"], _unresolved = repair_filters(
-                model_plan["filters"], index
-            )
     except Exception:
-        LOGGER.debug("repair_filters after _ground_filters skipped", exc_info=True)
+        LOGGER.debug("meta ground after _ground_filters skipped", exc_info=True)
+        try:
+            idx_fields = list(
+                dict.fromkeys(
+                    [
+                        *(catalog.all_attributes() or []),
+                        *(model_plan.get("filters") or {}).keys(),
+                    ]
+                )
+            )
+            index = build_value_index(platform, idx_fields) if idx_fields else {}
+            if index:
+                model_plan["filters"], _unresolved = repair_filters(
+                    model_plan["filters"], index
+                )
+        except Exception:
+            LOGGER.debug("repair_filters after _ground_filters skipped", exc_info=True)
     _promote_type_filters(model_plan["filters"])
     model_plan["filters"] = sanitize_party_filters(model_plan["filters"])
     _normalize_named_season(model_plan)

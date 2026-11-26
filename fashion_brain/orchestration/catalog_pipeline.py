@@ -229,11 +229,14 @@ def _prefer_ecom_for_price_history(
         from knowledge_graph.retrieval.ecom import price_history_mode, registry_product_graphs
 
         q = question or ""
+        from fashion_brain.ask import is_availability_price_ops_brief_ask
+
         if not (
             is_price_trend_analysis_ask(q)
             or _is_price_history_question(q)
             or price_history_mode(q)
             or _is_availability_history_question(q)
+            or is_availability_price_ops_brief_ask(q)
         ):
             return intention
     except Exception:
@@ -999,6 +1002,407 @@ def _try_kg_stats_meta_answer(
         platform=platform,
     )
     return retrieved, intention_out, str(gid)
+
+
+def _normalize_cross_catalog_type_intention(
+    intention: Intention,
+    question: str,
+    product_ids: list[str],
+) -> None:
+    """Undo agent remaps: brand=thinking, subfamily=sweater, group_by=subfamily.
+
+    Mentions of garment_type/subfamily in the brief are *role guidance*, not
+    exact filter values or a breakdown dimension.
+    """
+
+    if len(product_ids) < 2:
+        return
+    text = (question or "").casefold()
+    if not re.search(r"\b(compare|versus|vs\.?|across|between)\b", text):
+        return
+    token = _cross_catalog_type_token(dict(intention.filters or {}), question)
+    if not token:
+        return
+    from knowledge_graph.ontology import normalize_name
+
+    want = normalize_name(token)
+    filters = dict(intention.filters or {})
+    for key in ("brand", "buyer"):
+        if _is_grammar_party_safe(filters.get(key)):
+            filters.pop(key, None)
+    # Role facets must not hold the type token as an exact value.
+    for key in ("subfamily", "family", "garment_type", "category", "plm_sub_category", "plm_sub_sub_category"):
+        val = filters.get(key)
+        if val in (None, ""):
+            continue
+        if normalize_name(str(val)) == want or want in normalize_name(str(val)).split():
+            filters.pop(key, None)
+    filters["garment"] = token
+    intention.filters = filters
+    # Separate counts per source — not a single-graph subfamily breakdown.
+    if str(intention.group_by or "").casefold() in {
+        "subfamily",
+        "family",
+        "garment_type",
+        "category",
+    }:
+        intention.group_by = None
+    metrics = {str(m).casefold() for m in (intention.metrics or []) if m}
+    if "product_count" not in metrics and "count" not in metrics:
+        intention.metrics = [*(intention.metrics or []), "product_count"]
+    if intention.intent in {"analysis", "products", "breakdown", "other", ""}:
+        intention.intent = "shared_products"
+    prefs = list(intention.preferred_graphs or [])
+    for gid in product_ids:
+        if gid not in prefs:
+            prefs.append(gid)
+    intention.preferred_graphs = prefs
+
+
+def _is_grammar_party_safe(value) -> bool:
+    if value in (None, ""):
+        return False
+    try:
+        from fashion_brain.ask import _is_grammar_party_name
+
+        return _is_grammar_party_name(str(value))
+    except Exception:
+        low = str(value).casefold().strip()
+        return low in {"thinking", "providing", "hidden", "analyze", "analysis"}
+
+
+def _cross_catalog_type_token(filters: dict | None, question: str) -> str | None:
+    """Garment/type token for cross-catalog compare (e.g. sweater)."""
+
+    for key in ("garment", "garment_type", "category", "subfamily", "family"):
+        raw = (filters or {}).get(key)
+        if raw in (None, "") or "|" in str(raw):
+            continue
+        token = str(raw).strip()
+        if token and 2 < len(token) <= 40:
+            return token
+    text = (question or "").casefold()
+    m = re.search(
+        r"\b(sweaters?|knitwear|cardigans?|jumpers?|hoodies?|dresses?|jeans|t[\s-]?shirts?)\b",
+        text,
+    )
+    return m.group(1) if m else None
+
+
+def _type_token_stems(token: str) -> list[str]:
+    base = re.sub(r"[^a-z0-9]+", "", (token or "").casefold())
+    if not base:
+        return []
+    stems = {base, base.rstrip("s") if len(base) > 4 else base}
+    # Knit-top family for sweater / jumper / cardigan compares.
+    if "sweat" in base or base in {"jumper", "jumpers", "cardigan", "cardigans", "knitwear"}:
+        stems.update(
+            {
+                "sweat",
+                "sweater",
+                "jumper",
+                "cardigan",
+                "knitwear",
+                "knit",
+                "pullover",
+            }
+        )
+    return [s for s in stems if len(s) >= 4]
+
+
+def _type_label_closeness(token: str, label: str) -> float:
+    """Score how close a facet label is to the asked type (prefix/suffix/compound).
+
+    Higher = closer. Exact/plural ≈ 1.0; ``cardigan sweater`` / ``cardigans sweaters``
+    for sweater ≈ 0.9+; retail synonyms (jumper/cardigan) mid; loose sweatshirt/knit lower.
+    """
+
+    from knowledge_graph.ontology import normalize_name
+
+    want = normalize_name(token)
+    lab = normalize_name(label)
+    if not want or not lab:
+        return 0.0
+    want_stem = want.rstrip("s") if len(want) > 4 else want
+    lab_stem = lab.rstrip("s") if len(lab) > 4 else lab
+    if lab == want or lab_stem == want_stem:
+        return 1.0
+    parts = lab.split()
+    part_stems = {(p.rstrip("s") if len(p) > 4 else p) for p in parts}
+    compact_lab = lab.replace(" ", "")
+    # Literal token as prefix/suffix/infix in the label (cardigans sweaters, sweater vest).
+    if want_stem in part_stems or want in parts:
+        if parts[-1].rstrip("s") == want_stem or parts[0].rstrip("s") == want_stem:
+            return 0.94
+        return 0.9
+    if compact_lab.startswith(want_stem) or compact_lab.endswith(want_stem):
+        return 0.88
+    if len(want_stem) >= 5 and want_stem in compact_lab:
+        # Avoid sweatshirt≈sweater false friend unless "sweater" itself appears.
+        if want_stem == "sweater" and "sweater" not in lab and "sweaters" not in lab:
+            pass  # fall through to synonym scoring
+        else:
+            return 0.82
+    # Broader same-meaning retail synonyms (jumper/cardigan for sweater asks).
+    synonym_stems = {
+        s
+        for s in _type_token_stems(token)
+        if s not in {want_stem, "sweat", "knit"} and s != want
+    }
+    for stem in synonym_stems:
+        if stem in part_stems or any(p.startswith(stem) or p.endswith(stem) for p in parts):
+            return 0.7
+        if stem in compact_lab:
+            return 0.65
+    # Loose family only (knitwear / sweatshirt) — last resort when exact is sparse.
+    for stem in ("knitwear", "knit", "sweatshirt", "sweat"):
+        if stem in lab or stem in compact_lab:
+            return 0.55
+    return 0.0
+
+
+def _try_cross_catalog_type_compare(
+    platform: Platform,
+    *,
+    question: str,
+    intention: Intention,
+    product_ids: list[str],
+) -> Retrieved | None:
+    """Separate per-source type counts from kg_stats — skip multi-graph Text2Cypher.
+
+    A17-style asks: compare sweater / sweater-like across PLMEX vs ecom, warn that
+    category is a false friend, and report garment_type / subfamily roles separately.
+    When an exact primary is missing or sparse, surface closest prefix/suffix compounds
+    (e.g. cardigan sweater) with a short clarifying sentence.
+    """
+
+    if len(product_ids) < 2:
+        return None
+    text = (question or "").casefold()
+    if not re.search(r"\b(compare|versus|vs\.?|across|between)\b", text):
+        return None
+    metrics = {str(m).casefold() for m in (getattr(intention, "metrics", None) or []) if m}
+    intent = str(getattr(intention, "intent", "") or "").casefold()
+    wants_counts = bool(
+        metrics & {"product_count", "count", "facet_count"}
+        or intent in {"shared_products", "shared", "product_count", "count"}
+        or re.search(r"\b(counts?|how many|separate)\b", text)
+    )
+    if not wants_counts:
+        return None
+    token = _cross_catalog_type_token(dict(intention.filters or {}), question)
+    if not token:
+        return None
+
+    try:
+        from knowledge_graph.models import EvidenceItem
+        from knowledge_graph.retrieval.kg_stats import (
+            answer_simple_count,
+            dimension_bucket,
+            resolve_filters_against_stats,
+            stats_available,
+        )
+    except Exception:
+        return None
+
+    generated = getattr(getattr(platform, "settings", None), "generated", None)
+    # Role facets per source — never merge category values across graphs.
+    role_by_graph = {
+        "plmex": ("category", "garment_type", "plm_sub_sub_category", "plm_sub_category"),
+        "ecom": ("category", "subfamily", "family"),
+    }
+
+    lines: list[str] = [
+        f"## Cross-catalog compare: `{token}`",
+        "",
+        "**Category is a false friend** across PLMEX and e-commerce — the same "
+        "string does not mean the same thing. Counts below stay **per source**, "
+        "using each graph's type roles (`garment_type` / `plm_sub_*` on PLMEX, "
+        "`subfamily` / `family` on e-commerce) rather than merging category labels.",
+        "",
+    ]
+    evidence: list[EvidenceItem] = []
+    any_hit = False
+
+    for gid in product_ids:
+        if not stats_available(gid, generated):
+            lines.append(f"### {gid}")
+            lines.append("No kg_stats shard available for this source.")
+            lines.append("")
+            continue
+        gkey = "plmex" if "plm" in gid.casefold() else "ecom"
+        roles = role_by_graph.get(gkey, ("category", "subfamily", "garment_type"))
+        resolved = resolve_filters_against_stats(
+            gid, {"garment": token}, generated=generated
+        ) or {}
+        primary = (
+            answer_simple_count(gid, filters=resolved, generated=generated)
+            if resolved
+            else None
+        )
+        primary_n = int(primary["n"]) if primary and primary.get("n") is not None else 0
+        primary_attr = (
+            str(primary.get("attribute") or next(iter(resolved), "type"))
+            if primary
+            else ""
+        )
+        primary_val = (
+            str(primary.get("value") or next(iter(resolved.values()), token))
+            if primary
+            else ""
+        )
+
+        # Closest facet labels (prefix/suffix/compound), ranked by closeness then count.
+        neighbors: list[tuple[float, int, str, str]] = []
+        for attr in roles:
+            try:
+                values = dimension_bucket(gid, attr, generated=generated) or {}
+            except Exception:
+                values = {}
+            if not isinstance(values, dict):
+                continue
+            for label, n in values.items():
+                try:
+                    count = int(n)
+                except Exception:
+                    continue
+                if count <= 0:
+                    continue
+                score = _type_label_closeness(token, str(label))
+                if score < 0.55:
+                    continue
+                # Skip the exact primary row.
+                if (
+                    primary
+                    and primary_attr.casefold() == attr.casefold()
+                    and primary_val.casefold() == str(label).casefold()
+                ):
+                    continue
+                if score >= 0.99:
+                    continue
+                neighbors.append((score, count, attr, str(label)))
+        neighbors.sort(key=lambda item: (-item[0], -item[1], item[2], item[3].casefold()))
+        closest = neighbors[:8]
+        compound = [row for row in closest if row[0] >= 0.85]
+        related_big = [row for row in closest if row[1] >= max(10, primary_n * 5)]
+        # Sparse exact: missing, tiny absolute, or clearly outnumbered by
+        # closer compounds / same-family labels (ecom sweaters=1 vs jumpers/cardigans).
+        sparse_primary = primary_n <= 0 or (
+            primary_n <= 5 and bool(closest) and (bool(compound) or bool(related_big))
+        )
+
+        lines.append(f"### {gid}")
+        if primary_n > 0:
+            any_hit = True
+            lines.append(
+                f"- Exact/primary match on **{primary_attr}** = `{primary_val}` → "
+                f"**{primary_n:,}** products"
+            )
+            evidence.append(
+                EvidenceItem(
+                    source_id=gid,
+                    record_id=f"kg_stats:{primary_attr}",
+                    title=f"{gid} {primary_attr}={primary_val}",
+                    excerpt=f"n={primary_n}",
+                    source_path="kg_stats",
+                    verification_status="observed",
+                    graph=gid,
+                    node_id=None,
+                    synthetic=False,
+                )
+            )
+        else:
+            lines.append(
+                f"- No exact `{token}` value on this source's indexed type facets."
+            )
+
+        if closest:
+            any_hit = True
+            # Split: labels that literally carry the token vs broader synonyms.
+            literal = [row for row in closest if row[0] >= 0.82]
+            synonyms = [row for row in closest if 0.55 <= row[0] < 0.82]
+            if sparse_primary:
+                lit_bits: list[str] = []
+                seen: set[str] = set()
+                for _s, n, _a, lab in literal:
+                    key = lab.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    lit_bits.append(f"`{lab}` ({n:,})")
+                    if len(lit_bits) >= 4:
+                        break
+                syn_bits: list[str] = []
+                for _s, n, _a, lab in synonyms:
+                    key = lab.casefold()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    syn_bits.append(f"`{lab}` ({n:,})")
+                    if len(syn_bits) >= 4:
+                        break
+                if primary_n <= 0:
+                    lines.append(
+                        f"- **Note:** Exact `{token}` was not found on this source."
+                    )
+                else:
+                    lines.append(
+                        f"- **Note:** Exact `{token}` is almost unused here "
+                        f"(**{primary_n:,}** on `{primary_val}`). Prefer prefix/suffix "
+                        f"compounds and same-meaning type roles below — do **not** treat "
+                        f"{primary_n:,} as the full sweater-like assortment."
+                    )
+                if lit_bits:
+                    lines.append(
+                        f"- Closest labels that include `{token}` "
+                        f"(prefix/suffix/compound): {', '.join(lit_bits)}."
+                    )
+                if syn_bits:
+                    lines.append(
+                        f"- Broader sweater-like type roles on this source "
+                        f"(jumper/cardigan/knitwear — not merged with PLM): "
+                        f"{', '.join(syn_bits)}."
+                    )
+            else:
+                lines.append(
+                    f"- Related **{gkey}** type-role values (not merged with the other source):"
+                )
+            # Literal compounds first, then synonyms — always show the ranked rows.
+            ordered = literal + synonyms
+            shown: set[tuple[str, str]] = set()
+            for score, count, attr, label in ordered[:10]:
+                key = (attr.casefold(), label.casefold())
+                if key in shown:
+                    continue
+                shown.add(key)
+                if score >= 0.82:
+                    tag = "contains-token"
+                elif score >= 0.65:
+                    tag = "synonym"
+                else:
+                    tag = "related"
+                lines.append(f"  - ({tag}) `{attr}` = `{label}` → **{count:,}**")
+        lines.append("")
+
+    if not any_hit:
+        return None
+
+    lines.append(
+        "_Totals are not added across sources — category/subfamily vocabularies differ._"
+    )
+    return Retrieved(
+        text="\n".join(lines),
+        evidence=evidence,
+        caveats=[
+            "Answered from kg_stats per source (skipped multi-graph Text2Cypher).",
+            "Category values were not merged across graphs.",
+            "Sparse exact matches promote closest prefix/suffix compounds.",
+        ],
+        unavailable=[],
+        synthetic_data=False,
+        response_type="comparison",
+        retrieve_mode="kg_stats",
+    )
 
 
 def _try_kg_stats_facet_ranking(
@@ -1992,6 +2396,113 @@ def _context_from_turn_plan(plan, question: str) -> ContextDecision:
     )
 
 
+def _retrieve_availability_price_ops_brief(
+    platform: Platform,
+    principal: Principal,
+    *,
+    question: str,
+    filters: dict,
+    graph_id: str | None,
+    state: dict,
+    intention,
+    context,
+    conversation_state: dict | None,
+):
+    """Stock-status mix + price-event concentration by availability (A16 ops brief).
+
+    Never falls through to full attribute-wise assortment analysis.
+    """
+
+    from contextlib import nullcontext
+
+    try:
+        from fashion_brain.ask import (
+            is_availability_price_ops_brief_ask,
+            live_brand_names,
+            live_brands_mentioned,
+            sanitize_party_filters,
+        )
+        from fashion_brain.stage_timing import timed
+        from knowledge_graph.retrieval.ecom import (
+            answer_availability_price_ops_brief,
+            clean_product_filters,
+            registry_product_graphs,
+        )
+    except Exception:
+        return None
+
+    q = str(question or "").strip()
+    if not q or not is_availability_price_ops_brief_ask(q):
+        return None
+
+    clean = clean_product_filters(sanitize_party_filters(dict(filters or {})))
+    if not (clean.get("brand") or clean.get("buyer")):
+        try:
+            names = live_brand_names(platform, "ecom_products") or live_brand_names(platform)
+            hits = live_brands_mentioned(q, names)
+            if hits:
+                clean["brand"] = hits[0]
+        except Exception:
+            pass
+
+    gid = str(graph_id or "").strip() or None
+    if not gid or "plm" in gid.casefold():
+        try:
+            regs = list(registry_product_graphs(platform) or [])
+            gid = next((g for g in regs if "ecom" in str(g).casefold()), None) or (
+                regs[0] if regs else "ecom_products"
+            )
+        except Exception:
+            gid = "ecom_products"
+
+    try:
+        with timed("kg_retrieve", graph_id=gid, availability_price_ops_brief=True):
+            hit = answer_availability_price_ops_brief(platform, str(gid), q, clean)
+    except Exception:
+        LOGGER.debug("availability-price ops brief retrieve failed", exc_info=True)
+        return None
+    if hit is None:
+        return None
+    text, evidence, caveats = hit
+    result_id = f"result_{uuid.uuid4().hex[:12]}"
+    retrieved = Retrieved(
+        text=text,
+        evidence=list(evidence or []),
+        caveats=list(caveats or []),
+        unavailable=[],
+        result_id=result_id,
+        resolved={"filters": dict(clean), "graph_id": gid, "ops_brief": "availability_price"},
+    )
+    out_intention = intention if intention is not None else Intention(intent="product_count")
+    out_intention.analysis = False
+    out_intention.filters = dict(clean)
+    out_intention.preferred_graphs = [str(gid)]
+    if getattr(out_intention, "retrieve_mode", None) == "analytical_tool":
+        out_intention.retrieve_mode = "template"
+    state["active_filters"] = dict(clean)
+    state["group_by"] = None
+    state["last_result_id"] = result_id
+    state["last_retrieved_text"] = retrieved.text
+    state["last_graph_id"] = str(gid)
+    try:
+        from fashion_brain.ask import catalog_metric_family
+
+        state["last_metric_family"] = catalog_metric_family(q)
+    except Exception:
+        state["last_metric_family"] = "availability_price"
+    _remember_graph(state, [str(gid)], str(gid))
+    if conversation_state is not None:
+        conversation_state.clear()
+        conversation_state.update(state)
+    trace_step(
+        "retrieve",
+        "Availability × price ops brief — skipped assortment analysis",
+        graph_id=gid,
+        filters=clean,
+    )
+    return retrieved, ["availability_price_ops_brief", str(gid)], out_intention, context, None
+
+
 def _retrieve_confirmed_price_trend(
     platform: Platform,
     principal: Principal,
@@ -2380,6 +2891,8 @@ def draft_catalog_orchestrated(
             from fashion_brain.ask import (
                 enrich_ecom_question_filters,
                 enrich_scope_from_question,
+                ground_free_tokens_against_stats,
+                is_catalog_dataset_total_ask,
                 live_brand_names,
                 preferred_graphs_from_question,
             )
@@ -2403,6 +2916,19 @@ def draft_catalog_orchestrated(
                     filters = clean_product_filters(
                         enrich_ecom_question_filters(question, grounded)
                     )
+                    # Typos / near-misses ("swweaters") → live category/garment values.
+                    filters = clean_product_filters(
+                        ground_free_tokens_against_stats(
+                            question,
+                            filters,
+                            preferred_graphs=explicit_named or named or (
+                                [sticky] if sticky else []
+                            ),
+                            generated=getattr(
+                                getattr(platform, "settings", None), "generated", None
+                            ),
+                        )
+                    )
             except Exception:
                 filters = {}
             gid_hint = _resolve_meta_count_graph(
@@ -2415,8 +2941,14 @@ def draft_catalog_orchestrated(
                 state=state,
                 filters=filters,
             )
+            # Filtered count that still has no grounded filters → skip meta total;
+            # fall through so LLM/planner can resolve typos against schema values.
+            ungrounded_count = (
+                not normalize_filter_dict(filters)
+                and not is_catalog_dataset_total_ask(question)
+            )
             # Multi-filter needs Cypher — do not fast-path.
-            if len(normalize_filter_dict(filters)) < 2:
+            if (not ungrounded_count) and len(normalize_filter_dict(filters)) < 2:
                 facet_hit = _try_kg_stats_facet_ranking(
                     platform,
                     question=question,
@@ -3180,16 +3712,60 @@ def draft_catalog_orchestrated(
     temporal_ask = False
     avail_mode = None
     price_mode = None
+    ops_brief_ask = False
     try:
-        from fashion_brain.ask import availability_history_mode, temporal_count_entity
+        from fashion_brain.ask import (
+            availability_history_mode,
+            is_availability_price_ops_brief_ask,
+            live_brand_names,
+            live_brands_mentioned,
+            temporal_count_entity,
+        )
         from knowledge_graph.retrieval.ecom import price_history_mode
 
         avail_mode = availability_history_mode(question)
         price_mode = price_history_mode(question)
+        ops_brief_ask = is_availability_price_ops_brief_ask(question)
         temporal_ask = bool(price_mode or avail_mode or temporal_count_entity(question))
     except Exception:
         temporal_ask = False
-    if temporal_ask:
+        ops_brief_ask = False
+    if ops_brief_ask:
+        # A16: availability × price ops brief — never full assortment analysis.
+        intention.analysis = False
+        intention.group_by = None
+        if intention.intent in {"breakdown", "count", "list", "other", "analysis"}:
+            intention.intent = "product_count"
+        if not (intention.filters or {}).get("brand") and not (intention.filters or {}).get("buyer"):
+            try:
+                names = live_brand_names(platform, "ecom_products") or live_brand_names(platform)
+                hits = live_brands_mentioned(question, names)
+                if hits:
+                    intention.filters = dict(intention.filters or {})
+                    intention.filters["brand"] = hits[0]
+            except Exception:
+                pass
+        intention.metrics = list(
+            dict.fromkeys([*(intention.metrics or []), "availability", "price"])
+        )
+        if getattr(intention, "retrieve_mode", None) == "analytical_tool":
+            intention.retrieve_mode = "template"
+    elif bool(getattr(intention, "analysis", False)) and not (
+        (intention.filters or {}).get("brand") or (intention.filters or {}).get("buyer")
+    ):
+        # Full merchant analysis named a live brand in prose but filters were dropped.
+        try:
+            names = live_brand_names(platform, "ecom_products") or live_brand_names(platform)
+            hits = live_brands_mentioned(question, names)
+            if len(hits) == 1:
+                intention.filters = dict(intention.filters or {})
+                intention.filters["brand"] = hits[0]
+            elif len(hits) >= 2:
+                intention.filters = dict(intention.filters or {})
+                intention.filters["brand"] = " | ".join(hits[:4])
+        except Exception:
+            pass
+    if temporal_ask and not ops_brief_ask:
         # Temporal templates key off product_count; never demote them to breakdown
         # just because a prior turn carried a group_by.
         if intention.intent in {"breakdown", "count", "list", "other", "product_count"}:
@@ -3205,7 +3781,7 @@ def draft_catalog_orchestrated(
             intention.group_by = "category"
         else:
             intention.group_by = None
-    elif group_by:
+    elif group_by and not ops_brief_ask:
         intention.group_by = group_by
         if context.is_contextual and intention.intent in {
             "product_count",
@@ -3239,6 +3815,54 @@ def draft_catalog_orchestrated(
         intention.filters = cleaned_filters
     except Exception:
         pass
+
+    # Cross-catalog type compare (A17): agents often invent brand=thinking and remap
+    # garment→subfamily=sweater because the brief mentions subfamily *roles*. Fix
+    # filters, answer from kg_stats per source, and never await clarification.
+    product_ids_for_cross = _product_graph_ids(
+        list(getattr(intention, "preferred_graphs", None) or [])
+        or list(graph_ids or [])
+        or ([graph_id] if graph_id else []),
+        graph_id,
+    )
+    if len(product_ids_for_cross) < 2:
+        named = _explicit_graphs_in_question(source_question or question, platform)
+        if len(named) >= 2:
+            product_ids_for_cross = named
+    _normalize_cross_catalog_type_intention(
+        intention, source_question or question, product_ids_for_cross
+    )
+    cross_early = _try_cross_catalog_type_compare(
+        platform,
+        question=source_question or question,
+        intention=intention,
+        product_ids=product_ids_for_cross,
+    )
+    if cross_early is not None:
+        result_id = f"result_{uuid.uuid4().hex[:12]}"
+        cross_early.result_id = result_id
+        state.pop("clarification", None)
+        state["active_filters"] = dict(intention.filters or {})
+        state["group_by"] = None
+        state["last_result_id"] = result_id
+        state["last_retrieved_text"] = cross_early.text
+        _remember_graph(state, product_ids_for_cross, product_ids_for_cross[0])
+        if conversation_state is not None:
+            conversation_state.clear()
+            conversation_state.update(state)
+        trace_step(
+            "retrieve",
+            "Cross-catalog type compare from kg_stats before filter gate",
+            graphs=product_ids_for_cross,
+            filters=intention.filters,
+        )
+        return (
+            cross_early,
+            [intention.intent or "shared_products", "kg_stats", "cross_catalog", *product_ids_for_cross],
+            intention,
+            context,
+            None,
+        )
 
     # Strict metadata-grounded filter gate: never pass unresolved values into Cypher.
     # Empty filters (catalog totals) pass. Pending understanding_plan resumes here.
@@ -3494,16 +4118,34 @@ def draft_catalog_orchestrated(
 
     # Graph-agnostic analysis tool path (any product KG — not ecom-only).
     # Full analysis (all facets) and focused breakdown (group_by one facet) share this engine.
-    # Never run assortment analysis for price-history / movers asks.
+    # Never run assortment analysis for price-history / movers / availability-price ops briefs.
     try:
+        from fashion_brain.ask import is_availability_price_ops_brief_ask
         from knowledge_graph.retrieval.ecom import price_history_mode as _ph_gate
 
-        if _ph_gate(effective_question or question):
+        q_gate = effective_question or question
+        if _ph_gate(q_gate) or is_availability_price_ops_brief_ask(q_gate):
             intention.analysis = False
             if getattr(intention, "retrieve_mode", None) == "analytical_tool":
                 intention.retrieve_mode = "template"
     except Exception:
         pass
+
+    # A16-style ops brief: stock-status mix + price events by availability (not full assortment).
+    ops_brief_hit = _retrieve_availability_price_ops_brief(
+        platform,
+        principal,
+        question=source_question or question,
+        filters=dict(intention.filters or {}),
+        graph_id=graph_id or (product_ids[0] if product_ids else None),
+        state=state,
+        intention=intention,
+        context=context,
+        conversation_state=conversation_state,
+    )
+    if ops_brief_hit is not None:
+        return ops_brief_hit
+
     if (
         getattr(intention, "retrieve_mode", None) == "analytical_tool"
         or bool(getattr(intention, "analysis", False))
@@ -3589,6 +4231,37 @@ def draft_catalog_orchestrated(
             or bool(getattr(intention, "suggest", False))
         )
     ):
+        # Separate per-source type counts from kg_stats — avoid multi-graph Text2Cypher
+        # (schema×2 + brands often overflows the model and self-heals for many minutes).
+        cross_stats = _try_cross_catalog_type_compare(
+            platform,
+            question=effective_question or question,
+            intention=intention,
+            product_ids=product_ids,
+        )
+        if cross_stats is not None:
+            cross_stats.result_id = result_id
+            state["active_filters"] = dict(intention.filters or {})
+            state["group_by"] = intention.group_by
+            state["last_result_id"] = result_id
+            state["last_retrieved_text"] = cross_stats.text
+            _remember_graph(state, product_ids, product_ids[0])
+            if conversation_state is not None:
+                conversation_state.clear()
+                conversation_state.update(state)
+            trace_step(
+                "retrieve",
+                "Cross-catalog type compare from kg_stats — skipped Text2Cypher",
+                graphs=product_ids,
+                filters=intention.filters,
+            )
+            return (
+                cross_stats,
+                [intention.intent, "kg_stats", "cross_catalog", *product_ids],
+                intention,
+                context,
+                choice,
+            )
         # Compare asks + dual-catalog specs (ecom retail + PLM development) in one retrieve.
         with timed("kg_retrieve", graphs=product_ids, multi_graph_cypher=True):
             retrieved = _retrieve_with_text2cypher(

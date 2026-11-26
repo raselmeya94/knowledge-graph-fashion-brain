@@ -6,6 +6,15 @@ import re
 
 CONSTRAINTS = [
     "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (n:Entity) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT product_id_uniq IF NOT EXISTS FOR (n:Product) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT brand_id_uniq IF NOT EXISTS FOR (n:Brand) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT material_id_uniq IF NOT EXISTS FOR (n:Material) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT color_id_uniq IF NOT EXISTS FOR (n:Color) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT gauge_id_uniq IF NOT EXISTS FOR (n:Gauge) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT reference_id_uniq IF NOT EXISTS FOR (n:Reference) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT targetgroup_id_uniq IF NOT EXISTS FOR (n:TargetGroup) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT inventory_id_uniq IF NOT EXISTS FOR (n:InventoryRecord) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT shipment_id_uniq IF NOT EXISTS FOR (n:Shipment) REQUIRE n.id IS UNIQUE",
 ]
 
 INDEXES = [
@@ -37,6 +46,10 @@ FULLTEXT_INDEXES = [
     f"CREATE FULLTEXT INDEX {re.sub(r'[^A-Za-z0-9_]', '', label).lower()}_name_ft IF NOT EXISTS "
     f"FOR (n:{label}) ON EACH [n.name, n.normalized_name]"
     for label in _BASELINE_FACETS
+] + [
+    "CREATE FULLTEXT INDEX product_search_ft IF NOT EXISTS "
+    "FOR (p:Product) ON EACH [p.name, p.display_name, p.description, p.composition, "
+    "p.search_text, p.reference, p.style_reference, p.customer_style_reference]"
 ]
 
 SCHEMA_STATEMENTS = CONSTRAINTS + INDEXES + FULLTEXT_INDEXES

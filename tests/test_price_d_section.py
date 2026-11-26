@@ -30,6 +30,16 @@ def test_d_section_modes():
     )
     assert price_history_mode("Show recent same-currency price drops of more than 20%") == "movers_down"
     assert price_history_mode("How many price change events do we have recorded?") == "count_events"
+    # Long merchant brief: "price-trend analysis" stays aggregate trend, not movers_down.
+    assert (
+        price_history_mode(
+            "I already reviewed Primark's assortment mix. What I need now is a "
+            "price-trend analysis for Primark on e-commerce: how recorded "
+            "price-change events are moving, by currency if needed, and which "
+            "products look most active — not another attribute-wise product-mix profile."
+        )
+        == "trend"
+    )
 
 
 def test_pct_threshold_parser():

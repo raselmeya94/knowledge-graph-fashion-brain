@@ -112,7 +112,34 @@ _LABELED_REV = re.compile(
     r"<-\[\s*:?\s*([A-Z][A-Z0-9_]*)[^\]]*\]-\s*"
     r"\((?:[a-zA-Z_][\w]*)?(?::`?([A-Za-z_][\w]*)`?)*\)"
 )
-_ALWAYS_ALLOWED_RELS = frozenset({"RESOLVES_TO", "IN_GRAPH", "IN_DOMAIN", "HAS_ALIAS"})
+_ALWAYS_ALLOWED_RELS = frozenset(
+    {
+        "RESOLVES_TO",
+        "SIMILAR_TO",
+        "IN_GRAPH",
+        "IN_DOMAIN",
+        "HAS_ALIAS",
+        "IN_GROUP",
+        "IN_MATERIAL_GROUP",
+        "IN_COLOR_FAMILY",
+        "MAPS_TO_CATEGORY",
+        "FOR_TARGET_GROUP",
+        "MADE_WITH_METHOD",
+        "SUITED_FOR_OCCASION",
+        "IN_PRICE_BAND",
+        "HAS_REFERENCE",
+        "HAS_PATTERN",
+        "REFERS_TO_MATERIAL",
+        "USES_MATERIAL",
+        "PRIMARY_MATERIAL",
+        "HAS_BRAND",
+        "HAS_COLOR",
+        "PRIMARY_COLOR",
+        "HAS_BUYER",
+        "HAS_SECTION",
+        "HAS_GENDER",
+    }
+)
 
 
 def extract_relationship_types(cypher: str) -> list[str]:

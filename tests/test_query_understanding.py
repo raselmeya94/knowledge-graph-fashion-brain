@@ -362,6 +362,103 @@ class TestQueryUnderstandingAgent:
             )
         assert isinstance(result, ReadyResult)
 
+    def test_gender_wise_breakdown_runs_without_entity_clarify(self):
+        """Catalog-wide facet breakdown must not quiz for brand / alt dimensions."""
+
+        agent = QueryUnderstandingAgent()
+        with patch(
+            "fashion_brain.planning.metadata_resolver.check_understanding",
+            side_effect=AssertionError("must not clarify when group_by is known"),
+        ):
+            result = agent.evaluate(
+                _platform(),
+                "gender wise breakdown e-commerce data",
+                conversation_state={},
+            )
+        assert isinstance(result, ReadyResult)
+        assert result.intent.group_by == "gender"
+        assert not result.intent.filters.get("brand")
+        assert not result.intent.filters.get("buyer")
+
+    def test_by_gender_alone_runs_without_entity_clarify(self):
+        """group_by alone is catalog signal — do not fall through to entity quiz."""
+
+        agent = QueryUnderstandingAgent()
+        with patch(
+            "fashion_brain.planning.metadata_resolver.check_understanding",
+            side_effect=AssertionError("must not clarify when group_by is known"),
+        ):
+            result = agent.evaluate(
+                _platform(),
+                "products by gender",
+                conversation_state={},
+            )
+        assert isinstance(result, ReadyResult)
+        assert result.intent.group_by == "gender"
+
+    def test_pending_entity_abandons_for_catalog_wide_gender_ask(self):
+        """Stuck entity clarify + ecom gender breakdown → all products, not 'brand not found'."""
+
+        agent = QueryUnderstandingAgent()
+        clar = ClarificationState(
+            pending_slot="entity",
+            confirmed={},
+            offered_options=["category", "composition", "availability"],
+            turn_count=1,
+            original_question="gender wise breakdown e-commerce data",
+        )
+        with (
+            patch(
+                "fashion_brain.agents.qu_fast.resolve_entity",
+                return_value=(None, []),
+            ),
+            patch(
+                "fashion_brain.planning.metadata_resolver.check_understanding",
+                side_effect=AssertionError("must not re-clarify when group_by is known"),
+            ),
+        ):
+            result = agent.evaluate(
+                _platform(),
+                "gender wise breakdown e-commerce data",
+                conversation_state={"clarification": clar.to_dict()},
+            )
+        assert isinstance(result, ReadyResult)
+        assert result.intent.group_by == "gender"
+        assert result.intent.source == "ecom_products"
+        assert not result.intent.filters.get("brand")
+        assert not result.intent.filters.get("buyer")
+        assert result.state is None or result.state.pending_slot is None
+
+    def test_pending_entity_price_trend_is_not_full_analysis(self):
+        """Stuck entity clarify + Primark price-trend → metrics=price, not assortment."""
+
+        agent = QueryUnderstandingAgent()
+        clar = ClarificationState(
+            pending_slot="entity",
+            confirmed={},
+            offered_options=[],
+            turn_count=1,
+            original_question="analyze something",
+        )
+        ask = (
+            "price-trend analysis for Primark on e-commerce: how recorded "
+            "price-change events are moving — not another attribute-wise product-mix profile."
+        )
+        with patch(
+            "fashion_brain.agents.qu_fast.resolve_entity",
+            return_value=("primark", []),
+        ):
+            result = agent.evaluate(
+                _platform(),
+                ask,
+                conversation_state={"clarification": clar.to_dict()},
+            )
+        assert isinstance(result, ReadyResult)
+        assert "price" in (result.intent.metrics or [])
+        assert result.intent.analysis_depth != "full"
+        assert str(result.intent.filters.get("brand") or "").casefold() == "primark"
+        assert result.state is None or result.state.pending_slot is None
+
 
 class TestApplyValidatedIntent:
     def test_full_analysis_seeds_intention(self):

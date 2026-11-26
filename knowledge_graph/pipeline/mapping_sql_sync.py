@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from knowledge_graph import etl_normalizer as norm
 from knowledge_graph.errors import ValidationFailed
 from knowledge_graph.ids import edge_id, register_source_identity, slug
 from knowledge_graph.logging_config import get_logger
@@ -22,10 +23,27 @@ from knowledge_graph.sources.mapping_store import get_mapping, mapping_exists
 
 LOGGER = get_logger("knowledge_graph.mapping_sql_sync")
 
-_COMPOSITION = re.compile(
-    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<name>[A-Za-z][A-Za-z0-9 \-/]+)|(?P<only>[A-Za-z][A-Za-z0-9 \-/]{1,40})"
-)
 _SPLIT_NOTES = re.compile(r"split\s+on\s+comma", re.I)
+_SHARED_HUB_TYPES = frozenset(
+    {
+        "Brand",
+        "Material",
+        "Color",
+        "ColorFamily",
+        "MaterialGroup",
+        "TargetGroup",
+        "Reference",
+        "Gauge",
+        "Construction",
+        "Occasion",
+        "Pattern",
+        "Fit",
+        "CareInstruction",
+        "RetailGroup",
+        "PriceBand",
+        "SeasonYear",
+    }
+)
 
 
 def sync_state_path(settings, source_id: str) -> Path:
@@ -55,6 +73,8 @@ def sync_mapped_sql_to_neo4j(
     full: bool = False,
     limit: int | None = None,
     refresh_generated: bool = True,
+    buyer_prefixes: list[str] | None = None,
+    newest_first: bool = False,
 ) -> dict[str, Any]:
     """Read mapped Postgres table and upsert Product + relationship nodes into Neo4j."""
 
@@ -85,6 +105,8 @@ def sync_mapped_sql_to_neo4j(
     errors: list[str] = []
     latest_wm = since
     facets: dict[str, int] = {}
+    # Limited product slices should prefer newest rows for better ecom overlap.
+    order_desc = bool(newest_first or (limit is not None and full))
 
     save_sync_state(
         platform.settings,
@@ -96,18 +118,31 @@ def sync_mapped_sql_to_neo4j(
             "source_table": table,
             "full": full,
             "last_products": 0,
+            "limit": limit,
+            "buyer_prefixes": buyer_prefixes or [],
         },
     )
     LOGGER.info(
-        "mapping sql sync start source=%s table=%s full=%s limit=%s since=%s",
+        "mapping sql sync start source=%s table=%s full=%s limit=%s since=%s buyers=%s newest_first=%s",
         source_id,
         table,
         full,
         limit,
         since,
+        buyer_prefixes,
+        order_desc,
     )
 
-    for row in _iter_rows(dsn, table, columns, watermark_col=watermark_col, since=since, limit=limit):
+    for row in _iter_rows(
+        dsn,
+        table,
+        columns,
+        watermark_col=watermark_col,
+        since=since,
+        limit=limit,
+        order_desc=order_desc,
+        buyer_prefixes=buyer_prefixes,
+    ):
         try:
             product, rels = _row_to_graph(row, mapping, source_id=source_id, graph_id=graph_id)
             tallies = _upsert(platform.graph, product, rels, graph_id=graph_id, source_id=source_id)
@@ -224,6 +259,13 @@ def sync_mapped_sql_to_neo4j(
         except Exception as exc:
             LOGGER.warning("mapping sql sync snapshot refresh failed: %s", exc)
         try:
+            from knowledge_graph.pipeline.fashion_brain_enrichment import run_enrichment
+
+            report["fashion_brain_enrichment"] = run_enrichment(platform)
+        except Exception as exc:
+            LOGGER.warning("mapping sql sync fashion_brain enrichment failed: %s", exc)
+            report["enrichment_error"] = str(exc)
+        try:
             from knowledge_graph.retrieval.system_meta import build_system_meta
 
             build_system_meta(platform, persist=True)
@@ -335,6 +377,8 @@ def _iter_rows(
     watermark_col: str | None,
     since: str | None,
     limit: int | None,
+    order_desc: bool = False,
+    buyer_prefixes: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     try:
         import psycopg
@@ -354,16 +398,39 @@ def _iter_rows(
         table=sql.Identifier(table),
     )
     params: dict[str, Any] = {}
+    where_parts: list[Any] = []
     if watermark_col and since:
-        select = sql.SQL("{base} WHERE {wm} > %(since)s").format(
-            base=select,
-            wm=sql.Identifier(watermark_col),
-        )
+        where_parts.append(sql.SQL("{wm} > %(since)s").format(wm=sql.Identifier(watermark_col)))
         params["since"] = since
+
+    clean_buyers = [str(b).strip() for b in (buyer_prefixes or []) if str(b).strip()]
+    if clean_buyers:
+        if "buyer" not in columns:
+            raise ValidationFailed("buyer_prefixes requires 'buyer' in mapping columns")
+        buyer_clauses = []
+        for i, prefix in enumerate(clean_buyers):
+            key = f"buyer_p{i}"
+            buyer_clauses.append(
+                sql.SQL("UPPER(COALESCE({col}, '')) LIKE {ph}").format(
+                    col=sql.Identifier("buyer"),
+                    ph=sql.Placeholder(key),
+                )
+            )
+            params[key] = f"%{prefix.upper()}%"
+        where_parts.append(sql.SQL("({})").format(sql.SQL(" OR ").join(buyer_clauses)))
+
+    if where_parts:
+        select = sql.SQL("{base} WHERE {pred}").format(
+            base=select,
+            pred=sql.SQL(" AND ").join(where_parts),
+        )
+
     if watermark_col:
-        select = sql.SQL("{base} ORDER BY {wm} ASC NULLS LAST").format(
+        direction = sql.SQL("DESC NULLS LAST") if order_desc else sql.SQL("ASC NULLS LAST")
+        select = sql.SQL("{base} ORDER BY {wm} {direction}").format(
             base=select,
             wm=sql.Identifier(watermark_col),
+            direction=direction,
         )
     if limit is not None:
         select = sql.SQL("{base} LIMIT %(limit)s").format(base=select)
@@ -403,6 +470,8 @@ def _row_to_graph(
     for pk in mapping.get("primary_key") or []:
         product.setdefault(str(pk), row.get(str(pk)))
 
+    _apply_row_transforms(product, source_id)
+
     template = str(mapping.get("product_id_template") or "{code}")
     try:
         product_id = template.format(**{k: _cell(v) for k, v in product.items()})
@@ -411,7 +480,12 @@ def _row_to_graph(
     if not product_id or "{" in product_id:
         raise ValueError(f"Could not build product_id from template {template!r}")
     product["product_id"] = product_id
-    product["name"] = _cell(product.get("name") or product.get("code") or product_id)
+    product["name"] = _cell(
+        product.get("name")
+        or product.get("display_name")
+        or product.get("code")
+        or product_id
+    )
 
     neo_keys = mapping.get("neo4j_product_properties") or []
     node_props = {
@@ -427,26 +501,177 @@ def _row_to_graph(
     return product, rels
 
 
+def _apply_row_transforms(product: dict[str, Any], source_id: str) -> None:
+    """Normalize shared fields before relationship / property emission."""
+
+    brand, tg_from_brand = norm.clean_brand(product.get("brand"))
+    if brand is not None:
+        product["brand"] = brand
+    elif "brand" in product:
+        product["brand"] = None
+    if tg_from_brand:
+        product["_target_group"] = tg_from_brand
+
+    if product.get("gender"):
+        product["_target_group"] = product.get("_target_group") or norm.target_group_from_gender(
+            product.get("gender")
+        )
+    if product.get("section") or product.get("category_path"):
+        product["_target_group"] = product.get("_target_group") or norm.target_group_from_section(
+            product.get("section"), product.get("category_path")
+        )
+
+    product["season_year"] = norm.clean_season_year(product.get("season_year")) or product.get(
+        "season_year"
+    )
+
+    price_num = norm.parse_decimal(product.get("price"))
+    original_price_num = norm.parse_decimal(product.get("original_price"))
+    if price_num is not None:
+        product["price_num"] = price_num
+    if original_price_num is not None:
+        product["original_price_num"] = original_price_num
+    discount = norm.pct_discount(original_price_num, price_num)
+    if discount is not None:
+        product["discount_pct"] = discount
+    band = norm.price_band(price_num, product.get("currency"))
+    if band:
+        product["_price_band"] = band
+
+    style_ref = norm.normalize_reference(product.get("style_reference"))
+    cust_ref = norm.normalize_reference(product.get("customer_style_reference"))
+    ecom_ref = norm.coalesce_reference(product.get("reference"), product.get("display_reference"))
+    if style_ref:
+        product["_style_ref_norm"] = style_ref
+    if cust_ref:
+        product["_cust_ref_norm"] = cust_ref
+    if ecom_ref:
+        product["_ref_norm"] = ecom_ref
+        product["ref_norm"] = ecom_ref
+
+    if source_id.startswith("plmex") or product.get("code"):
+        product["display_name"] = norm.synthesize_plmex_display_name(product)
+        product["search_text"] = norm.synthesize_plmex_search_text(product)
+        product.setdefault("name", product["display_name"])
+    else:
+        product["search_text"] = norm.synthesize_ecom_search_text(product)
+
+
+def _entity_id(end_type: str, name: str, *, id_template: str | None = None, product: dict | None = None) -> str:
+    value = _present(name)
+    if not value:
+        raise ValueError("empty entity name")
+    if id_template and product is not None:
+        ctx = {**product, "token": value, "fiber": value, "value": value, "name": value}
+        try:
+            rendered = id_template.format(**{k: _cell(v) for k, v in ctx.items()})
+            if rendered and "{" not in rendered:
+                return rendered
+        except Exception:
+            pass
+    kind_map = {
+        "Brand": "brand",
+        "Material": "material",
+        "Color": "color",
+        "Gauge": "gauge",
+        "Construction": "construction",
+        "Occasion": "occasion",
+        "Pattern": "pattern",
+        "Fit": "fit",
+        "CareInstruction": "care",
+        "TargetGroup": "targetgroup",
+        "Reference": "reference",
+        "RetailGroup": "retailgroup",
+        "MaterialGroup": "materialgroup",
+        "ColorFamily": "colorfamily",
+        "PriceBand": "priceband",
+        "SeasonYear": "seasonyear",
+        "ProductionMethod": "method",
+    }
+    kind = kind_map.get(end_type)
+    if kind:
+        if end_type == "Reference":
+            ref = norm.normalize_reference(value) or value
+            return norm.reference_id(ref)
+        if end_type == "PriceBand":
+            return norm.hub_id("priceband", value)
+        if end_type == "ProductionMethod":
+            return f"plmex:method:{slug(normalize_name(value) or value)}"
+        return norm.hub_id(kind, value)
+    prefix = "plmex" if end_type.startswith("Plm") or end_type in {
+        "Buyer",
+        "Gender",
+        "SampleType",
+        "DesignPurpose",
+        "MachineType",
+        "Department",
+        "ShoppingDepartment",
+        "GarmentType",
+        "Unit",
+        "Location",
+        "Person",
+        "InventoryRecord",
+        "Shipment",
+        "EventTag",
+        "ConstructionTag",
+        "AiMaterialTag",
+        "FinishTag",
+        "SpecialTag",
+        "DesignFeature",
+        "StyleFeature",
+    } else end_type.lower()
+    if end_type in {"InventoryRecord", "Shipment", "Location", "Person", "Buyer", "Unit", "Gender",
+                    "SampleType", "DesignPurpose", "MachineType", "Department", "ShoppingDepartment",
+                    "GarmentType", "EventTag", "ConstructionTag", "AiMaterialTag", "FinishTag",
+                    "SpecialTag", "DesignFeature", "StyleFeature", "ProductionMethod"}:
+        return f"plmex:{end_type.lower()}:{slug(normalize_name(value) or value)}"
+    return f"{end_type.lower()}:{normalize_name(value).replace(' ', '-')}"
+
+
 def _build_relationships(product: dict[str, Any], specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pid = product["product_id"]
     rels: list[dict[str, Any]] = []
 
-    def add(rel_type: str, end_type: str, name: str, *, field_ref: str, properties: dict | None = None) -> None:
+    def add(
+        rel_type: str,
+        end_type: str,
+        name: str,
+        *,
+        field_ref: str,
+        properties: dict | None = None,
+        end_id: str | None = None,
+        start_id: str | None = None,
+        start_type: str = "Product",
+        start_name: str | None = None,
+        node_properties: dict | None = None,
+    ) -> None:
         value = _present(name)
-        if not value:
+        if not value and not end_id:
             return
-        rels.append(
-            {
-                "rel_type": rel_type,
-                "start_id": pid,
-                "start_type": "Product",
-                "end_type": end_type,
-                "end_name": value,
-                "end_id": f"{end_type.lower()}:{normalize_name(value).replace(' ', '-')}",
-                "field_ref": field_ref,
-                "properties": properties or {},
-            }
-        )
+        resolved_end = end_id or _entity_id(end_type, value or "unknown", product=product)
+        item = {
+            "rel_type": rel_type,
+            "start_id": start_id or pid,
+            "start_type": start_type,
+            "end_type": end_type,
+            "end_name": value or resolved_end,
+            "end_id": resolved_end,
+            "field_ref": field_ref,
+            "properties": properties or {},
+        }
+        if start_name:
+            item["start_name"] = start_name
+        if node_properties:
+            item["node_properties"] = node_properties
+        rels.append(item)
+
+    materials = norm.parse_composition_detail(
+        product.get("composition_detail"), product.get("composition")
+    )
+    colors, patterns_from_color = norm.parse_colors(
+        product.get("colors") if product.get("colors") not in (None, "", []) else product.get("color")
+    )
+    gauges, constructions_from_gauge = norm.parse_gauges(product.get("gauge"))
 
     for spec in specs:
         rel_type = str(spec.get("rel_type") or "").upper()
@@ -464,62 +689,248 @@ def _build_relationships(product: dict[str, Any], specs: list[dict[str, Any]]) -
                         "rel_type": "PARENT_CATEGORY",
                         "start_type": start_type,
                         "start_name": child,
-                        "start_id": f"{start_type.lower()}:{normalize_name(child).replace(' ', '-')}",
+                        "start_id": _entity_id(start_type, child, product=product),
                         "end_type": end_type,
                         "end_name": parent,
-                        "end_id": f"{end_type.lower()}:{normalize_name(parent).replace(' ', '-')}",
+                        "end_id": _entity_id(end_type, parent, product=product),
                         "field_ref": f"{spec.get('start_from_column')}→{spec.get('end_from_column')}",
                         "properties": {},
                     }
                 )
             continue
 
+        if rel_type == "IN_DEPARTMENT":
+            person = _present(product.get(str(spec.get("start_from_column") or "merchandiser")))
+            dept = _present(product.get(str(spec.get("end_from_column") or "department")))
+            if person and dept:
+                add(
+                    rel_type,
+                    end_type,
+                    dept,
+                    field_ref="merchandiser→department",
+                    start_id=_entity_id("Person", person, product=product),
+                    start_type="Person",
+                    start_name=person,
+                )
+            continue
+
+        if rel_type == "STORED_AT" and str(spec.get("start_type") or "") == "InventoryRecord":
+            code = _present(product.get("code"))
+            loc = _present(product.get("current_location"))
+            if code and loc:
+                for line in re.split(r"[\r\n]+", loc):
+                    token = _present(line)
+                    if token:
+                        add(
+                            "STORED_AT",
+                            "Location",
+                            token,
+                            field_ref="current_location",
+                            start_id=norm.inventory_id(code),
+                            start_type="InventoryRecord",
+                            start_name=f"inv:{code}",
+                        )
+            continue
+
         if rel_type in {"USES_MATERIAL", "PRIMARY_MATERIAL"}:
-            materials = _materials(product)
             if rel_type == "USES_MATERIAL":
-                for material, percentage in materials:
-                    props = {"percentage": percentage} if percentage is not None else {}
-                    add(rel_type, end_type, material, field_ref="composition", properties=props)
+                for material in materials:
+                    props = {"percentage": material["percentage"]} if material["percentage"] is not None else {}
+                    props["provenance"] = "composition"
+                    add(
+                        rel_type,
+                        end_type,
+                        material["name"],
+                        field_ref="composition",
+                        properties=props,
+                        end_id=material["id"],
+                    )
             elif materials:
                 primary = max(
                     materials,
-                    key=lambda item: (item[1] is not None, item[1] if item[1] is not None else -1.0),
+                    key=lambda item: (
+                        item["percentage"] is not None,
+                        item["percentage"] if item["percentage"] is not None else -1.0,
+                    ),
                 )
-                props = {"percentage": primary[1]} if primary[1] is not None else {}
-                add(rel_type, end_type, primary[0], field_ref="composition", properties=props)
+                props = {"percentage": primary["percentage"]} if primary["percentage"] is not None else {}
+                add(
+                    rel_type,
+                    end_type,
+                    primary["name"],
+                    field_ref="composition",
+                    properties=props,
+                    end_id=primary["id"],
+                )
+            continue
+
+        if rel_type in {"HAS_COLOR", "PRIMARY_COLOR"}:
+            if not colors:
+                continue
+            if rel_type == "PRIMARY_COLOR":
+                add(rel_type, end_type, colors[0]["name"], field_ref="color", properties={"is_primary": True}, end_id=colors[0]["id"])
+            else:
+                for index, color in enumerate(colors):
+                    add(
+                        rel_type,
+                        end_type,
+                        color["name"],
+                        field_ref="color",
+                        properties={"position": index, "is_primary": index == 0},
+                        end_id=color["id"],
+                    )
+            continue
+
+        if rel_type == "HAS_PATTERN":
+            for pattern in patterns_from_color:
+                add(rel_type, end_type, pattern["name"], field_ref="color", end_id=pattern["id"])
+            continue
+
+        if rel_type == "HAS_GAUGE":
+            for gauge in gauges:
+                add(rel_type, end_type, gauge["name"], field_ref="gauge", end_id=gauge["id"])
+            continue
+
+        if rel_type == "HAS_CONSTRUCTION" and constructions_from_gauge and not str(spec.get("from_column") or "").startswith("ai_"):
+            # Only emit gauge-derived constructions when mapping has no explicit column (or after tags).
+            pass
+
+        if rel_type == "FOR_TARGET_GROUP":
+            tg = _present(product.get("_target_group"))
+            if tg:
+                add(
+                    rel_type,
+                    end_type,
+                    tg,
+                    field_ref="target_group",
+                    properties={"provenance": "rule"},
+                    end_id=norm.hub_id("targetgroup", tg),
+                )
+            continue
+
+        if rel_type == "IN_PRICE_BAND":
+            band = _present(product.get("_price_band"))
+            if band:
+                add(rel_type, end_type, band, field_ref="price", end_id=norm.hub_id("priceband", band))
+            continue
+
+        if rel_type == "HAS_REFERENCE":
+            kind = str((spec.get("edge_properties") or {}).get("ref_kind") or "")
+            if kind == "plm_style_ref" or str(spec.get("from_transform") or "") == "style_ref_norm":
+                ref = product.get("_style_ref_norm")
+                raw = product.get("style_reference")
+            elif kind == "customer_style_ref" or str(spec.get("from_transform") or "") == "cust_ref_norm":
+                ref = product.get("_cust_ref_norm")
+                raw = product.get("customer_style_reference")
+            else:
+                ref = product.get("_ref_norm")
+                raw = product.get("reference") or product.get("display_reference")
+            if ref:
+                props = {
+                    "raw_reference": _present(raw),
+                    "ref_kind": kind or "ecom_ref",
+                }
+                add(rel_type, "Reference", ref, field_ref="reference", properties=props, end_id=norm.reference_id(ref))
+            continue
+
+        if rel_type == "HAS_BRAND":
+            brand = _present(product.get("brand"))
+            if brand:
+                add(rel_type, end_type, brand, field_ref="brand", end_id=norm.hub_id("brand", brand))
+            continue
+
+        if rel_type == "HAS_INVENTORY_RECORD":
+            code = _present(product.get("code"))
+            stock = product.get("current_stock")
+            loc = _present(product.get("current_location"))
+            if code and (stock is not None or loc):
+                inv_id = norm.inventory_id(code)
+                add(
+                    rel_type,
+                    end_type,
+                    f"inv:{code}",
+                    field_ref="current_stock",
+                    end_id=inv_id,
+                    node_properties={
+                        "current_stock": stock,
+                        "current_location": loc or None,
+                        "updated_at": _cell(product.get("updated_at")) or None,
+                    },
+                )
+            continue
+
+        if rel_type == "HAS_SHIPMENT":
+            code = _present(product.get("code"))
+            date = _present(product.get("shipment_date"))
+            qty = product.get("shipment_quantity")
+            if code and (date or qty is not None):
+                ship_id = norm.shipment_id(code, date)
+                add(
+                    rel_type,
+                    end_type,
+                    f"ship:{code}:{date or 'unknown'}",
+                    field_ref="shipment_date",
+                    end_id=ship_id,
+                    node_properties={
+                        "shipment_date": date or None,
+                        "shipment_quantity": qty,
+                    },
+                )
+            continue
+
+        if rel_type == "STORED_AT" and not spec.get("start_type"):
+            # Legacy Product→Location; prefer InventoryRecord path when present.
             continue
 
         col = str(spec.get("from_column") or "")
-        raw = product.get(col)
+        raw = product.get(col) if col else None
         if raw in (None, "") and spec.get("fallback_column"):
             raw = product.get(str(spec.get("fallback_column")))
         notes = str(spec.get("notes") or "")
-        split = bool(_SPLIT_NOTES.search(notes)) or col.startswith("ai_")
+        split_regex = str(spec.get("split_regex") or "").strip()
+        split = bool(_SPLIT_NOTES.search(notes)) or col.startswith("ai_") or bool(spec.get("split"))
 
-        if rel_type == "HAS_INVENTORY_RECORD":
-            stock = _present(product.get("current_stock"))
-            loc = _present(product.get("current_location"))
-            if stock or loc:
-                label = f"stock:{stock or '0'}" + (f"@{loc[:80]}" if loc else "")
-                add(rel_type, end_type, label, field_ref=col or "current_stock")
-            continue
-        if rel_type == "HAS_SHIPMENT":
-            date = _present(product.get("shipment_date"))
-            qty = _present(product.get("shipment_quantity"))
-            if date or qty:
-                label = f"ship:{date or 'unknown'}" + (f"x{qty}" if qty else "")
-                add(rel_type, end_type, label, field_ref=col or "shipment_date")
-            continue
+        if rel_type == "SUITED_FOR_OCCASION":
+            end_type = "Occasion"
+        elif rel_type == "HAS_CONSTRUCTION" and col.startswith("ai_"):
+            end_type = "Construction"
+        elif rel_type == "MADE_WITH_METHOD":
+            end_type = "ProductionMethod"
 
-        values = _split_values(raw) if split else ([_present(raw)] if _present(raw) else [])
+        if split_regex:
+            values = [p.strip() for p in re.split(split_regex, _present(raw)) if _present(p)]
+        elif split:
+            values = _split_values(raw)
+        else:
+            values = [_present(raw)] if _present(raw) else []
+
+        # Append gauge-derived crochet constructions alongside ai construction tags.
+        if rel_type == "HAS_CONSTRUCTION":
+            for construction in constructions_from_gauge:
+                add(
+                    rel_type,
+                    "Construction",
+                    construction["name"],
+                    field_ref="gauge",
+                    properties={"provenance": "gauge"},
+                    end_id=construction["id"],
+                )
+
         for index, value in enumerate(values):
-            props = {"position": index, "is_primary": index == 0} if rel_type in {"HAS_COLOR", "PRIMARY_COLOR"} else {}
+            props: dict[str, Any] = {}
+            if rel_type in {"HAS_COLOR", "PRIMARY_COLOR"}:
+                props = {"position": index, "is_primary": index == 0}
+            if rel_type in {"SUITED_FOR_OCCASION", "HAS_CONSTRUCTION"} and col.startswith("ai_"):
+                props = {"provenance": "ai_tag"}
             if rel_type == "PRIMARY_COLOR" and index > 0:
                 continue
-            if rel_type == "PRIMARY_COLOR":
-                add(rel_type, end_type, value, field_ref=col, properties={"is_primary": True})
-            else:
-                add(rel_type, end_type, value, field_ref=col, properties=props)
+            edge_props = spec.get("edge_properties")
+            if isinstance(edge_props, dict):
+                props = {
+                    **props,
+                    **{k: v for k, v in edge_props.items() if not str(v).startswith("{")},
+                }
+            add(rel_type, end_type, value, field_ref=col or rel_type.lower(), properties=props)
     return rels
 
 
@@ -551,25 +962,41 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
     for rel in relationships:
         end_id = rel.get("end_id") or f"{rel['end_type'].lower()}:{slug(rel['end_name'])}"
         end_type = rel["end_type"]
-        if rel["rel_type"] == "PARENT_CATEGORY":
-            start_id = rel.get("start_id") or f"{rel['start_type'].lower()}:{slug(rel['start_name'])}"
-            for node_id, node_type, node_name in (
-                (start_id, rel["start_type"], rel["start_name"]),
-                (end_id, end_type, rel["end_name"]),
-            ):
+        start_id = rel.get("start_id") or pid
+        start_type = str(rel.get("start_type") or "Product")
+        node_graph = "fashion_brain" if end_type in _SHARED_HUB_TYPES else graph_id
+
+        if rel["rel_type"] == "PARENT_CATEGORY" or start_type != "Product":
+            endpoints = [
+                (end_id, end_type, rel.get("end_name"), node_graph),
+            ]
+            if start_type != "Product":
+                start_graph = "fashion_brain" if start_type in _SHARED_HUB_TYPES else graph_id
+                endpoints.insert(
+                    0,
+                    (start_id, start_type, rel.get("start_name") or start_id, start_graph),
+                )
+            if rel["rel_type"] == "PARENT_CATEGORY":
+                endpoints = [
+                    (start_id, start_type, rel["start_name"], graph_id),
+                    (end_id, end_type, rel["end_name"], graph_id),
+                ]
+            for node_id, node_type, node_name, n_graph in endpoints:
+                props = {
+                    "id": node_id,
+                    **facet_name_fields(node_name),
+                    "entity_type": node_type,
+                    "lifecycle": "active",
+                    "prov_source_id": n_graph,
+                }
+                if rel.get("node_properties") and node_id == end_id:
+                    props.update({k: v for k, v in rel["node_properties"].items() if v is not None})
                 graph.upsert_node(
                     GraphNode(
                         id=node_id,
                         labels=["Entity", "SourceEntity", node_type],
-                        graph=graph_id,
-                        properties={
-                            "id": node_id,
-                            # Keep original display in name; match via normalized_name only.
-                            **facet_name_fields(node_name),
-                            "entity_type": node_type,
-                            "lifecycle": "active",
-                            "prov_source_id": graph_id,
-                        },
+                        graph=n_graph,
+                        properties=props,
                     )
                 )
                 nodes += 1
@@ -591,19 +1018,22 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
             edges += 1
             continue
 
+        end_props = {
+            "id": end_id,
+            **facet_name_fields(rel.get("end_name")),
+            "entity_type": end_type,
+            "lifecycle": "active",
+            "prov_source_id": node_graph,
+            "prov_field_ref": rel.get("field_ref"),
+        }
+        if rel.get("node_properties"):
+            end_props.update({k: v for k, v in rel["node_properties"].items() if v is not None})
         graph.upsert_node(
             GraphNode(
                 id=end_id,
                 labels=["Entity", "SourceEntity", end_type],
-                graph=graph_id,
-                properties={
-                    "id": end_id,
-                    **facet_name_fields(rel.get("end_name")),
-                    "entity_type": end_type,
-                    "lifecycle": "active",
-                    "prov_source_id": graph_id,
-                    "prov_field_ref": rel.get("field_ref"),
-                },
+                graph=node_graph,
+                properties=end_props,
             )
         )
         nodes += 1
@@ -629,45 +1059,92 @@ def _upsert(graph, product: dict[str, Any], relationships: list[dict[str, Any]],
 def _apply_ontology(platform, ontology_id: str, graph_id: str) -> None:
     if not ontology_id or not hasattr(platform.graph, "ontology"):
         return
+    ontology = None
     try:
         ontology = platform.kg_registry.load_ontology_object(ontology_id)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("mapping sql sync ontology_id=%s load failed: %s", ontology_id, exc)
         try:
             ontology = platform.ontology_for(graph_id)
-        except Exception:
+        except Exception as exc2:
+            LOGGER.warning("mapping sql sync ontology_for(%s) failed: %s", graph_id, exc2)
             return
+    if ontology is None:
+        return
     platform.graph.ontology = combine_ontologies(platform.graph.ontology, ontology)
     if hasattr(platform.graph, "_allowed_rel_types"):
-        platform.graph._allowed_rel_types = set(platform.graph.ontology.relationship_allowlist) | {"RESOLVES_TO"}
+        platform.graph._allowed_rel_types = set(platform.graph.ontology.relationship_allowlist) | {
+            "RESOLVES_TO",
+            "SIMILAR_TO",
+            "IN_GROUP",
+            "IN_MATERIAL_GROUP",
+            "IN_COLOR_FAMILY",
+            "MAPS_TO_CATEGORY",
+            "REFERS_TO_MATERIAL",
+            "SAME_ORG_UNIT_AS",
+            "EQUIVALENT_CATEGORY",
+            "FOR_TARGET_GROUP",
+            "MADE_WITH_METHOD",
+            "SUITED_FOR_OCCASION",
+            "HAS_PATTERN",
+            "IN_PRICE_BAND",
+            "IN_DEPARTMENT",
+            "HAS_REFERENCE",
+        }
     if hasattr(platform.graph, "_allowed_labels"):
         platform.graph._allowed_labels = set(platform.graph.ontology.entity_types) | {
             "Entity",
             "SourceEntity",
             "Canonical",
             "Record",
+            "TargetGroup",
+            "ProductionMethod",
+            "Occasion",
+            "Construction",
+            "Pattern",
+            "Reference",
+            "RetailGroup",
+            "MaterialGroup",
+            "ColorFamily",
+            "PriceBand",
+            "Buyer",
+            "CanonicalCategory",
+            "InventoryRecord",
+            "Shipment",
+            "Location",
+            "Person",
+            "Gauge",
+            "Department",
+            "ShoppingDepartment",
+            "SeasonYear",
+            "Gender",
+            "GarmentType",
+            "SampleType",
+            "DesignPurpose",
+            "MachineType",
+            "DesignFeature",
+            "StyleFeature",
+            "Unit",
+            "EventTag",
+            "ConstructionTag",
+            "AiMaterialTag",
+            "FinishTag",
+            "SpecialTag",
+            "PlmMainCategory",
+            "PlmSubCategory",
+            "PlmSubSubCategory",
         }
+    LOGGER.info(
+        "mapping sql sync ontology applied id=%s labels=%s",
+        ontology_id,
+        len(getattr(platform.graph, "_allowed_labels", []) or []),
+    )
 
 
 def _register_identity(source_id: str, mapping: dict[str, Any]) -> None:
     template = str(mapping.get("product_id_template") or "x:product:{id}")
     prefix = template.split(":", 1)[0].strip() or slug(source_id)[:16] or "src"
     register_source_identity(source_id, prefix, "product", "Product")
-
-
-def _materials(product: dict[str, Any]) -> list[tuple[str, float | None]]:
-    text = _present(product.get("composition"))
-    if not text:
-        return []
-    found: list[tuple[str, float | None]] = []
-    for match in _COMPOSITION.finditer(text):
-        if match.group("name"):
-            pct = match.group("pct")
-            found.append((match.group("name").strip(), float(pct) if pct else None))
-        elif match.group("only"):
-            token = match.group("only").strip()
-            if token.lower() not in {"and", "with", "of"}:
-                found.append((token, None))
-    return found
 
 
 def _split_values(raw: Any) -> list[str]:

@@ -485,7 +485,10 @@ header h2 {
 }
 .bubble .body.md h1,
 .bubble .body.md h2,
-.bubble .body.md h3 {
+.bubble .body.md h3,
+.bubble .body.md h4,
+.bubble .body.md h5,
+.bubble .body.md h6 {
   margin: 0.9em 0 0.4em;
   font-weight: 650;
   letter-spacing: -0.02em;
@@ -494,6 +497,9 @@ header h2 {
 .bubble .body.md h1 { font-size: 1.25em; }
 .bubble .body.md h2 { font-size: 1.12em; }
 .bubble .body.md h3 { font-size: 1.05em; }
+.bubble .body.md h4 { font-size: 1em; }
+.bubble .body.md h5 { font-size: 0.95em; }
+.bubble .body.md h6 { font-size: 0.9em; }
 .bubble .body.md ul,
 .bubble .body.md ol {
   margin: 0 0 0.75em;

@@ -1,6 +1,6 @@
 {
   "name": "ecom-products-ontology",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "E-commerce scrape graph ontology for master_products (Zara, Primark, Matalan, C&A, Walmart). Product is central. Raw scrape tables stay in Postgres; Neo4j holds Product links for brand, category hierarchy, target group, material composition, style attributes, color, size-level availability, price history, sustainability, origin, images, and cross-brand similarity. Edges carry provenance (column, rule, or llm) and confidence.",
   "entity_types": [
     "Product",

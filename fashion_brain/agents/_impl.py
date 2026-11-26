@@ -187,6 +187,11 @@ THINKING_SYSTEM = (
     "A request for one distribution/grouping field is one grouped breakdown, even when it says analyze; "
     "use broad multi-attribute analysis only when no single grouping field is requested. "
     "Never turn task wording (verbs, intensifiers, words like analyze, best, all) into a filter value. "
+    "CRITICAL — every filter value must already exist in the live catalog metadata for that field. "
+    "Use Live value matches / live product schema as the allow-list. If a word from the question is "
+    "not a known stored value for that attribute (e.g. mixed/ops/brief/listings as brand), omit it. "
+    "Do not invent or assume filter values. Prefer empty filters over guessed ones. "
+    "Stock-status mix / in-stock vs mixed is analysis language — not brand=mixed or availability=InStock. "
     "Words that name a registered knowledge graph (from its id, name, or description) belong in preferred_graphs, "
     "never in garment or category filters. "
     "Describe actual_intent as the user's real ask — never default to 'Calculate the product count' when they "
@@ -250,11 +255,17 @@ def _thinking_system(catalog=None, question: str = "") -> str:
             for hit in relevant_hits[:24]
         ]
         system += (
-            "\nLive value matches (strong evidence for assigning a user term to an attribute):\n"
+            "\nLive value matches (allow-list evidence for filter values):\n"
             + "\n".join(matches)
-            + "\nUse these matches to explain which stored attributes support each user term. "
+            + "\nOnly put a token into filters when it appears here (or is clearly the same "
+            "stored catalog value for that attribute). Never invent filter values. "
             "For a product type matching multiple type attributes, use the broad garment filter; "
             "do not guess a narrower field that could exclude matching products."
+        )
+    else:
+        system += (
+            "\nNo live value matches for tokens in this question. "
+            "Leave filters empty unless the user named a value you can confirm from the live schema."
         )
     return system
 
@@ -471,9 +482,33 @@ class ThinkingBrain:
                 filters=summary.filters,
             )
         if platform is not None and catalog is not None:
-            from fashion_brain.ask import _remap_buyer_to_brand_if_needed, sanitize_party_filters
+            from fashion_brain.ask import (
+                _remap_buyer_to_brand_if_needed,
+                ground_filters_from_live_brands,
+                live_brand_names,
+                sanitize_party_filters,
+            )
 
-            # Post-LLM guard only: drop impossible party values (e.g. buyer=frequently).
+            # Post-LLM guard: every categorical filter must exist in live metadata
+            # (brand=mixed, color=ops, … are dropped — not assumed).
+            from fashion_brain.ask import ground_filters_against_live_metadata
+
+            summary.filters = sanitize_party_filters(summary.filters)
+            try:
+                summary.filters = ground_filters_from_live_brands(
+                    question,
+                    summary.filters,
+                    live_brand_names(platform),
+                    platform=platform,
+                )
+            except Exception:
+                LOGGER.debug("thinking brain live-brand re-ground skipped", exc_info=True)
+            try:
+                summary.filters = ground_filters_against_live_metadata(
+                    platform, summary.filters, question=question
+                )
+            except Exception:
+                LOGGER.debug("thinking brain full meta re-ground skipped", exc_info=True)
             summary.filters = sanitize_party_filters(summary.filters)
             summary.filters, summary.group_by = _remap_buyer_to_brand_if_needed(
                 summary.filters,
@@ -713,6 +748,7 @@ def _deterministic_intent(question: str, history: list | None, *, platform=None)
         enrich_ecom_question_filters,
         garment_type_from_question,
         ground_filters_from_live_brands,
+        is_availability_price_ops_brief_ask,
         is_composition_compare_question,
         _is_product_details_request,
         live_brand_names,
@@ -806,6 +842,13 @@ def _deterministic_intent(question: str, history: list | None, *, platform=None)
         who = filters.get("brand") or filters.get("buyer") or "matching products"
         actual = f"Calculate average current price for {who}"
         group_by = None
+    elif is_availability_price_ops_brief_ask(question):
+        who = filters.get("brand") or filters.get("buyer") or "the named party"
+        actual = (
+            f"Ops brief for {who}: stock-status mix and price events by availability"
+        )
+        group_by = None
+        analysis = False
     elif analysis:
         who = filters.get("brand") or filters.get("buyer") or "the named party"
         actual = f"Analyse {who} with attribute-wise product breakdowns"
@@ -1060,6 +1103,8 @@ def _render_intent(
         method = "Counting price-change events by brand."
     elif price_mode in {"trend", "trend_by_category", "product"} or family == "price":
         method = "Summarizing recorded price-change movement."
+    elif family == "availability_price":
+        method = "Building a stock-status mix plus price-event concentration by availability."
     elif family == "avg_price":
         method = "Calculating average current product price."
     elif shared_route:
@@ -1442,10 +1487,17 @@ class IntentionAgent:
 
         analysis = bool(plan.get("analysis")) or _is_analysis(question)
         try:
-            from fashion_brain.ask import _is_price_history_question
+            from fashion_brain.ask import (
+                _is_price_history_question,
+                is_availability_price_ops_brief_ask,
+            )
             from knowledge_graph.retrieval.ecom import price_history_mode
 
-            if price_history_mode(question) or _is_price_history_question(question):
+            if (
+                price_history_mode(question)
+                or _is_price_history_question(question)
+                or is_availability_price_ops_brief_ask(question)
+            ):
                 analysis = False
                 plan["analysis"] = False
         except Exception:
@@ -1520,6 +1572,14 @@ class IntentionAgent:
                 if hit.attribute in {"category", "garment_type", "family", "subfamily"}
             ):
                 plan["filters"].pop("category", None)
+        try:
+            from fashion_brain.ask import ground_filters_against_live_metadata
+
+            plan["filters"] = ground_filters_against_live_metadata(
+                platform, plan.get("filters") or {}, question=question
+            )
+        except Exception:
+            LOGGER.debug("intention full meta ground skipped", exc_info=True)
         if before_ground != plan.get("filters"):
             trace_step(
                 "intention",
@@ -1774,6 +1834,14 @@ class IntentionAgent:
             )
         except Exception:
             pass
+        try:
+            from fashion_brain.ask import ground_filters_against_live_metadata
+
+            plan["filters"] = ground_filters_against_live_metadata(
+                platform, plan.get("filters") or {}, question=question
+            )
+        except Exception:
+            pass
         from fashion_brain.ask import is_composition_compare_question
 
         composition_compare = is_composition_compare_question(question)
@@ -1807,10 +1875,17 @@ class IntentionAgent:
 
         analysis = bool(plan.get("analysis")) or _is_analysis(question)
         try:
-            from fashion_brain.ask import _is_price_history_question
+            from fashion_brain.ask import (
+                _is_price_history_question,
+                is_availability_price_ops_brief_ask,
+            )
             from knowledge_graph.retrieval.ecom import price_history_mode
 
-            if price_history_mode(question) or _is_price_history_question(question):
+            if (
+                price_history_mode(question)
+                or _is_price_history_question(question)
+                or is_availability_price_ops_brief_ask(question)
+            ):
                 analysis = False
                 plan["analysis"] = False
         except Exception:

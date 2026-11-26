@@ -1184,8 +1184,44 @@ def _price_trend_fallback(card: AnswerCard) -> str:
         return "\n\n".join(sections)
 
     scope = _human_scope_phrase(card)
+    low_find = findings.casefold()
+    # Product-count stubs are not a price-trend answer — say so instead of reprinting totals.
+    count_only = bool(findings) and (
+        "products with brand" in low_find
+        or "product analysis for" in low_find
+        or (
+            re.search(r"\bthere are\b.*\bproducts?\b", low_find)
+            and not any(
+                tok in low_find
+                for tok in (
+                    "price change",
+                    "same-currency",
+                    "same currency",
+                    "trending",
+                    "```chart",
+                    "currency",
+                )
+            )
+        )
+    )
+    if count_only or not findings:
+        notes = [*(card.data_notes or [])[:3], *(card.caveats or [])[:3]]
+        body = (
+            f"No comparable price-trend evidence was available for {scope} "
+            "(assortment product totals are not a substitute for PriceChangeEvent trends)."
+        )
+        if notes:
+            body += "\n\n### Notes\n" + "\n".join(f"- {n}" for n in notes if n)
+        return f"### Price trend · {scope}\n\n{body}"
+
     parts = [f"### Price trend · {scope}"]
     metrics = _metric_bits_from_card(card)
+    # Drop catalog product-count metrics from a price-trend card.
+    metrics = [
+        m
+        for m in (metrics or [])
+        if "product" not in str(m).casefold() or "price" in str(m).casefold()
+    ]
     if metrics:
         parts.append("**Key metrics:** " + "; ".join(metrics))
     # If findings already include the tables, do not print card.tables again.

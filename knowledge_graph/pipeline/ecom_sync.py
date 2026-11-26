@@ -23,7 +23,27 @@ from knowledge_graph.ontology import facet_name_fields, load_ontology, normalize
 LOGGER = get_logger("knowledge_graph.ecom_sync")
 
 GRAPH_ID = "ecom_products"
+HUB_GRAPH_ID = "fashion_brain"
 SOURCE_TYPE = "ecom_products"
+_SHARED_HUB_TYPES = frozenset(
+    {
+        "Brand",
+        "Material",
+        "Color",
+        "ColorFamily",
+        "MaterialGroup",
+        "TargetGroup",
+        "Reference",
+        "Construction",
+        "Occasion",
+        "Pattern",
+        "Fit",
+        "CareInstruction",
+        "RetailGroup",
+        "PriceBand",
+        "SeasonYear",
+    }
+)
 _SELECT = """
 SELECT
   master_id, brand, name, reference, display_reference, description,
@@ -305,6 +325,7 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
     for rel in relationships:
         end_id = rel.get("end_id") or f"{rel['end_type'].lower()}:{slug(rel['end_name'])}"
         end_type = rel["end_type"]
+        node_graph = HUB_GRAPH_ID if end_type in _SHARED_HUB_TYPES else GRAPH_ID
         if rel["rel_type"] == "PARENT_CATEGORY":
             start_id = rel.get("start_id") or f"garmentcategory:{slug(rel['start_name'])}"
             for node_id, node_type, node_name in (
@@ -349,13 +370,13 @@ def upsert_product_graph(graph, product: dict[str, Any], relationships: list[dic
             GraphNode(
                 id=end_id,
                 labels=["Entity", "SourceEntity", end_type],
-                graph=GRAPH_ID,
+                graph=node_graph,
                 properties={
                     "id": end_id,
                     **facet_name_fields(rel.get("end_name")),
                     "entity_type": end_type,
                     "lifecycle": "active",
-                    "prov_source_id": GRAPH_ID,
+                    "prov_source_id": node_graph,
                     "prov_field_ref": rel.get("field_ref"),
                 },
             )
@@ -459,6 +480,13 @@ def refresh_generated_after_ecom_sync(platform, *, heavy: bool = True) -> dict[s
         LOGGER.exception("ecom sync: shared graph refresh failed")
         refreshed["shared_error"] = str(exc)
         return refreshed
+    try:
+        from knowledge_graph.pipeline.fashion_brain_enrichment import run_enrichment
+
+        refreshed["fashion_brain_enrichment"] = run_enrichment(platform)
+    except Exception as exc:
+        LOGGER.warning("ecom sync: fashion_brain enrichment failed: %s", exc)
+        refreshed["enrichment_error"] = str(exc)
     try:
         paths = save_source_snapshots(platform.graph, settings.generated, [GRAPH_ID])
         refreshed["source_snapshot"] = [str(path) for path in paths]

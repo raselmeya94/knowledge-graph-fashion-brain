@@ -99,6 +99,9 @@ _TOKEN_STOP = frozenset(
     yes yeah yep ok okay sure confirm confirming confirmed proceed correct accurate
     fine alright reply report dimension dimensions aspect aspects color colour
     colors colours category categories them those these me now
+    mix mixes mixed mixture mixtures blend blends listing listings ops brief briefs
+    online concentrated supports join pricing into whether status
+    instock outofstock stockstatus available unavailable
     """.split()
 )
 
@@ -679,6 +682,9 @@ def planner_system_prompt(catalog: FieldCatalog) -> str:
         "preferred_graphs lists graph_id values that own the matched filter values "
         f"or that the user named (from the registry below, plus {SYSTEM_GRAPH_ID}).",
         "Copy filter values only from the user's words (or the matched catalog spelling).",
+        "CRITICAL: every filter value must appear in Live value matches for that attribute "
+        "or be a known stored catalog value for that field. Never invent values. "
+        "If a question word is not a known value for the field, omit that filter.",
         "Set references_prior_chat true only for follow-ups that depend on earlier turns.",
     ]
     if catalog.graphs:
