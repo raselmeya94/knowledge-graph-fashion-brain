@@ -142,6 +142,19 @@ def run_product_analysis(
             )
 
     field_override = analysis_fields
+    brief_ask = False
+    if not field_override and question:
+        try:
+            from fashion_brain.ask import (
+                analysis_fields_for_product_brief,
+                is_product_attribute_brief_ask,
+            )
+
+            if is_product_attribute_brief_ask(question):
+                brief_ask = True
+                field_override = analysis_fields_for_product_brief(question) or None
+        except Exception:
+            brief_ask = False
     if len(parties) >= 2:
         lines.append(
             f"Side-by-side assortment compare: {' vs '.join(parties)}. "
@@ -185,6 +198,7 @@ def run_product_analysis(
             evidence,
             caveats,
             analysis_fields=fields,
+            brief=brief_ask,
         )
         if len(ids) > 1:
             lines.append("")

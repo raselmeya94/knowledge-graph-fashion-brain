@@ -724,9 +724,19 @@ def _apply_session_scope(
         summary.references_prior_chat = True
 
     try:
+        from fashion_brain.ask import _is_suggestion, is_product_attribute_brief_ask
+
         scoped, group_by = enrich_scope_from_question(question, summary.filters)
         summary.filters = sanitize_party_filters(scoped)
-        if group_by and not summary.group_by:
+        # Normalize season filter key; never leave filters["season"] for specs.
+        if summary.filters.get("season") and not summary.filters.get("season_name"):
+            summary.filters["season_name"] = str(summary.filters.pop("season"))
+        else:
+            summary.filters.pop("season", None)
+        # Attribute briefs / new-spec asks: never rewrite into "Break down … by season/material".
+        if is_product_attribute_brief_ask(question) or _is_suggestion(question):
+            summary.group_by = None
+        elif group_by and not summary.group_by:
             summary.group_by = group_by
             party = summary.filters.get("brand") or summary.filters.get("buyer") or "selection"
             if "count" in (summary.actual_intent or "").casefold():
@@ -750,6 +760,7 @@ def _deterministic_intent(question: str, history: list | None, *, platform=None)
         ground_filters_from_live_brands,
         is_availability_price_ops_brief_ask,
         is_composition_compare_question,
+        is_product_attribute_brief_ask,
         _is_product_details_request,
         live_brand_names,
         plan_routes,
@@ -849,16 +860,32 @@ def _deterministic_intent(question: str, history: list | None, *, platform=None)
         )
         group_by = None
         analysis = False
-    elif analysis:
+    elif is_product_attribute_brief_ask(question) or analysis:
         who = filters.get("brand") or filters.get("buyer") or "the named party"
-        actual = f"Analyse {who} with attribute-wise product breakdowns"
+        garment = (
+            filters.get("garment")
+            or filters.get("garment_type")
+            or filters.get("category")
+            or ""
+        )
+        if is_product_attribute_brief_ask(question) and garment:
+            actual = (
+                f"Product brief for {who} {garment}: "
+                "composition, construction, fit, care, colours, and price"
+            )
+        else:
+            actual = f"Analyse {who} with attribute-wise product breakdowns"
         group_by = None
+        analysis = True
     elif _is_product_details_request(question):
         actual = "Retrieve the full specifications of matching catalog products"
     elif route == "specification" or plan.get("suggest"):
-        actual = "Suggest product specifications from catalog products"
+        actual = "Propose a new product specification from historical catalog evidence"
+        # Season is a FILTER (season_name), never filters["season"] (that becomes group_by=season).
         if plan.get("season_name"):
-            filters["season"] = plan["season_name"]
+            filters["season_name"] = str(plan["season_name"])
+            filters.pop("season", None)
+        group_by = None
     elif route == "shared_products":
         facet = group_by or None
         if platform is not None and not facet:
@@ -2821,8 +2848,14 @@ def response_messages(
                     f"<question>\n{question}\n</question>\n\n"
                     + "\n\n".join(parts)
                     + "\n\n<task>\n"
-                    "Present requirements, brief analysis, then the final Product specification "
-                    "sheet with every Field: value from findings. Do not invent values.\n"
+                    "Write a buyer-oriented Product Development Intelligence report from "
+                    "<findings>. Lead with Executive Summary and the PROPOSED new product "
+                    "specification sheet (Field | value | evidence basis | confidence). "
+                    "Then short historical overview, key patterns, and buyer confirmation. "
+                    "Do NOT paste raw Decision Engine reason walls or dump every historical "
+                    "row verbatim. Do not treat historical modes as an existing SKU. "
+                    "Do not invent IDs or missing values — mark gaps for buyer confirmation. "
+                    "Identity stays Pending PLMEX creation/assignment.\n"
                     "</task>"
                 ),
             },

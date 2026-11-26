@@ -71,6 +71,11 @@ category: set needs_clarification=true and ask which brand/buyer/category to tra
 "Which product is trending / hot / more trending on <brand>" is a PRODUCT activity ranking
 (stock updates + price ups) — keep rewritten_question close to that ask, metric=price,
 group_by=null. Do NOT rewrite it into "Summarize average price change trends…".
+"Full <brand> <garment> brief — composition, construction, fit, care, colours, and price"
+is an attribute-wise product brief: keep brand AND garment filters, group_by=null,
+metric=analysis, analysis_depth=focused. The listed words are report sections — NEVER
+set group_by=material just because "composition" appears in that list, and NEVER drop
+the garment (sweater/jumper/…) the user named.
 Never ask for something the user already said. Never ask both clarification and confirmation at once.
 
 Return ONE JSON object only:
@@ -163,11 +168,12 @@ def _schema_block(catalog) -> str:
     return "\n".join(lines)
 
 
-def _plan_product_specification(question: str, state: dict | None) -> TurnPlan:
-    """Deterministic plan: suggest-sheet from catalog modes — never full assortment analysis."""
+def _plan_product_attribute_brief(question: str, state: dict | None) -> TurnPlan:
+    """Deterministic plan: brand+garment attribute brief — keep sweater; never group_by=material."""
 
     from fashion_brain.ask import (
         garment_type_from_question,
+        named_product_brief_facets,
         resolve_catalog_plan,
         sanitize_party_filters,
     )
@@ -198,26 +204,113 @@ def _plan_product_specification(question: str, state: dict | None) -> TurnPlan:
         filters.get("garment")
         or filters.get("garment_type")
         or filters.get("category")
+        or "products"
+    )
+    facets = named_product_brief_facets(question)
+    facet_bits = ", ".join(f.replace("_", " ") for f in facets) if facets else (
+        "composition, construction, fit, care, colours, and price"
+    )
+    return TurnPlan(
+        turn_type="analysis",
+        confidence=0.95,
+        rewritten_question=(
+            f"Attribute brief for {who} {garment}: {facet_bits}"
+        ),
+        filters=filters,
+        carry_filters=False,
+        group_by=None,
+        metric="analysis",
+        # Multi-facet report for the scoped brand+garment — not a single group_by slice.
+        analysis_depth="full",
+        preferred_graph=None,
+        needs_clarification=False,
+        needs_confirmation=False,
+        llm_ok=True,
+        assumptions=[
+            "product attribute brief keeps brand+garment; listed fields are report sections, not a single group_by"
+        ],
+    )
+
+
+def _plan_product_specification(question: str, state: dict | None) -> TurnPlan:
+    """Deterministic plan: suggest-sheet from catalog modes — never full assortment analysis."""
+
+    from fashion_brain.ask import (
+        garment_type_from_question,
+        preferred_graphs_from_question,
+        resolve_catalog_plan,
+        sanitize_party_filters,
+    )
+    from knowledge_graph.ontology import normalize_name
+
+    state = state or {}
+    filters: dict[str, str] = {}
+    season_name = None
+    try:
+        plan = resolve_catalog_plan(question, None, carry=False)
+        filters = dict(plan.get("filters") or {})
+        season_name = plan.get("season_name")
+    except Exception:
+        filters = {}
+        season_name = None
+    filters = sanitize_party_filters(filters)
+    if season_name and not filters.get("season_name"):
+        filters["season_name"] = str(season_name)
+    brand = str(filters.get("brand") or "").strip()
+    buyer = str(filters.get("buyer") or "").strip()
+    if brand and buyer and brand.casefold() == buyer.casefold():
+        filters.pop("buyer", None)
+    if not any(filters.get(key) for key in ("garment", "garment_type", "category")):
+        garment = garment_type_from_question(question)
+        if garment:
+            filters["garment"] = garment
+    if not (filters.get("brand") or filters.get("buyer")):
+        prior = dict(state.get("active_filters") or {})
+        for key in ("brand", "buyer"):
+            if prior.get(key):
+                filters[key] = str(prior[key])
+                break
+    who = filters.get("brand") or filters.get("buyer") or "the catalog"
+    garment = (
+        filters.get("garment")
+        or filters.get("garment_type")
+        or filters.get("category")
         or "style"
     )
+    season_bit = str(filters.get("season_name") or "").strip()
+    season_label = season_bit.capitalize() if season_bit else ""
+    preferred = None
+    try:
+        prefs = preferred_graphs_from_question(question)
+        if prefs:
+            preferred = prefs[0]
+        elif "plmex" in normalize_name(question) or "plm" in normalize_name(question).split():
+            preferred = "plmex_products"
+    except Exception:
+        preferred = None
+    scope_bits = [who]
+    if season_label:
+        scope_bits.append(season_label)
+    scope_bits.append(garment)
     return TurnPlan(
         turn_type="new_question",
         confidence=0.95,
         rewritten_question=(
-            f"Suggest a typical product specification for {who} {garment} "
-            "from the most common sample-ready catalog values"
+            f"Propose a new product specification for {' '.join(scope_bits)} "
+            "from historically supported PLM/catalog attribute combinations"
         ),
         filters=filters,
         carry_filters=False,
         group_by=None,
         metric="other",
         analysis_depth="unset",
-        preferred_graph=None,
+        preferred_graph=preferred,
         needs_clarification=False,
         needs_confirmation=False,
         llm_ok=True,
         assumptions=[
-            "product specification = attribute mode analysis then final sheet — not assortment analysis"
+            "product specification = historical analysis then Decision Engine proposal — not assortment analysis; "
+            "keep user season/party scope; identity Pending PLMEX creation"
         ],
     )
 
@@ -345,6 +438,15 @@ def plan_turn(platform, question: str, history: list | None, state: dict | None,
     # LLM can rewrite it into brand average price-trend (which triggers USD/GBP quizzes).
     if is_trending_product_ask(question):
         return _plan_trending_products(question, state)
+    # Multi-attribute product briefs (C1): keep brand+garment; never rewrite to
+    # "break down by material" from the composition item in the facet list.
+    try:
+        from fashion_brain.ask import is_product_attribute_brief_ask
+
+        if is_product_attribute_brief_ask(question):
+            return _plan_product_attribute_brief(question, state)
+    except Exception:
+        pass
     # Product-spec asks must not be treated as "confirm prior analysis" (that pasted the
     # whole sentence into brand and ran analytical_tool instead of the Neo4j mode sheet).
     try:

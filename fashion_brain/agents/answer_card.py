@@ -150,13 +150,18 @@ INTENT_HINTS = {
         "Never write 'side-by-side comparison for Category vs Material'."
     ),
     "spec_brief": (
-        "INTENT HINT: FULL PRODUCT SPECIFICATION / DETAIL BRIEF — no length limit. "
-        "Present clearly with structured headings:\n"
-        "1) **Requirements & Scope**\n"
-        "2) **Attribute Analysis** (Markdown table of attributes, winning values, counts, and alternatives when available)\n"
-        "3) **Specification Sheet / Product Details** (all available specification fields cleanly formatted)\n"
-        "4) **Construction & Making Notes / Caveats**.\n"
-        "Never collapse specifications into a short summary or drop available fields."
+        "INTENT HINT: NEW PRODUCT SPECIFICATION (buyer intelligence) — not a raw mode dump. "
+        "Write a professional report with:\n"
+        "1) **Executive Summary** — party, season, objective, how many historical products informed this\n"
+        "2) **Historical Data Overview** — short (scope + source)\n"
+        "3) **Key Attribute Findings** — compact table of the most important historical leaders only\n"
+        "4) **Important Patterns** — a few bullets on compatible combinations\n"
+        "5) **Proposed New Product Specification** — clean Field | Proposed value | Evidence basis | Confidence table "
+        "(or Field: value sheet). Identity = Pending PLMEX creation/assignment. Never reuse historical IDs.\n"
+        "6) **Buyer Confirmation Requirements** — pending / weak-evidence fields\n"
+        "7) **Final Recommendations** — short next steps.\n"
+        "CRITICAL: Do NOT paste the raw Decision Engine / long reason walls. "
+        "A counts-only historical dump without a proposed sheet FAILS this intent."
     ),
     "report": (
         "INTENT HINT: FULL MERCHANDISING REPORT — same comprehensive structure as analysis: "
@@ -1108,11 +1113,139 @@ def _field_sections_from_findings(findings: str) -> list[str]:
     return [chunk] if chunk.strip() else []
 
 
+def _findings_look_like_product_specification_report(findings: str) -> bool:
+    """True when retrieve already built a proposed NEW product specification package."""
+
+    text = str(findings or "").strip()
+    if len(text) < 120:
+        return False
+    low = text.casefold()
+    has_identity = "pending plmex" in low
+    has_sheet = (
+        "proposed new product specification" in low
+        or "final product specification" in low
+        or '"approval_status"' in low
+    )
+    has_analysis = (
+        "product specification decision engine" in low
+        or "historical data overview" in low
+        or "historical data analysis" in low
+        or "### attribute analysis" in low
+        or "## 1. user requirements" in low
+    )
+    return has_identity and has_sheet and has_analysis
+
+
+def _specification_report_fallback(card: AnswerCard) -> str:
+    """Ship the buyer brief as-is when retrieve already built the 4-section report."""
+
+    findings = str(card.findings or "").strip()
+    if not findings:
+        return "No product specification evidence was retrieved."
+
+    # Prefer the markdown buyer brief when present.
+    for marker in (
+        "# ",
+        "## 1. User Requirements",
+        "Historical Data Analysis",
+        "Final Product Specification",
+        "Product specification:",
+        "Proposed new product specification",
+    ):
+        idx = findings.find(marker)
+        if idx >= 0 and marker.startswith("#"):
+            # Start at the titled brief; drop scope chatter above the title.
+            start = findings[idx:].strip()
+            notes = [*(card.data_notes or [])[:2], *(card.caveats or [])[:2]]
+            find_low = start.casefold()
+            extra = [n for n in notes if n and str(n).casefold() not in find_low]
+            if extra:
+                start = start + "\n\n### Notes\n" + "\n".join(f"- {n}" for n in extra)
+            return start
+        if idx >= 0 and marker == "## 1. User Requirements":
+            start = findings[idx:].strip()
+            # Keep a preceding H1 title if present.
+            head = findings[:idx].rstrip().splitlines()
+            if head and head[-1].startswith("# "):
+                start = head[-1] + "\n\n" + start
+            notes = [*(card.data_notes or [])[:2], *(card.caveats or [])[:2]]
+            find_low = start.casefold()
+            extra = [n for n in notes if n and str(n).casefold() not in find_low]
+            if extra:
+                start = start + "\n\n### Notes\n" + "\n".join(f"- {n}" for n in extra)
+            return start
+
+    # Legacy fallback: overview / proposed sheet slices.
+    def _section(start_mark: str, *stop_marks: str) -> str:
+        idx = findings.find(start_mark)
+        if idx < 0:
+            return ""
+        chunk = findings[idx:]
+        for stop in stop_marks:
+            cut = chunk.find(stop, len(start_mark))
+            if cut > 0:
+                chunk = chunk[:cut]
+                break
+        return chunk.strip()
+
+    parts: list[str] = []
+    for line in findings.splitlines()[:8]:
+        if line.lower().startswith("scope for "):
+            parts.append(line.strip())
+            break
+    overview = _section(
+        "Historical data overview:",
+        "\nImportant relationships and patterns:",
+        "\nEvidence note:",
+        "\nProduct specification:",
+    )
+    if overview:
+        parts.append(overview)
+    proposed = _section(
+        "Product specification:",
+        "\nBuyer confirmation requirements:",
+        "\n### Buyer confirmation requirements",
+        "\nData gaps:",
+        "\nHistorical benchmark note:",
+    )
+    if not proposed:
+        proposed = _section(
+            "Proposed new product specification",
+            "\nBuyer confirmation requirements:",
+            "\nHistorical benchmark note:",
+        )
+    if proposed:
+        parts.append(proposed)
+    confirm = _section(
+        "Buyer confirmation requirements:",
+        "\nData gaps:",
+        "\nHistorical benchmark note:",
+    ) or _section(
+        "### Buyer confirmation requirements",
+        "\nHistorical benchmark note:",
+    )
+    if confirm:
+        parts.append(confirm)
+    bench = _section("Historical benchmark note:")
+    if bench:
+        parts.append(bench)
+    start = "\n\n".join(p for p in parts if p).strip() or findings
+    notes = [*(card.data_notes or [])[:2], *(card.caveats or [])[:2]]
+    find_low = start.casefold()
+    extra = [n for n in notes if n and str(n).casefold() not in find_low]
+    if extra:
+        start = start + "\n\n### Notes\n" + "\n".join(f"- {n}" for n in extra)
+    return start
+
+
 def _findings_look_like_complete_analysis(findings: str) -> bool:
     """True when retrieve already has attribute tables — do not LLM-rewrite duplicates."""
 
     text = str(findings or "").strip()
     if len(text) < 80:
+        return False
+    # Spec Decision Engine packages are not assortment analysis dumps.
+    if _findings_look_like_product_specification_report(text):
         return False
     low = text.casefold()
     has_table = "|" in text and "---" in text
@@ -1403,6 +1536,15 @@ def write_answer(
         footer = card.footer()
         final = f"{fallback}\n\n{footer}".strip() if footer else fallback
         LOGGER.info("answer_card price_trend shipped complete findings (%s chars)", len(final))
+        return final
+    # New product-spec Decision Engine packages are already report-shaped — ship once.
+    if card.intent == "spec_brief" and _findings_look_like_product_specification_report(
+        card.findings or ""
+    ):
+        fallback = _specification_report_fallback(card)
+        footer = card.footer()
+        final = f"{fallback}\n\n{footer}".strip() if footer else fallback
+        LOGGER.info("answer_card spec_brief shipped proposed-spec findings (%s chars)", len(final))
         return final
     # Assortment / color breakdowns: ship retrieve tables once — LLM rewrites reprint them.
     if card.intent in {"analysis", "report", "compare", "breakdown", "ranking"} and (

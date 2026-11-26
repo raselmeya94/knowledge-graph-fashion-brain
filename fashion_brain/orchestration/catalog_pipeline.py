@@ -3553,23 +3553,54 @@ def draft_catalog_orchestrated(
                 intention.preferred_graphs = [turn_plan.preferred_graph, *prefs]
         if turn_plan.group_by and not intention.group_by and not spec_ask:
             intention.group_by = turn_plan.group_by
-        if turn_plan.analysis_depth == "full" and not spec_ask:
+        if (
+            not spec_ask
+            and (
+                turn_plan.analysis_depth == "full"
+                or str(turn_plan.metric or "").casefold() == "analysis"
+                or str(turn_plan.turn_type or "").casefold() == "analysis"
+            )
+        ):
             intention.analysis = True
+            # Attribute briefs must stay multi-facet (not a lone material group_by).
+            if not turn_plan.group_by:
+                intention.group_by = None
         # Turn planner owns this turn's scope — do not let Intention re-glue sticky
         # sweater/color from earlier slices onto "top 10 … among them".
         planned = dict(turn_plan.effective_filters or {})
         try:
-            from fashion_brain.ask import sanitize_party_filters
+            from fashion_brain.ask import (
+                is_product_attribute_brief_ask,
+                sanitize_party_filters,
+            )
             from knowledge_graph.ontology import normalize_name
 
             planned = sanitize_party_filters(planned)
-            qn = normalize_name(question or "")
+            # Prefer original user text for token presence — rewritten asks may drop "sweater".
+            scope_text = normalize_name(
+                " ".join(
+                    part
+                    for part in (
+                        str(question or ""),
+                        str(getattr(turn_plan, "rewritten_question", "") or ""),
+                    )
+                    if part
+                )
+            )
             for key, value in list((intention.filters or {}).items()):
                 if key in planned or value in (None, ""):
                     continue
                 token = normalize_name(str(value))
-                if token and token in qn:
+                if token and token in scope_text:
                     planned[key] = value
+            # Attribute brief: never drop garment/category named in the original ask.
+            if is_product_attribute_brief_ask(question) or is_product_attribute_brief_ask(
+                str(getattr(turn_plan, "rewritten_question", "") or "")
+            ):
+                for key in ("garment", "garment_type", "category"):
+                    if intention.filters.get(key) and not planned.get(key):
+                        planned[key] = intention.filters[key]
+                intention.group_by = None
         except Exception:
             planned = dict(turn_plan.effective_filters or {}) or dict(intention.filters or {})
         intention.filters = planned
@@ -3580,12 +3611,36 @@ def draft_catalog_orchestrated(
     } or bool(getattr(intention, "suggest", False)):
         intention.analysis = False
         intention.retrieve_mode = "template"
+        intention.group_by = None
         try:
             from fashion_brain.ask import sanitize_party_filters
 
             intention.filters = sanitize_party_filters(dict(intention.filters or {}))
         except Exception:
             pass
+        # Season must stay on both Intention.season_name and filters for Neo4j spec retrieve.
+        season = str(
+            (intention.filters or {}).get("season_name")
+            or getattr(intention, "season_name", None)
+            or ""
+        ).strip()
+        if not season:
+            try:
+                from fashion_brain.ask import resolve_catalog_plan
+
+                season = str(
+                    resolve_catalog_plan(question, None, carry=False).get("season_name") or ""
+                ).strip()
+            except Exception:
+                season = ""
+        if season:
+            intention.season_name = season
+            intention.filters = dict(intention.filters or {})
+            intention.filters["season_name"] = season
+            intention.filters.pop("season", None)
+        else:
+            intention.filters = dict(intention.filters or {})
+            intention.filters.pop("season", None)
     # Ranked product listing: force limit + skip sticky facet re-merge below.
     ranked_listing = False
     try:

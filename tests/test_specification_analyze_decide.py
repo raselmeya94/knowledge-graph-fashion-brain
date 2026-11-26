@@ -1,4 +1,4 @@
-"""Specification sheet: requirements → analyze ALL fields → decide → full breakdown."""
+"""Specification sheet: requirements → analyze ALL fields → decide → buyer brief."""
 
 from __future__ import annotations
 
@@ -45,25 +45,25 @@ def test_specification_analyzes_required_attributes_then_picks_best(monkeypatch)
         evidence,
     )
     text = "\n".join(lines)
-    assert "User requirements:" in text
-    assert "Buyer: zara" in text or "- Buyer: zara" in text
-    assert "Season: winter" in text or "- Season: winter" in text
-    assert "Required specification attributes" in text
-    assert "analyze all" in text.casefold()
-    assert "Analysis on 10 matching products" in text
-    assert "| Attribute | Best value |" in text
-    assert "| category | Sweater |" in text
-    assert "| material | Wool |" in text
-    assert "| gender | Women |" in text
-    assert "Decision rule:" in text
-    assert "Product specification:" in text
-    final = text.split("Product specification:", 1)[1].casefold()
-    assert "category: sweater" in final
-    assert "material: wool" in final
-    assert "gender: women" in final
-    assert "color: brown" in final
+    assert "## 1. User Requirements" in text
+    assert "Buyer: zara" in text or "- **Buyer:** zara" in text
+    assert "Season: winter" in text or "- **Season:** winter" in text
+    assert "### Attribute Analysis" in text
+    assert "| Attribute | Leading Value | Count | Alternative Values |" in text
+    assert "| Category | Sweater |" in text
+    assert "| Material | Wool |" in text
+    assert "| Gender | Women |" in text
+    assert "## 4. Final Product Specification" in text
+    assert "Proposed new product specification" in text
+    assert "Pending PLMEX creation" in text
+    assert "```json" in text
+    assert '"category": "Sweater"' in text
+    assert '"material": "Wool"' in text
+    assert '"gender": "Women"' in text
+    assert "Product Specification Decision Engine:" not in text
     assert evidence and evidence[0].record_id == "specification"
-    assert "fields=4/4" in evidence[0].excerpt
+    assert "proposed_new=true" in evidence[0].excerpt
+    assert "decision_engine=true" in evidence[0].excerpt
 
 
 def test_specification_sheet_lists_every_required_field_even_when_missing(monkeypatch):
@@ -93,13 +93,13 @@ def test_specification_sheet_lists_every_required_field_even_when_missing(monkey
         evidence,
     )
     text = "\n".join(lines)
-    assert "| gauge | (no usable value) |" in text
-    assert "| gsm | (no usable value) |" in text
-    sheet = text.split("Product specification:", 1)[1].casefold()
-    assert "category: sweater" in sheet
-    assert "gauge: (no usable value" in sheet
-    assert "gsm: (no usable value" in sheet
-    assert "fields=1/3" in evidence[0].excerpt
+    assert "```json" in text
+    assert '"category": "Sweater"' in text
+    assert '"gauge": "Pending buyer confirmation"' in text
+    assert '"gsm": "Pending buyer confirmation"' in text
+    assert "Buyer confirmation" in text or "buyer confirmation" in text.casefold()
+    assert "proposed_new=true" in evidence[0].excerpt
+    assert "decision_engine=true" in evidence[0].excerpt
 
 
 def test_specification_anchors_garment_hierarchy_before_other_fields(monkeypatch):
@@ -158,12 +158,13 @@ def test_specification_anchors_garment_hierarchy_before_other_fields(monkeypatch
         lines,
         evidence,
     )
-    final = "\n".join(lines).split("Product specification:", 1)[1].casefold()
-    assert "pullover sweater" in final
-    assert "category: sweater" in final
-    assert "garment type: jumper" in final
-    assert "jacket light weight bomber" not in final
-    assert "Anchored on" in "\n".join(lines)
+    text = "\n".join(lines)
+    assert '"sub_sub_category": "Pullover Sweater"' in text
+    assert '"category": "Sweater"' in text
+    assert '"garment_type": "Jumper"' in text
+    # Alternatives may mention jacket historically; the proposed sheet must not pick it.
+    sheet = text.split("```json", 1)[1].split("```", 1)[0]
+    assert "Jacket Light Weight Bomber" not in sheet
 
 
 def test_filter_where_accepts_plm_anchor_facets():
@@ -229,15 +230,13 @@ def test_failed_anchor_narrow_does_not_block_other_required_fields(monkeypatch):
         evidence,
     )
     text = "\n".join(lines)
-    assert "| gender | Women |" in text
-    assert "| color | Brown |" in text
-    assert "| composition | 100% Cotton |" in text
-    final = text.split("Product specification:", 1)[1].casefold()
-    assert "pullover sweater" in final
-    assert "gender: women" in final
-    assert "color: brown" in final
-    assert "composition: 100% cotton" in final
-    assert "fields=4/4" in evidence[0].excerpt
+    assert "| Gender | Women |" in text
+    assert "| Color | Brown |" in text
+    assert "| Composition | 100% Cotton |" in text
+    assert '"gender": "Women"' in text
+    assert '"colour": "Brown"' in text
+    assert "proposed_new=true" in evidence[0].excerpt
+    assert "decision_engine=true" in evidence[0].excerpt
 
 
 def test_plmex_uses_full_predefined_spec_field_order():

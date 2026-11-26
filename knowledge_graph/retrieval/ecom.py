@@ -149,6 +149,9 @@ _NON_FACET_ATTRS = frozenset(
         "normalized_name",
         "reference",
         "display_reference",
+        "ref_norm",
+        "search_text",
+        "searchtext",
         "graph",
         "source",
         "domain",
@@ -181,6 +184,9 @@ _META_ATTR_TOKENS = frozenset(
         "timestamp",
         "html",
         "json",
+        "search",
+        "ref",
+        "norm",
         "raw",
         "meta",
         "catalog",
@@ -4665,7 +4671,7 @@ def _append_neo4j_specification_for_graph(
     *,
     season_name: str | None = None,
 ) -> None:
-    """User requirements → required attributes → analyze values → pick best → final sheet."""
+    """User requirements → historical attribute modes → proposed NEW sheet (not an existing SKU)."""
 
     base = clean_product_filters(dict(filters or {}))
     if season_name and not base.get("season_name"):
@@ -4680,12 +4686,12 @@ def _append_neo4j_specification_for_graph(
     buyer_total = cypher_count_products(platform, graph_id, party_only)
     if buyer_total is None:
         buyer_total = 0
-    lines.append(f"Scope for {party}: {buyer_total} products in {_graph_label(platform, graph_id)}.")
     if not buyer_total:
         lines.append(f"There are no matching styles for {party} in {_graph_label(platform, graph_id)}.")
         return
 
     active = dict(base)
+    # Season is a hard filter for new-spec asks — never silently analyze the whole brand first.
     total = cypher_count_products(platform, graph_id, active)
     if total is None:
         total = 0
@@ -4695,7 +4701,13 @@ def _append_neo4j_specification_for_graph(
     if active.get("season_year"):
         season_bits.append(str(active["season_year"]))
     if season_bits:
-        lines.append(f"{' '.join(season_bits)} styles in that scope: {total} products.")
+        lines.append(
+            f"Scope for {party} · {' '.join(season_bits)}: {total} products in "
+            f"{_graph_label(platform, graph_id)} "
+            f"(of {buyer_total} total {party} products)."
+        )
+    else:
+        lines.append(f"Scope for {party}: {total} products in {_graph_label(platform, graph_id)}.")
     if total == 0 and active.get("season_year"):
         relaxed = dict(active)
         dropped_year = relaxed.pop("season_year")
@@ -4734,27 +4746,12 @@ def _append_neo4j_specification_for_graph(
         if value:
             requirement_rows.append((key.replace("_", " ").capitalize(), str(value)))
 
-    lines.append("User requirements:")
-    for label, value in requirement_rows:
-        lines.append(f"- {label}: {value}")
-
-    field_labels = [field.replace("_", " ") for field in spec_fields]
-    lines.append(
-        f"Required specification attributes ({len(spec_fields)} — analyze all): "
-        + (", ".join(field_labels) if field_labels else "none")
-        + "."
-    )
-
-    # 1) anchors narrow (when supported)  2) every required field is analyzed  3) full sheet
+    # 1) anchors narrow (when supported)  2) every required field is analyzed  3) proposed sheet
     scope = dict(active)
     scope_total = int(total)
     # field -> (best_label, best_count, alternatives_text, raw_value|None)
     analysis_rows: dict[str, tuple[str, int, str, str | None]] = {}
     decided_fields: set[str] = set()
-    lines.append(
-        f"Analysis on {scope_total} matching products "
-        f"(predefined attributes; anchor hierarchy first when possible):"
-    )
 
     def _probe_field(field: str, filters: dict, population: int) -> tuple[str, int, str, str] | None:
         groups = cypher_group_by(platform, graph_id, field, filters) or []
@@ -4771,7 +4768,6 @@ def _append_neo4j_specification_for_graph(
         if field not in spec_fields or field in decided_fields:
             continue
         picked = _probe_field(field, scope, scope_total)
-        label = field.replace("_", " ")
         if not picked:
             analysis_rows[field] = ("(no usable value)", 0, "—", None)
             continue
@@ -4784,12 +4780,6 @@ def _append_neo4j_specification_for_graph(
         if narrowed:
             scope = candidate
             scope_total = int(narrowed)
-            lines.append(f"  Anchored on {label}={best}; remaining products: {scope_total}.")
-        else:
-            lines.append(
-                f"  Kept {label}={best}; could not narrow further "
-                f"(continuing on {scope_total} products)."
-            )
 
     for field in spec_fields:
         if field in analysis_rows:
@@ -4802,55 +4792,510 @@ def _append_neo4j_specification_for_graph(
         analysis_rows[field] = (best, best_count, options, raw)
         decided_fields.add(field)
 
-    # Full breakdown table — one row per required attribute (never stop after hierarchy).
-    lines.append("| Attribute | Best value | Count | Top alternatives |")
-    lines.append("| --- | --- | ---: | --- |")
-    for field in spec_fields:
-        best, best_count, options, _raw = analysis_rows.get(
-            field, ("(no usable value)", 0, "—", None)
+    # Progressive compatible locks: user requirements → hierarchy anchors → core
+    # attributes decided on the narrowed historical set (not independent modes).
+    decision_rows: list[dict[str, str]] = []
+    decision_scope = dict(scope)
+    decision_total = int(scope_total)
+    season_requested = str(active.get("season_name") or season_name or "").strip().casefold()
+    locked_raw: dict[str, str] = {
+        key: str(value)
+        for key, value in decision_scope.items()
+        if key not in {party_key, "brand", "buyer", "season_name", "season_year", "season"}
+        and value not in (None, "")
+    }
+
+    def _confidence(count: int, population: int) -> str:
+        if population <= 0 or count <= 0:
+            return "insufficient"
+        share = count / population
+        if share >= 0.50 and count >= 5:
+            return "high"
+        if share >= 0.25 or (share >= 0.15 and count >= 3):
+            return "medium"
+        return "low"
+
+    def _evidence_cell(label: str, count: int, population: int) -> str:
+        if population <= 0 or count <= 0:
+            return "insufficient historical evidence"
+        # Never report count > population (stale probe vs narrowed scope).
+        use_count = min(int(count), int(population))
+        share = round(100.0 * use_count / population, 1)
+        return f"{label} on {use_count} of {population} ({share}%) in scoped historical set"
+
+    def _pick_season_aware(
+        field: str, population: int
+    ) -> tuple[str, int, str, str] | None:
+        groups = cypher_group_by(platform, graph_id, field, decision_scope) or []
+        usable = _usable_ranked(groups, field, limit=8)
+        if not usable:
+            return None
+        # Prefer event/season tags that match the user-requested season (Winter > Fall).
+        if field in {"ai_event_tags", "ai_event_tag"} and season_requested:
+            scored: list[tuple[int, str, int]] = []
+            for name, count in usable:
+                key = normalize_name(str(name))
+                score = 0
+                if key == season_requested or key.startswith(season_requested + " "):
+                    score = 100
+                elif season_requested in key:
+                    score = 80
+                elif season_requested == "winter" and any(
+                    tok in key for tok in ("winter", "aw", "autumn winter", "fall winter")
+                ):
+                    score = 90 if "winter" in key else 40
+                elif season_requested == "winter" and key in {"fall", "autumn"}:
+                    score = 0  # never propose Fall/Autumn for a Winter ask
+                scored.append((score, str(name), int(count)))
+            scored.sort(key=lambda row: (-row[0], -row[2], row[1]))
+            # Require a season-matching tag; otherwise leave pending for buyer.
+            if scored and scored[0][0] >= 40:
+                name, count = scored[0][1], scored[0][2]
+                options = "; ".join(
+                    f"{_display_label(str(n))} ({c} of {population})" for n, c in usable
+                )
+                return _display_label(str(name)), int(count), options, str(name)
+            return None
+        best_name, best_count = usable[0]
+        # Never propose yarn-count units as material (Nm / tex / denier).
+        if field in {"material", "materials"}:
+            if not _usable_value(str(best_name), field):
+                nxt = next(
+                    ((n, c) for n, c in usable if _usable_value(str(n), field)),
+                    None,
+                )
+                if not nxt:
+                    return None
+                best_name, best_count = nxt
+        options = "; ".join(
+            f"{_display_label(str(name))} ({count} of {population})" for name, count in usable
         )
-        label = field.replace("_", " ")
-        count_cell = str(best_count) if best_count else "—"
-        # Alternatives column: drop the leading "Best (n of N); " duplication when possible.
-        alt = options if options and options != "—" else "—"
-        if alt != "—" and "; " in alt:
-            # Keep 2nd.. values as alternatives when present.
-            parts = [p.strip() for p in alt.split(";") if p.strip()]
-            alt = "; ".join(parts[1:4]) if len(parts) > 1 else "—"
-        lines.append(f"| {label} | {best} | {count_cell} | {alt} |")
+        return _display_label(str(best_name)), int(best_count), options, str(best_name)
 
-    filled = sum(1 for field in spec_fields if analysis_rows.get(field, ("", 0, "", None))[3])
-    missing_fields = [field for field in spec_fields if not analysis_rows.get(field, ("", 0, "", None))[3]]
-    lines.append(
-        "Decision rule: user requirements set scope; every required attribute above is analyzed; "
-        "anchors narrow when supported; each best value is the most common usable mode on the "
-        f"active set ({filled}/{len(spec_fields)} filled)."
-    )
-
-    lines.append("Product specification:")
     for label, value in requirement_rows:
-        lines.append(f"{label}: {value}")
-    for field in spec_fields:
-        best, best_count, _options, raw = analysis_rows.get(
-            field, ("(no usable value)", 0, "—", None)
+        decision_rows.append(
+            {
+                "field": label,
+                "value": value,
+                "evidence": "stated in user question",
+                "reason": "User-provided requirement — locks analysis scope",
+                "confidence": "user-provided",
+                "confirm": "No",
+                "basis": "user-provided",
+                "raw_key": None,
+                "raw_value": None,
+            }
         )
+
+    decide_order = [
+        *[f for f in _SPEC_ANCHOR_FIELDS if f in spec_fields],
+        *[f for f in spec_fields if f not in set(_SPEC_ANCHOR_FIELDS)],
+    ]
+    relationship_notes: list[str] = []
+    for field in decide_order:
         label = field.replace("_", " ")
-        if raw and best_count:
-            lines.append(f"{label}: {best} ({best_count} of {scope_total})")
-        elif raw:
-            lines.append(f"{label}: {best}")
-        else:
-            lines.append(f"{label}: (no usable value in matching products)")
+        # Always re-probe on the current decision scope so evidence counts match population.
+        picked = _pick_season_aware(field, decision_total)
+        if field in locked_raw and not picked:
+            decision_rows.append(
+                {
+                    "field": label,
+                    "value": _display_label(locked_raw[field]),
+                    "evidence": "locked by hierarchy / prior filter",
+                    "reason": "Kept to preserve a coherent attribute combination",
+                    "confidence": "medium",
+                    "confirm": "No",
+                    "basis": "historically observed",
+                    "raw_key": field,
+                    "raw_value": locked_raw[field],
+                }
+            )
+            continue
+        if field in locked_raw and picked:
+            best, best_count, _opts, raw = picked
+            # Prefer the locked raw when still present; otherwise take fresh probe.
+            if normalize_name(str(raw)) != normalize_name(locked_raw[field]):
+                # Re-count the locked value on current scope.
+                locked_groups = cypher_group_by(platform, graph_id, field, decision_scope) or []
+                match = next(
+                    (
+                        (n, c)
+                        for n, c in locked_groups
+                        if normalize_name(str(n)) == normalize_name(locked_raw[field])
+                    ),
+                    None,
+                )
+                if match:
+                    best = _display_label(str(match[0]))
+                    best_count = int(match[1])
+                    raw = str(match[0])
+            conf = _confidence(best_count, decision_total)
+            decision_rows.append(
+                {
+                    "field": label,
+                    "value": best,
+                    "evidence": _evidence_cell(best, best_count, decision_total),
+                    "reason": "Hierarchy/compatible lock from historical narrowing",
+                    "confidence": conf if conf != "insufficient" else "medium",
+                    "confirm": "No",
+                    "basis": "historically observed",
+                    "raw_key": field,
+                    "raw_value": locked_raw[field],
+                }
+            )
+            continue
+
+        if not picked:
+            decision_rows.append(
+                {
+                    "field": label,
+                    "value": "Pending — insufficient evidence",
+                    "evidence": "no usable historical values in the season/party scope",
+                    "reason": "Do not invent a value; buyer confirmation required",
+                    "confidence": "insufficient",
+                    "confirm": "Yes",
+                    "basis": "not available / buyer confirmation",
+                    "raw_key": field,
+                    "raw_value": None,
+                }
+            )
+            continue
+
+        best, best_count, options, raw = picked
+        conf = _confidence(best_count, decision_total)
+        analysis_rows[field] = (best, best_count, options, raw)
+        alt_bits = []
+        if options and "; " in options:
+            alt_bits = [p.strip() for p in options.split(";") if p.strip()][1:3]
+        reason = "Leading historically observed value on the current compatible scope"
+        if alt_bits:
+            reason += f"; alternatives: {'; '.join(alt_bits)}"
+        narrowed_ok = False
+        if conf in {"high", "medium"} and raw:
+            candidate = dict(decision_scope)
+            candidate[field] = raw
+            narrowed = cypher_count_products(platform, graph_id, candidate)
+            if narrowed and int(narrowed) > 0:
+                if locked_raw:
+                    relationship_notes.append(
+                        f"{label}={best} co-occurs with locked attributes on "
+                        f"{int(narrowed)} of {decision_total} scoped products."
+                    )
+                decision_scope = candidate
+                decision_total = int(narrowed)
+                locked_raw[field] = raw
+                narrowed_ok = True
+                reason += f"; combination retained ({decision_total} products remain)"
+        if not narrowed_ok and conf == "low":
+            decision_rows.append(
+                {
+                    "field": label,
+                    "value": best,
+                    "evidence": _evidence_cell(best, best_count, decision_total),
+                    "reason": reason + "; weak share — optional recommendation only",
+                    "confidence": conf,
+                    "confirm": "Yes",
+                    "basis": "AI-recommended",
+                    "raw_key": field,
+                    "raw_value": raw,
+                }
+            )
+            continue
+        if not narrowed_ok and conf in {"high", "medium"}:
+            locked_raw[field] = raw
+        decision_rows.append(
+            {
+                "field": label,
+                "value": best,
+                "evidence": _evidence_cell(best, best_count, decision_total),
+                "reason": reason,
+                "confidence": conf,
+                "confirm": "Yes" if conf in {"low", "insufficient"} else "No",
+                "basis": "historically observed" if conf in {"high", "medium"} else "AI-recommended",
+                "raw_key": field,
+                "raw_value": raw if conf in {"high", "medium", "low"} else None,
+            }
+        )
+
+    filled = sum(
+        1
+        for row in decision_rows
+        if row.get("raw_value") or row.get("basis") == "user-provided"
+    )
+    missing_fields = [
+        row["field"]
+        for row in decision_rows
+        if row.get("basis") == "not available / buyer confirmation"
+    ]
+    confirm_fields = [
+        row["field"] for row in decision_rows if str(row.get("confirm") or "").casefold() == "yes"
+    ]
+
+    catalog_label = _graph_label(platform, graph_id)
+    season_title = (season_requested or "catalog").strip().title()
+    party_title = str(party).strip().title()
+
+    def _alt_cell(options: str, best: str) -> str:
+        parts = [p.strip() for p in (options or "").split(";") if p.strip()]
+        alts: list[str] = []
+        for part in parts:
+            label_bit = part.split("(", 1)[0].strip()
+            if normalize_name(label_bit) == normalize_name(best):
+                continue
+            # Prefer "Name (count)" without the "of N" population suffix.
+            if "(" in part and " of " in part:
+                name, rest = part.split("(", 1)
+                count_bit = rest.split(" of ", 1)[0].strip()
+                alts.append(f"{name.strip()} ({count_bit})")
+            else:
+                alts.append(part)
+            if len(alts) >= 3:
+                break
+        return ", ".join(alts) if alts else "—"
+
+    def _sheet_value(row: dict[str, str]) -> str:
+        basis = row.get("basis") or ""
+        if basis in {"not available / buyer confirmation", "AI-recommended"}:
+            return "Pending buyer confirmation"
+        if str(row.get("confirm") or "").casefold() == "yes" and basis != "user-provided":
+            return "Pending buyer confirmation"
+        return str(row.get("value") or "Pending buyer confirmation")
+
+    by_field = {
+        str(row.get("raw_key") or "").casefold(): row
+        for row in decision_rows
+        if row.get("raw_key")
+    }
+
+    def _val(field: str, default: str = "Pending buyer confirmation") -> str:
+        row = by_field.get(field.casefold())
+        if not row:
+            return default
+        return _sheet_value(row)
+
+    # --- Buyer intelligence brief (requirements → analysis → summary → JSON) ---
+    lines.append(f"# {season_title} Product Specification — {party_title}")
+    lines.append("")
+    lines.append("## 1. User Requirements")
+    lines.append("")
+    lines.append(
+        f"The user requests a new {season_title}-season product specification for "
+        f"{party_title} buyers, developed using historical {catalog_label} product data."
+    )
+    lines.append("")
+    for label, value in requirement_rows:
+        lines.append(f"- **{label}:** {value}")
+    lines.append(f"- **Data Source:** {catalog_label}")
+    lines.append(
+        "- **Objective:** Develop an evidence-based product specification using "
+        "historical product attributes and patterns."
+    )
+    lines.append(
+        "- **Deliverable:** A new proposed product specification for buyer review."
+    )
+    lines.append("")
+    lines.append("## 2. Historical Data Analysis")
+    lines.append("")
+    lines.append(
+        f"Historical {party_title} products were examined using the user-provided "
+        f"requirements and relevant available product attributes "
+        f"({scope_total} in season/party scope; {decision_total} after compatible narrowing)."
+    )
+    lines.append("")
+    lines.append(
+        "The analysis focuses on identifying commonly used attribute values, "
+        "alternative choices, and compatible combinations within the selected product scope."
+    )
+    lines.append("")
+    lines.append("### Attribute Analysis")
+    lines.append("")
+    lines.append("| Attribute | Leading Value | Count | Alternative Values |")
+    lines.append("|---|---|---:|---|")
+    attr_shown = 0
+    for field in decide_order:
+        best, best_count, options, raw = analysis_rows.get(field, ("", 0, "", None))
+        if not raw or not best_count:
+            # Prefer decision-row display when probe was season-aware / locked.
+            row = by_field.get(field)
+            if not row or not row.get("raw_value"):
+                continue
+            best = str(row.get("value") or "")
+            best_count = 0
+            options = ""
+            m = re.search(r" on (\d+) of ", str(row.get("evidence") or ""))
+            if m:
+                best_count = int(m.group(1))
+        if not best or not best_count:
+            continue
+        lines.append(
+            f"| {field.replace('_', ' ').title()} | {best} | {best_count} | "
+            f"{_alt_cell(options, best)} |"
+        )
+        attr_shown += 1
+    if not attr_shown:
+        lines.append("| — | insufficient historical evidence | 0 | — |")
+    lines.append("")
+    lines.append(
+        "*Counts are historical observations from the supplied analysis, "
+        "not proposed production quantities.*"
+    )
+    lines.append("")
+    lines.append("## 3. Analysis Summary")
+    lines.append("")
+    cat = _val("category", "")
+    subsub = _val("plm_sub_sub_category", "")
+    gtype = _val("garment_type", "")
+    gender = _val("gender", "")
+    material = _val("material", "")
+    color = _val("color", "")
+    gauge = _val("gauge", "")
+    event = _val("ai_event_tags", "")
+    if subsub != "Pending buyer confirmation" or gtype != "Pending buyer confirmation":
+        direction = " / ".join(
+            v
+            for v in (subsub if subsub != "Pending buyer confirmation" else "", gtype if gtype != "Pending buyer confirmation" else "")
+            if v
+        ) or (cat if cat != "Pending buyer confirmation" else "historical knitwear")
+        lines.append(
+            f"- **Product direction:** {direction} is a prominent historical product type "
+            "in the analyzed records."
+        )
+    if gender != "Pending buyer confirmation":
+        lines.append(
+            f"- **Target customer:** {gender}'s products represent the leading gender "
+            "selection in the narrowed historical comparison."
+        )
+    if relationship_notes:
+        for note in relationship_notes[:3]:
+            lines.append(f"- {note}")
+    if material != "Pending buyer confirmation":
+        lines.append(
+            f"- **Material:** {material} leads historically; final material should consider "
+            f"the {season_title} requirement and available evidence."
+        )
+    elif "material" in confirm_fields or "material" in missing_fields:
+        lines.append(
+            f"- **Material:** insufficient/weak evidence — buyer confirmation required "
+            f"for the {season_title} sheet."
+        )
+    if color != "Pending buyer confirmation":
+        lines.append(
+            f"- **Colour:** {color} is the leading individual colour in the reported comparison."
+        )
+    if gauge != "Pending buyer confirmation":
+        lines.append(f"- **Gauge:** {gauge} is the leading historical gauge.")
+    if event != "Pending buyer confirmation":
+        lines.append(f"- **Season tags:** {event} aligns with the requested season scope.")
+    if confirm_fields:
+        lines.append(
+            "- **Evidence limitations:** "
+            + ", ".join(confirm_fields[:8])
+            + ("…" if len(confirm_fields) > 8 else "")
+            + " should remain subject to buyer confirmation."
+        )
+    lines.append("")
+    conclusion_bits = [
+        v
+        for v in (
+            gender if gender != "Pending buyer confirmation" else "",
+            season_title,
+            subsub if subsub != "Pending buyer confirmation" else (
+                cat if cat != "Pending buyer confirmation" else "product"
+            ),
+        )
+        if v
+    ]
+    lines.append(
+        f"**Conclusion:** Based on the user's {season_title} requirement and the historical "
+        f"{catalog_label} patterns, a {' '.join(conclusion_bits)} is a reasonable proposed "
+        "product direction. The final values below are recommendations for buyer review, "
+        "not automatically approved production specifications."
+    )
+    lines.append("")
+    lines.append("## 4. Final Product Specification")
+    lines.append("")
+    # Detector / grounding markers (kept for product_spec + answer_card).
+    lines.append("Product specification:")
+    lines.append("Proposed new product specification (NOT an existing PLM/catalog record):")
+    lines.append("Product identity: Pending PLMEX creation/assignment")
+    lines.append("")
+
+    product_name_parts = [
+        p
+        for p in (
+            f"{gender}'s" if gender not in {"Pending buyer confirmation", ""} else "",
+            season_title if season_requested else "",
+            subsub if subsub != "Pending buyer confirmation" else (
+                cat if cat != "Pending buyer confirmation" else "Product"
+            ),
+        )
+        if p
+    ]
+    product_name = " ".join(product_name_parts) or f"{party_title} Proposed Product"
+
+    # Nested construction from AI construction tags when present.
+    construction_tag = _val("ai_construction_tags")
+    finish_tag = _val("ai_finish_tags")
+    design_for = _val("design_for")
+    composition = _val("composition")
+    knit_machine = _val("knit_machine_type")
+    gsm = _val("gsm")
+    weight = _val("weight")
+    plm_sub = _val("plm_sub_category")
+    plm_main = _val("plm_main_category")
+
+    sheet = {
+        "product_name": product_name,
+        "brand": party_title,
+        "season": season_title if season_requested else "Pending buyer confirmation",
+        "product_code": "Pending PLMEX creation",
+        "style_reference": "Pending PLMEX creation",
+        "category": cat if cat != "Pending buyer confirmation" else _val("category"),
+        "sub_category": plm_sub,
+        "main_category": plm_main,
+        "sub_sub_category": subsub,
+        "garment_type": gtype,
+        "gender": gender,
+        "design_for": design_for,
+        "composition": composition,
+        "material": material,
+        "colour": color,
+        "gauge": gauge,
+        "knit_machine_type": knit_machine,
+        "gsm": gsm,
+        "weight": weight,
+        "construction": construction_tag,
+        "finish": finish_tag,
+        "ai_event_tags": event,
+        "ai_material_tags": _val("ai_material_tags"),
+        "approval_status": "Draft - Pending Buyer Review",
+    }
+    lines.append("```json")
+    lines.append(json.dumps(sheet, indent=2, ensure_ascii=False))
+    lines.append("```")
+    lines.append("")
+    if confirm_fields:
+        lines.append("### Buyer confirmation requirements")
+        for field in confirm_fields:
+            lines.append(f"- {field}")
+        lines.append("")
+    lines.append(
+        "Historical benchmark note: do not reuse historical product codes or customer style "
+        "references as identifiers for this proposed product."
+    )
 
     evidence.append(
         EvidenceItem(
             source_id=graph_id,
             record_id="specification",
-            title=f"{_graph_label(platform, graph_id)} specification",
+            title=f"{catalog_label} proposed specification",
             excerpt=(
-                f"{party_key}={party}; products={scope_total}; "
-                f"fields={filled}/{len(spec_fields)}; "
-                f"missing={len(missing_fields)}; filters={scope}"
+                f"{party_key}={party}; products={decision_total}; "
+                f"fields={filled}/{len(decision_rows)}; "
+                f"missing={len(missing_fields)}; filters={decision_scope}; "
+                f"season={season_requested or 'unset'}; "
+                "proposed_new=true; identity=Pending PLMEX creation; "
+                "decision_engine=true; report=buyer_brief"
             ),
             source_path=graph_id,
             verification_status="observed",
@@ -5829,11 +6274,14 @@ def append_neo4j_analysis_answer(
     evidence: list[EvidenceItem],
     caveats: list[str],
     analysis_fields: list[str] | tuple[str, ...] | None = None,
+    *,
+    brief: bool = False,
 ) -> None:
     """Type-wise top rankings for a brand/selection on any Neo4j product graph.
 
     ``analysis_fields`` come from that graph's live schema (via resolve_analysis_fields).
     Works for ecom, plmex, or any registered product KG — not e-commerce-only.
+    ``brief=True`` titles the answer as a product brief and keeps only requested fields.
     """
 
     filters = _align_party_filters_for_graph(platform, graph_id, clean_product_filters(filters))
@@ -5860,6 +6308,7 @@ def append_neo4j_analysis_answer(
                 evidence,
                 caveats,
                 analysis_fields=analysis_fields,
+                brief=brief,
             )
             lines.append("")
         return
@@ -5894,6 +6343,13 @@ def append_neo4j_analysis_answer(
         top_n = 20 if focused else 12
     who_raw = filters.get("brand") or filters.get("buyer") or "this selection"
     who = _display_label(str(who_raw), graph_id=graph_id, platform=platform)
+    garment_bit = (
+        filters.get("garment")
+        or filters.get("garment_type")
+        or filters.get("category")
+        or ""
+    )
+    garment_label = _display_label(str(garment_bit), graph_id=graph_id, platform=platform) if garment_bit else ""
     fields = resolve_analysis_fields(platform, graph_id, analysis_fields)
     try:
         from fashion_brain.trace import trace_step
@@ -5907,6 +6363,7 @@ def append_neo4j_analysis_answer(
             fields=list(fields),
             filters=filters,
             facet_queries=len(ranked),
+            brief=brief,
         )
     except Exception:
         pass
@@ -5916,7 +6373,12 @@ def append_neo4j_analysis_answer(
 
     # Metrics as plain lines (no ###). Only real attribute slices use ### so merge can
     # pick visualizations by structure — no heading-name allow/deny lists.
-    lines.append(f"Product analysis for {who}: **{total}** products.")
+    if brief and garment_label:
+        lines.append(f"Product brief for {who} {garment_label}: **{total}** products.")
+    elif brief:
+        lines.append(f"Product brief for {who}: **{total}** products.")
+    else:
+        lines.append(f"Product analysis for {who}: **{total}** products.")
     if overview:
         avg_p = overview.get("average_price")
         min_p = overview.get("min_price")
@@ -5937,25 +6399,31 @@ def append_neo4j_analysis_answer(
         if filters.get(k)
     }
     reserved_values = _schema_reserved_value_keys(platform, graph_id)
-    # Compact uniqueness summary (structural + schema-reserved only; LLM curates the rest).
-    uniqueness: list[str] = []
-    for field in fields:
-        if not is_analysis_facet_attr(str(field)):
-            continue
-        usable = _usable_ranked(
-            ranked.get(field),
-            str(field),
-            active_party=active_party,
-            reserved_values=reserved_values,
-        )
-        if usable and _facet_worth_showing(usable, total=total):
-            label = field.replace("_", " ")
-            uniqueness.append(f"{len(usable)} {_pluralize_label(label)}")
-    if uniqueness:
-        # Full analysis should surface every facet that has distinct values.
-        lines.append("Distinct values: " + ", ".join(uniqueness) + ".")
+    # Compact uniqueness summary — skip on focused briefs (requested fields only).
+    if not brief:
+        uniqueness: list[str] = []
+        for field in fields:
+            if not is_analysis_facet_attr(str(field)):
+                continue
+            usable = _usable_ranked(
+                ranked.get(field),
+                str(field),
+                active_party=active_party,
+                reserved_values=reserved_values,
+            )
+            if usable and _facet_worth_showing(usable, total=total):
+                label = field.replace("_", " ")
+                uniqueness.append(f"{len(usable)} {_pluralize_label(label)}")
+        if uniqueness:
+            # Full analysis should surface every facet that has distinct values.
+            lines.append("Distinct values: " + ", ".join(uniqueness) + ".")
 
-    scope = "focused attribute" if focused else "all attributes"
+    if brief:
+        scope = "requested attributes"
+    elif focused:
+        scope = "focused attribute"
+    else:
+        scope = "all attributes"
     lines.append(
         f"Field-wise analysis ({scope}; up to {top_n} unique values per field with counts and shares)."
     )
@@ -6661,6 +7129,7 @@ def _usable_value(
             key in _COMPOSITION_ROLE_KEYS
             or any(part in key for part in ("outer shell", "main fabric", "lining", "keep away from fire", "fire safety"))
             or len(key.split()) >= 8
+            or key in {"nm", "tex", "denier"}
             or key.startswith("nm ")
             or re.fullmatch(r"nm\s*\d+(?:\s+\d+)?", key)
             or re.fullmatch(r"\d+(?:\.\d+)?", key)

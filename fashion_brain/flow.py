@@ -2016,20 +2016,34 @@ def _resolved_ask_line(question: str, intention=None, summary=None) -> str:
         if raw and _is_grammar_party_name(str(raw).split("|")[0].strip()):
             filters.pop(key, None)
     group_by = getattr(intention, "group_by", None) or getattr(summary, "group_by", None)
+    suggest = bool(
+        getattr(intention, "suggest", False)
+        or getattr(summary, "suggest", False)
+        or str(getattr(intention, "intent", "") or "").casefold() == "specification"
+        or str(getattr(summary, "intent", "") or "").casefold() == "specification"
+    )
     # Prefer a concrete restatement when Scope is known (e.g. after user said "category").
-    if filters or group_by:
+    if filters or group_by or suggest:
         bits = []
         party = filters.get("brand") or filters.get("buyer")
         if party and not _is_grammar_party_name(str(party).split("|")[0].strip()):
             bits.append(str(party))
+        season = (
+            filters.get("season_name")
+            or getattr(intention, "season_name", None)
+            or getattr(summary, "season_name", None)
+        )
+        if season and not any(str(b).casefold().startswith("season") for b in bits):
+            bits.append(f"season={season}")
         for key, value in filters.items():
-            if key in {"brand", "buyer"} or value in (None, ""):
+            if key in {"brand", "buyer", "season_name", "season"} or value in (None, ""):
                 continue
             bits.append(f"{key.replace('_', ' ')}={value}")
-        if group_by:
+        if group_by and not suggest:
             bits.append(f"by {str(group_by).replace('_', ' ')}")
         if bits:
-            return "Resolved ask: analyze " + "; ".join(bits) + "."
+            prefix = "propose product specification for" if suggest else "analyze"
+            return f"Resolved ask: {prefix} " + "; ".join(bits) + "."
     if ask and not _is_grammar_party_name(ask.split()[0] if ask.split() else ""):
         return f"Resolved ask: {ask}."
     if ask:

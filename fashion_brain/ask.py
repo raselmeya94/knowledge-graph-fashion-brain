@@ -603,6 +603,113 @@ def is_availability_price_ops_brief_ask(question: str) -> bool:
     return bool(has_avail and has_price and has_ops)
 
 
+# Attribute words that appear as a *list* in product briefs (not a single group_by).
+_BRIEF_FACET_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\bcompositions?\b", "material"),
+    (r"\bmaterials?\b", "material"),
+    (r"\bconstructions?\b", "construction"),
+    (r"\bfits?\b", "fit"),
+    (r"\bcare(?:\s+instructions?)?\b", "care_instruction"),
+    (r"\bcolou?rs?\b", "color"),
+    (r"\bprices?\b", "price"),
+)
+
+
+def named_product_brief_facets(question: str) -> list[str]:
+    """Catalog facets named in a product brief (deduped, order preserved)."""
+
+    text = normalize_name(question or "")
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for pattern, field in _BRIEF_FACET_PATTERNS:
+        if re.search(pattern, text):
+            if field in seen:
+                continue
+            seen.add(field)
+            out.append(field)
+    return out
+
+
+def analysis_fields_for_product_brief(question: str) -> list[str]:
+    """Retrieve facets for a C1-style brief — only what the user named.
+
+    Maps price → price_band (numeric price stays in overview metrics).
+    Composition also pulls construction on ecom, where body blends are stored there.
+    """
+
+    text = normalize_name(question or "")
+    named = named_product_brief_facets(question)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(field: str) -> None:
+        key = str(field or "").strip()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        out.append(key)
+
+    for field in named:
+        if field == "price":
+            _add("price_band")
+            continue
+        if field == "material":
+            _add("material")
+            # Ecom PDPs put body composition under construction.
+            if re.search(r"\bcompositions?\b", text):
+                _add("construction")
+            continue
+        _add(field)
+    return out
+
+
+def is_product_attribute_brief_ask(question: str) -> bool:
+    """Brand/garment product brief across several attributes (C1-style).
+
+    Example: \"full Primark sweater brief — composition, construction, fit, care, colours, and price\".
+    Not an ops/stock brief, not a single-dimension material breakdown, not a suggest-sheet.
+
+    Must not call ``_is_suggestion`` / ``_is_analysis`` (those call back into this helper).
+    """
+
+    if is_availability_price_ops_brief_ask(question):
+        return False
+    text = normalize_name(question or "")
+    if not text:
+        return False
+    tokens = set(text.split())
+    # Inline suggest-sheet exclusion (avoid recursion with _is_suggestion → _is_analysis).
+    if tokens & _SUGGEST_WORDS:
+        return False
+    has_spec_term = bool(tokens & {"spec", "specs", "specification", "specifications"})
+    if has_spec_term and (
+        tokens & _SPEC_CREATE_VERBS
+        or tokens & _SPEC_MODE_CUES
+        or re.search(r"\b(?:product\s+)?(?:specifications?|specs?)\s+(?:for|of)\b", text)
+    ):
+        return False
+    facets = named_product_brief_facets(question)
+    if len(facets) < 2:
+        return False
+    has_brief_cue = bool(
+        re.search(r"\bbriefs?\b", text)
+        or re.search(r"\b(?:full|complete|detailed)\b.{0,40}\b(?:specifications?|specs?|details?)\b", text)
+        or re.search(
+            r"\b(?:composition|construction|fit|care).{0,40}\b(?:colour|color|price)\b",
+            text,
+        )
+    )
+    if not has_brief_cue:
+        return False
+    # Need a party and/or garment so this is a scoped product brief, not a bare facet list.
+    token_list = [t for t in text.split() if t]
+    has_party = any(_is_party_token(tok) for tok in token_list)
+    has_scope = bool(garment_type_from_question(question) or has_party)
+    return has_scope
+
+
 def _is_availability_history_question(question: str) -> bool:
     text = normalize_name(question)
     if not re.search(r"\bavailability\b", text):
@@ -1273,6 +1380,9 @@ def _is_analysis(question: str) -> bool:
     # Stock-status + price-events ops brief is NOT full assortment analysis.
     if is_availability_price_ops_brief_ask(question):
         return False
+    # Multi-attribute product brief (composition + construction + …) uses the same engine.
+    if is_product_attribute_brief_ask(question):
+        return True
     tokens = set(normalize_name(question).split())
     if tokens & _ANALYSIS_WORDS:
         return True
@@ -1654,6 +1764,9 @@ def _retrieve(
     parent_of = parent_category_name(question)
     if parent_of:
         filters = {**filters, "parent_of": parent_of}
+    # Spec / season asks: keep season on the filter payload AND request.season_name.
+    if getattr(intention, "season_name", None) and not filters.get("season_name"):
+        filters["season_name"] = str(intention.season_name)
     # Preserve the caller's requested scope for provenance on :8001 evidence.
     requested_filters = dict(filters)
 
@@ -1666,7 +1779,7 @@ def _retrieve(
         limit=intention.limit,
         suggest=(bool(intention.suggest) or intention.intent == "specification") and not bool(getattr(intention, "analysis", False)),
         analysis=bool(getattr(intention, "analysis", False)),
-        season_name=intention.season_name,
+        season_name=intention.season_name or filters.get("season_name"),
         upcoming=bool(intention.upcoming),
         corrections=list(intention.corrections or []),
         count_entity=getattr(intention, "count_entity", None),
@@ -1843,16 +1956,21 @@ def _is_suggestion(question: str) -> bool:
     if set(tokens) & _SUGGEST_WORDS:
         return True
     text = " ".join(tokens)
-    if any(phrase in text for phrase in ("new product", "new sample", "new style", "sample for")):
+    has_new_product = any(
+        phrase in text
+        for phrase in (
+            "new product",
+            "new sample",
+            "new style",
+            "sample for",
+            "product development",
+            "development recommendation",
+        )
+    )
+    if has_new_product:
         return True
     has_spec_term = bool(set(tokens) & {"spec", "specs", "specification", "specifications"})
     if not has_spec_term:
-        return False
-    # "full / exact / complete specification" of matching products → product_details, not invent.
-    if re.search(
-        r"\b(?:full|complete|detailed|exact)\b.{0,32}\b(?:specifications?|specs?|details?|attributes?)\b",
-        text,
-    ):
         return False
     # Named style/SKU detail asks are retrieve-existing, not mode suggestion.
     if product_ref_from_question(question):
@@ -1863,7 +1981,16 @@ def _is_suggestion(question: str) -> bool:
     has_spec_for_scope = bool(
         re.search(r"\b(?:product\s+)?(?:specifications?|specs?)\s+(?:for|of)\b", text)
     )
-    return has_creation_verb or has_mode_cue or has_spec_for_scope
+    # Create/generate/draft a (detailed) Winter … specification → NEW sheet.
+    if has_creation_verb or has_mode_cue:
+        return True
+    # "Give me the full/detailed specification for …" without create verbs → retrieve existing.
+    if re.search(
+        r"\b(?:full|complete|detailed|exact)\b.{0,32}\b(?:specifications?|specs?|details?|attributes?)\b",
+        text,
+    ):
+        return False
+    return has_spec_for_scope
 
 
 def _is_product_details_request(question: str) -> bool:
@@ -1879,7 +2006,7 @@ def _is_product_details_request(question: str) -> bool:
         return True
     spec_term = r"(?:specifications?|specs?|details?|attributes?)"
     # Retrieve stored props only when the user marks it as full/exact/complete detail,
-    # or asks details/attributes for/of a scope without suggestion language.
+    # or asks details/attributes for/of a scope without creation/suggest language.
     if re.search(rf"\b(?:full|complete|detailed|exact)\b.{{0,32}}\b{spec_term}\b", text):
         return True
     # Bare "details for/of …" / "attributes for …" still means look up existing records.
@@ -3062,19 +3189,24 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
     elif not any(flat.get(k) for k in ("garment", "garment_type", "category")):
         pass
 
+    # Multi-attribute product briefs list composition among other fields — not group_by.
+    attribute_brief = is_product_attribute_brief_ask(question)
+    if attribute_brief:
+        group_by = None
+        analysis = True
     # "composition mixes" / "material mixes" without a prior group marker.
-    if group_by is None and re.search(
+    if not attribute_brief and group_by is None and re.search(
         r"\b((material|materials|composition|compositions)\s+(mix|mixes|blend|blends)|"
         r"(mix|mixes|blend|blends)\s+of\s+(material|materials))\b",
         " ".join(tokens),
     ):
         group_by = "material"
-    if group_by is None and re.search(
+    if not attribute_brief and group_by is None and re.search(
         r"\b(most common|common)\s+(material|materials|composition|compositions)\b",
         " ".join(tokens),
     ):
         group_by = "material"
-    if group_by is None and re.search(
+    if not attribute_brief and group_by is None and re.search(
         r"\b(material|materials|composition|compositions)\s+(dominate|dominant|breakdown)\b",
         " ".join(tokens),
     ):
@@ -3093,12 +3225,17 @@ def _catalog_plan(question: str, *, brand_names: list[str] | None = None) -> dic
     ):
         group_by = "garment_type"
     # Construction / fit attribute frequency ("what construction … most common").
-    if group_by is None and re.search(
-        r"\b(construction|constructions|fit|fits)\b",
-        " ".join(tokens),
-    ) and re.search(
-        r"\b(common|usually|typical|most|details?|see|seen)\b",
-        " ".join(tokens),
+    if (
+        not attribute_brief
+        and group_by is None
+        and re.search(
+            r"\b(construction|constructions|fit|fits)\b",
+            " ".join(tokens),
+        )
+        and re.search(
+            r"\b(common|usually|typical|most|details?|see|seen)\b",
+            " ".join(tokens),
+        )
     ):
         group_by = (
             "construction"
@@ -3852,9 +3989,20 @@ def enrich_scope_from_question(
 
 
     group_by = plan.get("group_by")
-    if not group_by:
+    # Multi-attribute product briefs list composition/colour/… as report sections —
+    # never collapse that list into a single group_by=material (or colour).
+    # Spec / season-filter asks: "Winter season product specification" is NOT group_by=season.
+    if is_product_attribute_brief_ask(question) or _is_suggestion(question):
+        group_by = None
+    elif not group_by:
         # Dimension words in the ask (category / color / …) from live-ish aliases.
         low = normalize_name(question or "")
+        season_is_filter = bool(
+            plan_filters.get("season_name")
+            or plan_filters.get("season")
+            or plan.get("season_name")
+            or re.search(r"\b(winter|spring|summer|autumn|fall)\b", low)
+        )
         for dim in (
             "category",
             "garment_type",
@@ -3868,6 +4016,8 @@ def enrich_scope_from_question(
             "brand",
             "buyer",
         ):
+            if dim == "season" and season_is_filter:
+                continue
             label = dim.replace("_", " ")
             if re.search(rf"\b{re.escape(label)}\b", low) or re.search(rf"\b{re.escape(dim)}\b", low):
                 group_by = "material" if dim == "composition" else dim
